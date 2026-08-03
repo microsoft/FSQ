@@ -46,9 +46,7 @@ fsq-agent = "fsq_agent.cli:main"
  
 [tool.hatch.build.targets.wheel]
 packages = ["fsq_agent"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"fsq_agent/playground/static" = "fsq_agent/playground/static"
+artifacts = ["fsq_agent/playground/static/**"]
  
 [tool.pytest.ini_options]
 testpaths = ["tests"]
