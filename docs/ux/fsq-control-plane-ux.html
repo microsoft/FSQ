@@ -1,0 +1,1964 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FSQ Control Plane UX Prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --paper: #f7f5ee;
+        --surface: #ffffff;
+        --surface-2: #f1efe7;
+        --ink: #171b1f;
+        --muted: #66707a;
+        --line: #d9d4c8;
+        --line-strong: #bbb2a3;
+        --green: #177245;
+        --green-soft: #e5f3ea;
+        --red: #b63737;
+        --red-soft: #f8e7e4;
+        --amber: #9b6216;
+        --amber-soft: #f7ecd7;
+        --blue: #265f9f;
+        --blue-soft: #e4eef9;
+        --coral: #d6563d;
+        --charcoal: #252a2f;
+        --shadow: 0 18px 50px rgba(31, 35, 39, 0.12);
+        --radius: 8px;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(23, 27, 31, 0.035) 1px, transparent 1px) 0 0 / 28px 28px,
+          linear-gradient(0deg, rgba(23, 27, 31, 0.025) 1px, transparent 1px) 0 0 / 28px 28px,
+          var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 74px minmax(0, 1fr);
+      }
+
+      .rail {
+        border-right: 1px solid var(--line);
+        background: #fbfaf6;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 16px 10px;
+        position: sticky;
+        top: 0;
+        height: 100vh;
+      }
+
+      .mark {
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--ink);
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+        letter-spacing: 0;
+        background: var(--ink);
+        color: #fff;
+        border-radius: 7px;
+      }
+
+      .rail button {
+        width: 46px;
+        height: 46px;
+        border-radius: 7px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        display: grid;
+        place-items: center;
+        position: relative;
+      }
+
+      .rail button span {
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .rail button.active {
+        color: var(--ink);
+        border-color: var(--line);
+        background: var(--surface);
+        box-shadow: 0 8px 20px rgba(23, 27, 31, 0.08);
+      }
+
+      .rail button::after {
+        content: attr(aria-label);
+        position: absolute;
+        left: 54px;
+        top: 50%;
+        transform: translateY(-50%);
+        white-space: nowrap;
+        background: var(--ink);
+        color: #fff;
+        font-size: 12px;
+        padding: 6px 8px;
+        border-radius: 5px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease;
+        z-index: 20;
+      }
+
+      .rail button:hover::after {
+        opacity: 1;
+      }
+
+      .main {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .topbar {
+        height: 74px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(251, 250, 246, 0.92);
+        backdrop-filter: blur(16px);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 28px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .brand img {
+        width: 104px;
+        height: auto;
+        display: block;
+      }
+
+      .brand-text strong {
+        display: block;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .brand-text small {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .status-strip {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 999px;
+        padding: 7px 10px;
+        color: var(--muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--muted);
+      }
+
+      .dot.ok {
+        background: var(--green);
+      }
+
+      .dot.warn {
+        background: var(--amber);
+      }
+
+      .dot.fail {
+        background: var(--red);
+      }
+
+      .btn {
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        color: var(--ink);
+        border-radius: 7px;
+        padding: 9px 13px;
+        font-weight: 650;
+        min-height: 38px;
+      }
+
+      .btn.primary {
+        border-color: var(--ink);
+        background: var(--ink);
+        color: #fff;
+      }
+
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .btn.small {
+        min-height: 31px;
+        padding: 6px 9px;
+        font-size: 12px;
+      }
+
+      .content {
+        min-width: 0;
+        padding: 24px;
+      }
+
+      .screen {
+        display: none;
+      }
+
+      .screen.active {
+        display: block;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.88fr) minmax(420px, 1.25fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .section {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: var(--shadow);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+
+      .section-header {
+        min-height: 58px;
+        border-bottom: 1px solid var(--line);
+        padding: 14px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 30px;
+        line-height: 1.1;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        font-size: 13px;
+        letter-spacing: 0;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .body {
+        padding: 16px;
+      }
+
+      .readiness-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .readiness-row {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 12px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+      }
+
+      .readiness-row strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .readiness-row small {
+        color: var(--muted);
+      }
+
+      .workspace-card {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 14px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .workspace-title {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .workspace-path {
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--ink);
+        border: 1px solid var(--line);
+        background: var(--surface-2);
+        border-radius: 6px;
+        padding: 8px 9px;
+        overflow-wrap: anywhere;
+      }
+
+      .workspace-map {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(110px, 1fr));
+        gap: 9px;
+      }
+
+      .workspace-map-item {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fbfaf6;
+        padding: 10px;
+        display: grid;
+        gap: 6px;
+        min-height: 82px;
+      }
+
+      .workspace-map-item strong {
+        font-size: 12px;
+      }
+
+      .workspace-map-item code {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
+      .workspace-flow {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+        gap: 10px;
+      }
+
+      .workspace-flow-step {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface);
+        padding: 11px;
+        display: grid;
+        gap: 6px;
+      }
+
+      .workspace-flow-step strong {
+        font-size: 12px;
+      }
+
+      .workspace-flow-step small {
+        color: var(--muted);
+        line-height: 1.35;
+      }
+
+      .run-table {
+        display: grid;
+        gap: 9px;
+      }
+
+      .run-card {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface);
+        padding: 13px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .run-card strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .run-card small {
+        color: var(--muted);
+      }
+
+      .hero-panel {
+        background:
+          linear-gradient(135deg, rgba(38, 95, 159, 0.08), transparent 42%),
+          linear-gradient(315deg, rgba(214, 86, 61, 0.09), transparent 38%),
+          var(--surface);
+        min-height: 472px;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .hero-title {
+        padding: 24px 24px 0;
+        max-width: 780px;
+      }
+
+      .hero-title p {
+        margin-top: 10px;
+        color: var(--muted);
+        line-height: 1.55;
+        max-width: 650px;
+      }
+
+      .closed-loop {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(92px, 1fr));
+        gap: 10px;
+        padding: 22px 24px 24px;
+        align-self: end;
+      }
+
+      .guide-lane {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: minmax(260px, 0.7fr) minmax(520px, 1.3fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .guide-intro {
+        background: var(--charcoal);
+        color: #fff;
+      }
+
+      .guide-intro .section-header {
+        border-bottom-color: rgba(255, 255, 255, 0.14);
+      }
+
+      .guide-intro .body {
+        display: grid;
+        gap: 14px;
+      }
+
+      .guide-intro p {
+        color: #c5ccd2;
+        line-height: 1.5;
+      }
+
+      .guide-steps {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(108px, 1fr));
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .guide-step {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 12px;
+        display: grid;
+        gap: 12px;
+        min-height: 156px;
+        align-content: space-between;
+        position: relative;
+      }
+
+      .guide-step.current {
+        border-color: var(--blue);
+        box-shadow: inset 0 0 0 2px var(--blue-soft);
+      }
+
+      .guide-step.done {
+        background: var(--green-soft);
+        border-color: #b7d9c5;
+      }
+
+      .guide-step strong {
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .guide-step p {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .guide-num {
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        font-family: var(--mono);
+        font-size: 12px;
+        border: 1px solid currentColor;
+        color: var(--muted);
+      }
+
+      .guide-step.current .guide-num {
+        color: var(--blue);
+      }
+
+      .guide-step.done .guide-num {
+        color: var(--green);
+      }
+
+      .guide-actions {
+        display: flex;
+        gap: 9px;
+        flex-wrap: wrap;
+      }
+
+      .loop-node {
+        min-height: 130px;
+        border-radius: 7px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.85);
+        padding: 13px;
+        display: grid;
+        align-content: space-between;
+      }
+
+      .loop-node .index {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .loop-node strong {
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .loop-node small {
+        color: var(--muted);
+        line-height: 1.3;
+      }
+
+      .create-layout {
+        display: grid;
+        grid-template-columns: minmax(320px, 470px) minmax(420px, 1fr);
+        gap: 18px;
+      }
+
+      .field-stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .label {
+        display: grid;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      textarea,
+      input,
+      select {
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 11px 12px;
+        color: var(--ink);
+        outline: none;
+      }
+
+      textarea:focus,
+      input:focus,
+      select:focus {
+        border-color: var(--blue);
+        box-shadow: 0 0 0 3px var(--blue-soft);
+      }
+
+      textarea {
+        min-height: 142px;
+        resize: vertical;
+        line-height: 1.45;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        background: var(--surface-2);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 3px;
+        gap: 3px;
+      }
+
+      .segmented button {
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        padding: 9px 8px;
+        color: var(--muted);
+        font-weight: 700;
+        min-width: 0;
+      }
+
+      .segmented button.active {
+        background: var(--surface);
+        color: var(--ink);
+        box-shadow: 0 5px 16px rgba(23, 27, 31, 0.08);
+      }
+
+      .run-contract {
+        display: grid;
+        gap: 11px;
+      }
+
+      .contract-row {
+        display: grid;
+        grid-template-columns: 30px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 11px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 7px;
+      }
+
+      .contract-row .num {
+        font-family: var(--mono);
+        color: var(--blue);
+        font-weight: 800;
+      }
+
+      .workbench {
+        display: grid;
+        grid-template-columns: 330px minmax(420px, 1fr) 340px;
+        gap: 16px;
+        min-height: calc(100vh - 122px);
+      }
+
+      .timeline {
+        display: grid;
+        gap: 11px;
+      }
+
+      .phase-label {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .step {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface);
+        padding: 12px;
+        display: grid;
+        gap: 8px;
+        text-align: left;
+        width: 100%;
+      }
+
+      .step.active {
+        border-color: var(--blue);
+        box-shadow: 0 0 0 3px var(--blue-soft);
+      }
+
+      .step-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .step strong {
+        font-size: 13px;
+      }
+
+      .step-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .tag {
+        border-radius: 999px;
+        padding: 4px 7px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--muted);
+        background: var(--surface-2);
+        border: 1px solid var(--line);
+      }
+
+      .tag.ok {
+        background: var(--green-soft);
+        color: var(--green);
+        border-color: #b7d9c5;
+      }
+
+      .tag.warn {
+        background: var(--amber-soft);
+        color: var(--amber);
+        border-color: #e5c98c;
+      }
+
+      .tag.fail {
+        background: var(--red-soft);
+        color: var(--red);
+        border-color: #ebb8b1;
+      }
+
+      .evidence-pane {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto auto minmax(220px, 1fr) auto;
+      }
+
+      .evidence-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .preview-scene {
+        margin: 16px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        min-height: 260px;
+        background: #e9edf0;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .browser-frame {
+        position: absolute;
+        inset: 16px;
+        background: #fff;
+        border-radius: 7px;
+        border: 1px solid #b7c0c8;
+        box-shadow: 0 18px 35px rgba(23, 27, 31, 0.18);
+        overflow: hidden;
+      }
+
+      .browser-bar {
+        height: 34px;
+        background: #f4f5f6;
+        border-bottom: 1px solid #d7dce0;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 11px;
+      }
+
+      .window-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #c9ced3;
+      }
+
+      .address {
+        flex: 1;
+        height: 18px;
+        border-radius: 999px;
+        background: #fff;
+        border: 1px solid #d7dce0;
+        color: #72808b;
+        font-family: var(--mono);
+        font-size: 10px;
+        display: flex;
+        align-items: center;
+        padding: 0 10px;
+      }
+
+      .mock-page {
+        display: grid;
+        grid-template-columns: 154px minmax(0, 1fr);
+        height: calc(100% - 34px);
+      }
+
+      .mock-nav {
+        background: #252a2f;
+        color: #dce2e7;
+        padding: 17px 13px;
+        display: grid;
+        align-content: start;
+        gap: 13px;
+      }
+
+      .mock-nav div {
+        height: 10px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.28);
+      }
+
+      .mock-nav div:nth-child(2) {
+        width: 82%;
+        background: rgba(255, 255, 255, 0.48);
+      }
+
+      .mock-content {
+        padding: 20px;
+        display: grid;
+        align-content: start;
+        gap: 14px;
+      }
+
+      .mock-toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: center;
+      }
+
+      .mock-heading {
+        width: 170px;
+        height: 18px;
+        border-radius: 4px;
+        background: #2f3942;
+      }
+
+      .mock-button {
+        width: 118px;
+        height: 34px;
+        border-radius: 6px;
+        background: var(--coral);
+      }
+
+      .mock-list {
+        display: grid;
+        gap: 9px;
+      }
+
+      .mock-row {
+        height: 42px;
+        border: 1px solid #d9dfe4;
+        border-radius: 6px;
+        display: grid;
+        grid-template-columns: 34px 1fr 88px;
+        gap: 10px;
+        align-items: center;
+        padding: 0 11px;
+      }
+
+      .mock-row div {
+        height: 10px;
+        border-radius: 4px;
+        background: #d1d8de;
+      }
+
+      .mock-row.selected {
+        border-color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .mock-row.selected div:nth-child(2) {
+        background: var(--blue);
+      }
+
+      .compare-grid {
+        padding: 0 16px 16px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .mini-shot {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--surface);
+        min-height: 108px;
+        padding: 10px;
+        display: grid;
+        align-content: start;
+        gap: 8px;
+      }
+
+      .mini-shot strong {
+        font-size: 12px;
+      }
+
+      .mini-lines {
+        display: grid;
+        gap: 6px;
+      }
+
+      .mini-lines div {
+        height: 8px;
+        border-radius: 4px;
+        background: #d7dce0;
+      }
+
+      .mini-lines div:nth-child(1) {
+        width: 78%;
+      }
+
+      .mini-lines div:nth-child(2) {
+        width: 92%;
+      }
+
+      .mini-lines div:nth-child(3) {
+        width: 58%;
+      }
+
+      .artifact-box {
+        margin: 0 16px 16px;
+        border: 1px solid var(--line);
+        background: #101417;
+        color: #dbe3e8;
+        border-radius: 7px;
+        padding: 13px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.55;
+        overflow: auto;
+      }
+
+      .result-stack {
+        display: grid;
+        gap: 13px;
+      }
+
+      .result-block {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 13px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .result-block p {
+        color: var(--muted);
+        line-height: 1.45;
+        font-size: 13px;
+      }
+
+      .yaml-preview {
+        background: #101417;
+        color: #dbe3e8;
+        border-radius: 7px;
+        padding: 12px;
+        overflow: auto;
+        font-family: var(--mono);
+        font-size: 11px;
+        line-height: 1.5;
+        max-height: 210px;
+      }
+
+      .wizard {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(23, 27, 31, 0.46);
+        padding: 24px;
+      }
+
+      .wizard.active {
+        display: flex;
+      }
+
+      .wizard-panel {
+        width: min(880px, 100%);
+        background: var(--surface);
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.26);
+        overflow: hidden;
+      }
+
+      .wizard-grid {
+        display: grid;
+        grid-template-columns: 270px minmax(0, 1fr);
+      }
+
+      .wizard-side {
+        background: var(--charcoal);
+        color: #fff;
+        padding: 24px;
+        display: grid;
+        align-content: space-between;
+        min-height: 420px;
+      }
+
+      .wizard-side p {
+        color: #c5ccd2;
+        line-height: 1.5;
+        margin-top: 10px;
+      }
+
+      .wizard-main {
+        padding: 24px;
+        display: grid;
+        gap: 18px;
+      }
+
+      .wizard-steps {
+        display: grid;
+        gap: 9px;
+      }
+
+      .wizard-step {
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        color: #c5ccd2;
+        font-size: 13px;
+      }
+
+      .wizard-step.current {
+        color: #fff;
+      }
+
+      .wizard-step .circle {
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        border: 1px solid currentColor;
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        font-family: var(--mono);
+      }
+
+      .wizard-pane {
+        display: none;
+        gap: 16px;
+      }
+
+      .wizard-pane.active {
+        display: grid;
+      }
+
+      .wizard-pane h1 {
+        font-size: 26px;
+      }
+
+      .wizard-progress {
+        height: 7px;
+        border-radius: 999px;
+        background: var(--surface-2);
+        overflow: hidden;
+      }
+
+      .wizard-progress div {
+        height: 100%;
+        width: 25%;
+        background: var(--blue);
+        transition: width 160ms ease;
+      }
+
+      .wizard-footer {
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .wizard-caption {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .sample-goal {
+        border: 1px solid var(--line);
+        background: var(--surface-2);
+        border-radius: 7px;
+        padding: 13px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .asset-screen {
+        display: grid;
+        grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.1fr);
+        gap: 18px;
+      }
+
+      @media (max-width: 1180px) {
+        .hero-grid,
+        .create-layout,
+        .guide-lane,
+        .asset-screen {
+          grid-template-columns: 1fr;
+        }
+
+        .workbench {
+          grid-template-columns: 310px minmax(0, 1fr);
+        }
+
+        .workbench .section:last-child {
+          grid-column: 1 / -1;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .rail {
+          position: static;
+          height: auto;
+          flex-direction: row;
+          justify-content: center;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .topbar,
+        .status-strip {
+          flex-wrap: wrap;
+          height: auto;
+        }
+
+        .topbar {
+          gap: 14px;
+          padding: 16px;
+        }
+
+        .content {
+          padding: 16px;
+        }
+
+        .closed-loop {
+          grid-template-columns: 1fr;
+        }
+
+        .guide-steps {
+          grid-template-columns: 1fr;
+        }
+
+        .workspace-map,
+        .workspace-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .workbench {
+          grid-template-columns: 1fr;
+        }
+
+        .compare-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .wizard-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .wizard-side {
+          min-height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <nav class="rail" aria-label="Prototype navigation">
+        <div class="mark">FSQ</div>
+        <button class="nav-button active" type="button" data-screen="home" aria-label="Home"><span>H</span></button>
+        <button class="nav-button" type="button" data-screen="new-run" aria-label="New Run"><span>R</span></button>
+        <button class="nav-button" type="button" data-screen="workbench" aria-label="Run Detail"><span>E</span></button>
+        <button class="nav-button" type="button" data-screen="assets" aria-label="Assets"><span>Y</span></button>
+      </nav>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="brand">
+            <img src="../assets/logo-light.svg" alt="FSQ" />
+            <div class="brand-text">
+              <strong>Control Plane UX Prototype</strong>
+              <small>Independent agent workspace</small>
+            </div>
+          </div>
+          <div class="top-actions">
+            <div class="status-strip" aria-label="Runtime status">
+              <span class="pill"><span class="dot ok"></span>Web ready</span>
+              <span class="pill"><span class="dot ok"></span>Provider ready</span>
+              <span class="pill"><span class="dot ok"></span>Recording on</span>
+            </div>
+            <button class="btn" type="button" id="openWizard">First run</button>
+            <button class="btn primary" type="button" data-screen-jump="new-run">New run</button>
+          </div>
+        </header>
+
+        <div class="content">
+          <section id="home" class="screen active">
+            <div class="hero-grid">
+              <section class="section">
+                <div class="section-header">
+                  <div>
+                    <h2>Runtime readiness</h2>
+                    <p class="muted">Local FSQ agent state before a run starts.</p>
+                  </div>
+                  <span class="tag ok">READY</span>
+                </div>
+                <div class="body readiness-list">
+                  <div class="readiness-row">
+                    <span class="dot ok"></span>
+                    <div><strong>Platform</strong><small>Web, Playwright backend, Chrome channel</small></div>
+                    <span class="tag ok">ready</span>
+                  </div>
+                  <div class="readiness-row">
+                    <span class="dot ok"></span>
+                    <div><strong>Provider</strong><small>GitHub Copilot provider authenticated</small></div>
+                    <span class="tag ok">ready</span>
+                  </div>
+                  <div class="readiness-row">
+                    <span class="dot ok"></span>
+                    <div><strong>Workspace</strong><small>Bound to the current coding project directory</small></div>
+                    <span class="tag ok">ready</span>
+                  </div>
+                  <div class="readiness-row">
+                    <span class="dot warn"></span>
+                    <div><strong>Base URL</strong><small>Optional. Goal runs can provide a full URL.</small></div>
+                    <span class="tag warn">optional</span>
+                  </div>
+                  <button class="btn primary" type="button" data-screen-jump="new-run">Create an FSQ run</button>
+                </div>
+              </section>
+
+              <section class="section hero-panel">
+                <div class="hero-title">
+                  <h1>From agent exploration to replayable test evidence.</h1>
+                  <p>
+                    This workbench treats every task as a run: FSQ plans it, executes through the harness,
+                    captures proof, verifies the goal, and turns successful actions into strict YAML.
+                  </p>
+                </div>
+                <div class="closed-loop" aria-label="FSQ closed loop">
+                  <div class="loop-node"><span class="index">01</span><strong>Plan</strong><small>Key actions and one final verification goal.</small></div>
+                  <div class="loop-node"><span class="index">02</span><strong>Execute</strong><small>Harness actions through StepRunner.</small></div>
+                  <div class="loop-node"><span class="index">03</span><strong>Capture</strong><small>Screenshots, snapshots, and tool results.</small></div>
+                  <div class="loop-node"><span class="index">04</span><strong>Verify</strong><small>Evidence-based result, not self-report.</small></div>
+                  <div class="loop-node"><span class="index">05</span><strong>Replay</strong><small>Generated strict YAML without LLM.</small></div>
+                </div>
+              </section>
+            </div>
+
+            <section class="section" style="margin-top: 18px">
+              <div class="section-header">
+                <div>
+                  <h2>Workspace</h2>
+                  <p class="muted">The coding-agent directory FSQ uses to read cases, write generated cases, and store run evidence.</p>
+                </div>
+                <button class="btn small" type="button">Change workspace</button>
+              </div>
+              <div class="body">
+                <div class="workspace-card">
+                  <div class="workspace-title">
+                    <div>
+                      <h3>Current workspace root</h3>
+                      <p class="muted">FSQ treats this directory as the project context for case authoring and replay.</p>
+                    </div>
+                    <span class="tag ok">active</span>
+                  </div>
+                  <div class="workspace-path">/Users/qunmi/Documents/FSQ_LAB/FSQ</div>
+                  <div class="workspace-map">
+                    <div class="workspace-map-item">
+                      <strong>Authored cases</strong>
+                      <code>cases/</code>
+                    </div>
+                    <div class="workspace-map-item">
+                      <strong>Generated cases</strong>
+                      <code>cases/generated/</code>
+                    </div>
+                    <div class="workspace-map-item">
+                      <strong>Run evidence</strong>
+                      <code>.fsq-agent-workspace/runs/</code>
+                    </div>
+                    <div class="workspace-map-item">
+                      <strong>Project knowledge</strong>
+                      <code>knowledge/</code>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div class="guide-lane" aria-label="Guided first run flow">
+              <section class="section guide-intro">
+                <div class="section-header">
+                  <div>
+                    <h2>Guided first run</h2>
+                    <p class="muted">A visible path through the FSQ loop.</p>
+                  </div>
+                  <span class="tag ok">START HERE</span>
+                </div>
+                <div class="body">
+                  <p>
+                    This guide walks a new user from local readiness to a replayable test asset.
+                    The workbench stays available throughout, but the guide keeps the next action clear.
+                  </p>
+                  <div class="guide-actions">
+                    <button class="btn primary" type="button" id="openWizardFromGuide">Open guided flow</button>
+                    <button class="btn" type="button" data-screen-jump="new-run">Skip to run setup</button>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section">
+                <div class="guide-steps">
+                  <div class="guide-step done">
+                    <span class="guide-num">1</span>
+                    <div>
+                      <strong>Check runtime</strong>
+                      <p>Confirm provider, platform, workspace, and recording readiness.</p>
+                    </div>
+                    <span class="tag ok">ready</span>
+                  </div>
+                  <div class="guide-step current">
+                    <span class="guide-num">2</span>
+                    <div>
+                      <strong>Describe goal</strong>
+                      <p>Enter the user-visible workflow FSQ should prove.</p>
+                    </div>
+                    <span class="tag">next</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-num">3</span>
+                    <div>
+                      <strong>Review plan</strong>
+                      <p>See key actions and the single verification goal.</p>
+                    </div>
+                    <span class="tag">pre-plan</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-num">4</span>
+                    <div>
+                      <strong>Inspect evidence</strong>
+                      <p>Open each step's screenshots, snapshots, and tool output.</p>
+                    </div>
+                    <span class="tag">proof</span>
+                  </div>
+                  <div class="guide-step">
+                    <span class="guide-num">5</span>
+                    <div>
+                      <strong>Replay strict</strong>
+                      <p>Use generated YAML to rerun without LLM planning.</p>
+                    </div>
+                    <span class="tag">asset</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <section class="section" style="margin-top: 18px">
+              <div class="section-header">
+                <h2>Recent runs</h2>
+                <button class="btn small" type="button" data-screen-jump="workbench">Open selected</button>
+              </div>
+              <div class="body run-table">
+                <div class="run-card">
+                  <div><strong>create-project-flow</strong><small>Generated YAML available. Strict replay passed.</small></div>
+                  <span class="tag ok">success</span>
+                </div>
+                <div class="run-card">
+                  <div><strong>checkout-smoke</strong><small>Failure evidence available at assertion step.</small></div>
+                  <span class="tag fail">failed</span>
+                </div>
+                <div class="run-card">
+                  <div><strong>settings-profile</strong><small>Execution completed but verifier needed stronger final evidence.</small></div>
+                  <span class="tag warn">inconclusive</span>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <section id="new-run" class="screen">
+            <div class="create-layout">
+              <section class="section">
+                <div class="section-header">
+                  <div>
+                    <h2>New FSQ run</h2>
+                    <p class="muted">Create a run source. FSQ owns execution and proof.</p>
+                  </div>
+                </div>
+                <div class="body field-stack">
+                  <div class="segmented" role="tablist" aria-label="Run mode">
+                    <button class="mode active" type="button">Goal</button>
+                    <button class="mode" type="button">YAML Reference</button>
+                    <button class="mode" type="button">Strict Replay</button>
+                  </div>
+                  <label class="label">
+                    Goal
+                    <textarea>Open https://app.example.test, create a project named "Control Plane UX", and verify it appears in the project list.</textarea>
+                  </label>
+                  <label class="label">
+                    Platform
+                    <select>
+                      <option>Web - Playwright - Chrome</option>
+                      <option>Android - uiautomator2</option>
+                      <option>Windows - pywinauto</option>
+                      <option>macOS - Appium Mac2</option>
+                    </select>
+                  </label>
+                  <label class="label">
+                    Workspace
+                    <select>
+                      <option>/Users/qunmi/Documents/FSQ_LAB/FSQ</option>
+                      <option>Choose another project directory...</option>
+                    </select>
+                  </label>
+                  <div class="workspace-card">
+                    <div class="workspace-title">
+                      <div>
+                        <h3>Case output policy</h3>
+                        <p class="muted">Dynamic runs record under the run folder first; accepted cases can be saved into the workspace.</p>
+                      </div>
+                      <span class="tag">review first</span>
+                    </div>
+                    <div class="workspace-flow">
+                      <div class="workspace-flow-step">
+                        <strong>1. Run output</strong>
+                        <small>Evidence and draft YAML stay in <code>.fsq-agent-workspace/runs/</code>.</small>
+                      </div>
+                      <div class="workspace-flow-step">
+                        <strong>2. Review</strong>
+                        <small>User checks report, evidence, replay params, and secret handling.</small>
+                      </div>
+                      <div class="workspace-flow-step">
+                        <strong>3. Save case</strong>
+                        <small>Accepted YAML is copied into <code>cases/generated/</code>.</small>
+                      </div>
+                    </div>
+                  </div>
+                  <button class="btn primary" type="button" data-screen-jump="workbench">Run with FSQ</button>
+                </div>
+              </section>
+
+              <section class="section">
+                <div class="section-header">
+                  <h2>Run contract</h2>
+                  <span class="tag">dynamic</span>
+                </div>
+                <div class="body run-contract">
+                  <div class="contract-row">
+                    <span class="num">01</span>
+                    <div><strong>Pre-plan first</strong><p class="muted">FSQ derives key actions and one final verification goal before external UI actions.</p></div>
+                  </div>
+                  <div class="contract-row">
+                    <span class="num">02</span>
+                    <div><strong>Execute through harness</strong><p class="muted">All platform actions route through FSQ capability metadata and StepRunner.</p></div>
+                  </div>
+                  <div class="contract-row">
+                    <span class="num">03</span>
+                    <div><strong>Collect evidence per step</strong><p class="muted">Screenshots and normalized UI snapshots attach to the run timeline.</p></div>
+                  </div>
+                  <div class="contract-row">
+                    <span class="num">04</span>
+                    <div><strong>Verify from evidence</strong><p class="muted">Final status comes from the verifier, not the execution agent's self-report.</p></div>
+                  </div>
+                  <div class="contract-row">
+                    <span class="num">05</span>
+                    <div><strong>Generate replay asset</strong><p class="muted">Successful replayable actions become strict YAML for deterministic replay.</p></div>
+                  </div>
+                  <div class="contract-row">
+                    <span class="num">06</span>
+                    <div><strong>Attach to workspace</strong><p class="muted">Generated cases can be saved back into the active coding directory for future strict replay and PR review.</p></div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section id="workbench" class="screen">
+            <div class="workbench">
+              <section class="section">
+                <div class="section-header">
+                  <div>
+                    <h2>Execution timeline</h2>
+                    <p class="muted">Run: create-project-flow</p>
+                  </div>
+                  <span class="tag ok">success</span>
+                </div>
+                <div class="body timeline">
+                  <div class="phase-label">Planning</div>
+                  <button class="step active" type="button" data-step="preplan">
+                    <div class="step-top"><strong>Pre-plan generated</strong><span class="tag ok">passed</span></div>
+                    <div class="step-meta"><span class="tag">3 key actions</span><span class="tag">verification goal</span></div>
+                  </button>
+                  <div class="phase-label">Execution</div>
+                  <button class="step" type="button" data-step="start">
+                    <div class="step-top"><strong>startBrowser</strong><span class="tag ok">passed</span></div>
+                    <div class="step-meta"><span class="tag">setup</span><span class="tag">after evidence</span></div>
+                  </button>
+                  <button class="step" type="button" data-step="create">
+                    <div class="step-top"><strong>clickOn New Project</strong><span class="tag ok">passed</span></div>
+                    <div class="step-meta"><span class="tag">action</span><span class="tag">replayable</span></div>
+                  </button>
+                  <button class="step" type="button" data-step="type">
+                    <div class="step-top"><strong>typeText project name</strong><span class="tag ok">passed</span></div>
+                    <div class="step-meta"><span class="tag">action</span><span class="tag">safe params</span></div>
+                  </button>
+                  <button class="step" type="button" data-step="assert">
+                    <div class="step-top"><strong>assertVisible project row</strong><span class="tag ok">passed</span></div>
+                    <div class="step-meta"><span class="tag">assertion</span><span class="tag">before evidence</span></div>
+                  </button>
+                  <div class="phase-label">Verification</div>
+                  <button class="step" type="button" data-step="verify">
+                    <div class="step-top"><strong>Evidence verifier</strong><span class="tag ok">success</span></div>
+                    <div class="step-meta"><span class="tag">goal-only</span><span class="tag">report ready</span></div>
+                  </button>
+                </div>
+              </section>
+
+              <section class="section evidence-pane">
+                <div class="section-header evidence-title">
+                  <div>
+                    <h2 id="evidenceTitle">Pre-plan generated</h2>
+                    <p class="muted" id="evidenceSubtitle">Key actions and final verification goal are ready.</p>
+                  </div>
+                  <span class="tag ok" id="evidenceStatus">passed</span>
+                </div>
+                <div class="preview-scene" aria-label="Live preview mock">
+                  <div class="browser-frame">
+                    <div class="browser-bar">
+                      <span class="window-dot"></span>
+                      <span class="window-dot"></span>
+                      <span class="window-dot"></span>
+                      <div class="address">https://app.example.test/projects</div>
+                    </div>
+                    <div class="mock-page">
+                      <div class="mock-nav">
+                        <div></div><div></div><div></div><div></div>
+                      </div>
+                      <div class="mock-content">
+                        <div class="mock-toolbar">
+                          <div class="mock-heading"></div>
+                          <div class="mock-button"></div>
+                        </div>
+                        <div class="mock-list">
+                          <div class="mock-row"><div></div><div></div><div></div></div>
+                          <div class="mock-row selected"><div></div><div></div><div></div></div>
+                          <div class="mock-row"><div></div><div></div><div></div></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="compare-grid">
+                  <div class="mini-shot">
+                    <strong>Before</strong>
+                    <div class="mini-lines"><div></div><div></div><div></div></div>
+                  </div>
+                  <div class="mini-shot">
+                    <strong>After</strong>
+                    <div class="mini-lines"><div></div><div></div><div></div></div>
+                  </div>
+                </div>
+                <pre class="artifact-box" id="artifactText">verification_goal: Verify that the newly created project appears in the project list.
+key_actions:
+  - Start the browser and open the application.
+  - Create a project with a unique name.
+  - Confirm the project appears in the project list.</pre>
+              </section>
+
+              <section class="section">
+                <div class="section-header">
+                  <div>
+                    <h2>Result</h2>
+                    <p class="muted">FSQ verifier is authoritative.</p>
+                  </div>
+                  <span class="tag ok">success</span>
+                </div>
+                <div class="body result-stack">
+                  <div class="result-block">
+                    <h3>Verification</h3>
+                    <p>The evidence bundle supports the final goal: the newly created project appears in the project list.</p>
+                    <div class="step-meta"><span class="tag ok">goal satisfied</span><span class="tag">evidence-backed</span></div>
+                  </div>
+                  <div class="result-block">
+                    <h3>Generated YAML</h3>
+                    <p>8 replayable commands recorded under this run. Save accepted YAML into the workspace cases folder.</p>
+                    <div class="step-meta">
+                      <button class="btn small" type="button" data-screen-jump="assets">View YAML</button>
+                      <button class="btn small primary" type="button" data-screen-jump="assets">Save to workspace</button>
+                    </div>
+                  </div>
+                  <div class="result-block">
+                    <h3>Strict replay</h3>
+                    <p>No LLM planning. No recovery. Execute authored commands exactly.</p>
+                    <button class="btn small primary" type="button" id="strictReplay">Start replay</button>
+                  </div>
+                  <div class="result-block">
+                    <h3>Report</h3>
+                    <p>Report includes timeline, verifier status, tool calls, and artifact references.</p>
+                    <button class="btn small" type="button">Open report</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section id="assets" class="screen">
+            <div class="asset-screen">
+              <section class="section">
+                <div class="section-header">
+                  <div>
+                    <h2>Generated strict YAML</h2>
+                    <p class="muted">Recorded from actual successful FSQ events and ready to attach to the active workspace.</p>
+                  </div>
+                  <span class="tag ok">validated</span>
+                </div>
+                <div class="body result-stack">
+                  <div class="workspace-card">
+                    <div class="workspace-title">
+                      <div>
+                        <h3>Save target</h3>
+                        <p class="muted">This turns a run artifact into a maintained case inside the coding project.</p>
+                      </div>
+                      <span class="tag">workspace</span>
+                    </div>
+                    <div class="workspace-path">/Users/qunmi/Documents/FSQ_LAB/FSQ/cases/generated/create-project-flow.codex.yaml</div>
+                  </div>
+                  <div class="readiness-row">
+                    <span class="dot ok"></span>
+                    <div><strong>Source run</strong><small>create-project-flow-2026-08-05_14-32-10</small></div>
+                    <span class="tag">dynamic</span>
+                  </div>
+                  <div class="readiness-row">
+                    <span class="dot ok"></span>
+                    <div><strong>Commands</strong><small>8 replayable commands, observation steps skipped</small></div>
+                    <span class="tag ok">passed</span>
+                  </div>
+                  <div class="readiness-row">
+                    <span class="dot ok"></span>
+                    <div><strong>Secrets</strong><small>No literal secrets recorded</small></div>
+                    <span class="tag ok">safe</span>
+                  </div>
+                  <div class="step-meta">
+                    <button class="btn small primary" type="button">Save to workspace cases</button>
+                    <button class="btn small primary" type="button" data-screen-jump="workbench">Replay strict</button>
+                  </div>
+                </div>
+              </section>
+              <section class="section">
+                <div class="section-header">
+                  <h2>YAML preview</h2>
+                  <span class="tag">recorded.codex.yaml</span>
+                </div>
+                <div class="body">
+                  <pre class="yaml-preview">schemaVersion: fsq.ai-test/v1
+name: Recorded: create project flow
+platform: web
+tags:
+  - recorded
+  - dynamic-llm
+properties:
+  recording:
+    source_status: success
+    draft: false
+---
+- startBrowser: {}
+- navigateTo:
+    url: https://app.example.test/projects
+- clickOn:
+    target: New Project
+- typeText:
+    target: Project name
+    text: Control Plane UX
+- clickOn:
+    target: Create
+- assertVisible:
+    target: Control Plane UX</pre>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="wizard" id="wizard" role="dialog" aria-modal="true" aria-label="First run wizard">
+      <div class="wizard-panel">
+        <div class="wizard-grid">
+          <aside class="wizard-side">
+            <div>
+              <h2>First FSQ run</h2>
+              <p>Run one complete loop: readiness, goal execution, evidence inspection, generated YAML, strict replay.</p>
+            </div>
+            <div class="wizard-steps">
+              <div class="wizard-step current"><span class="circle">1</span><span>Check runtime</span></div>
+              <div class="wizard-step current"><span class="circle">2</span><span>Enter a goal</span></div>
+              <div class="wizard-step"><span class="circle">3</span><span>Watch evidence</span></div>
+              <div class="wizard-step"><span class="circle">4</span><span>Replay without LLM</span></div>
+            </div>
+          </aside>
+          <main class="wizard-main">
+            <div class="wizard-progress" aria-label="Wizard progress"><div id="wizardProgress"></div></div>
+
+            <section class="wizard-pane active" data-wizard-pane="0">
+              <div>
+                <h1>Check runtime first.</h1>
+                <p class="muted" style="margin-top: 10px; line-height: 1.5">
+                  FSQ should explain readiness before asking for a test goal. New users need to know whether the local agent can run.
+                </p>
+              </div>
+              <div class="readiness-list">
+                <div class="readiness-row">
+                  <span class="dot ok"></span>
+                  <div><strong>Runtime is ready</strong><small>Web platform, provider, workspace, and recording are available.</small></div>
+                  <span class="tag ok">ready</span>
+                </div>
+                <div class="readiness-row">
+                  <span class="dot warn"></span>
+                  <div><strong>Optional base URL</strong><small>Goal runs can provide a full URL when no base URL is configured.</small></div>
+                  <span class="tag warn">optional</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="wizard-pane" data-wizard-pane="1">
+              <div>
+                <h1>Use a goal, not a chat thread.</h1>
+                <p class="muted" style="margin-top: 10px; line-height: 1.5">
+                  The first run starts from one user-visible goal. FSQ turns it into key actions and one verification target.
+                </p>
+              </div>
+              <div class="sample-goal">
+                Open https://app.example.test, create a project named "Control Plane UX", and verify it appears in the project list.
+              </div>
+              <button class="btn" type="button" data-screen-jump="new-run">Preview run setup</button>
+            </section>
+
+            <section class="wizard-pane" data-wizard-pane="2">
+              <div>
+                <h1>Watch the plan become evidence.</h1>
+                <p class="muted" style="margin-top: 10px; line-height: 1.5">
+                  During execution, the left timeline shows phases and the center panel shows step evidence. The verifier checks only the final goal.
+                </p>
+              </div>
+              <div class="run-contract">
+                <div class="contract-row">
+                  <span class="num">A</span>
+                  <div><strong>Pre-plan</strong><p class="muted">Key actions guide execution; they are not independent final requirements.</p></div>
+                </div>
+                <div class="contract-row">
+                  <span class="num">B</span>
+                  <div><strong>Evidence</strong><p class="muted">Every recordable action flows through StepRunner and carries artifacts.</p></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="wizard-pane" data-wizard-pane="3">
+              <div>
+                <h1>Finish with a replayable asset.</h1>
+                <p class="muted" style="margin-top: 10px; line-height: 1.5">
+                  A successful dynamic run can produce strict YAML from actual capability events, then replay without LLM planning.
+                </p>
+              </div>
+              <div class="readiness-list">
+                <div class="readiness-row">
+                  <span class="dot ok"></span>
+                  <div><strong>Generated YAML</strong><small>Replayable commands come from successful FSQ events.</small></div>
+                  <span class="tag ok">validated</span>
+                </div>
+                <div class="readiness-row">
+                  <span class="dot ok"></span>
+                  <div><strong>Strict replay</strong><small>No recovery, no agent planning, same evidence model.</small></div>
+                  <span class="tag">no LLM</span>
+                </div>
+              </div>
+            </section>
+
+            <div class="wizard-footer">
+              <button class="btn" type="button" id="closeWizard">Skip</button>
+              <span class="wizard-caption" id="wizardCaption">Step 1 of 4</span>
+              <div class="step-meta">
+                <button class="btn" type="button" id="wizardBack">Back</button>
+                <button class="btn primary" type="button" id="wizardNext">Next</button>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const navButtons = Array.from(document.querySelectorAll(".nav-button"));
+      const screens = Array.from(document.querySelectorAll(".screen"));
+      const jumps = Array.from(document.querySelectorAll("[data-screen-jump]"));
+      const steps = Array.from(document.querySelectorAll(".step"));
+      const modes = Array.from(document.querySelectorAll(".mode"));
+      const wizard = document.getElementById("wizard");
+      const wizardPanes = Array.from(document.querySelectorAll(".wizard-pane"));
+      const wizardSteps = Array.from(document.querySelectorAll(".wizard-step"));
+      const wizardProgress = document.getElementById("wizardProgress");
+      const wizardCaption = document.getElementById("wizardCaption");
+      const wizardBack = document.getElementById("wizardBack");
+      const wizardNext = document.getElementById("wizardNext");
+      let wizardIndex = 0;
+
+      const stepData = {
+        preplan: {
+          title: "Pre-plan generated",
+          subtitle: "Key actions and final verification goal are ready.",
+          status: "passed",
+          text: "verification_goal: Verify that the newly created project appears in the project list.\\nkey_actions:\\n  - Start browser and open the app.\\n  - Create a project with a unique name.\\n  - Confirm the project appears in the project list."
+        },
+        start: {
+          title: "startBrowser",
+          subtitle: "Browser session started through FSQ Web harness.",
+          status: "passed",
+          text: "capability_name: start_browser\\nstep_kind: setup\\nevidence_policy: after screenshot + ui_snapshot\\nreplay_alias: startBrowser"
+        },
+        create: {
+          title: "clickOn New Project",
+          subtitle: "FSQ clicked the New Project command from the live page.",
+          status: "passed",
+          text: "capability_name: click_on\\nstep_kind: action\\nsafe_replay_params:\\n  target: New Project\\nartifacts:\\n  - before screenshot\\n  - after screenshot\\n  - ui_snapshot"
+        },
+        type: {
+          title: "typeText project name",
+          subtitle: "Project name was entered and recorded as replayable params.",
+          status: "passed",
+          text: "capability_name: type_text\\nstep_kind: action\\nsafe_replay_params:\\n  target: Project name\\n  text: Control Plane UX\\n  textType: literal"
+        },
+        assert: {
+          title: "assertVisible project row",
+          subtitle: "Assertion evidence shows the created project in the list.",
+          status: "passed",
+          text: "capability_name: assert_visible\\nstep_kind: assertion\\nexpected: Control Plane UX visible\\nobserved: matching row in project list\\nverifier_support: true"
+        },
+        verify: {
+          title: "Evidence verifier",
+          subtitle: "Verifier checked the final goal from the supplied evidence bundle.",
+          status: "success",
+          text: "status: success\\nsummary: The generated project appears in the project list.\\nrule: main agent claims are not proof\\nproof: assertion output + after screenshot + ui_snapshot"
+        }
+      };
+
+      function showScreen(id) {
+        screens.forEach((screen) => screen.classList.toggle("active", screen.id === id));
+        navButtons.forEach((button) => button.classList.toggle("active", button.dataset.screen === id));
+      }
+
+      function showWizardStep(index) {
+        wizardIndex = Math.max(0, Math.min(index, wizardPanes.length - 1));
+        wizardPanes.forEach((pane, paneIndex) => pane.classList.toggle("active", paneIndex === wizardIndex));
+        wizardSteps.forEach((step, stepIndex) => {
+          step.classList.toggle("current", stepIndex === wizardIndex);
+          step.classList.toggle("done", stepIndex < wizardIndex);
+        });
+        wizardProgress.style.width = `${((wizardIndex + 1) / wizardPanes.length) * 100}%`;
+        wizardCaption.textContent = `Step ${wizardIndex + 1} of ${wizardPanes.length}`;
+        wizardBack.disabled = wizardIndex === 0;
+        wizardNext.textContent = wizardIndex === wizardPanes.length - 1 ? "Open workbench" : "Next";
+      }
+
+      function openWizard() {
+        showWizardStep(0);
+        wizard.classList.add("active");
+      }
+
+      navButtons.forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.screen)));
+      jumps.forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.screenJump)));
+
+      steps.forEach((button) => {
+        button.addEventListener("click", () => {
+          steps.forEach((step) => step.classList.remove("active"));
+          button.classList.add("active");
+          const data = stepData[button.dataset.step];
+          document.getElementById("evidenceTitle").textContent = data.title;
+          document.getElementById("evidenceSubtitle").textContent = data.subtitle;
+          document.getElementById("evidenceStatus").textContent = data.status;
+          document.getElementById("artifactText").textContent = data.text;
+        });
+      });
+
+      modes.forEach((button) => {
+        button.addEventListener("click", () => {
+          modes.forEach((mode) => mode.classList.remove("active"));
+          button.classList.add("active");
+        });
+      });
+
+      document.getElementById("openWizard").addEventListener("click", openWizard);
+      document.getElementById("openWizardFromGuide").addEventListener("click", openWizard);
+      document.getElementById("closeWizard").addEventListener("click", () => wizard.classList.remove("active"));
+      wizardBack.addEventListener("click", () => showWizardStep(wizardIndex - 1));
+      wizardNext.addEventListener("click", () => {
+        if (wizardIndex < wizardPanes.length - 1) {
+          showWizardStep(wizardIndex + 1);
+          return;
+        }
+        wizard.classList.remove("active");
+        showScreen("workbench");
+      });
+      document.getElementById("strictReplay").addEventListener("click", () => {
+        showScreen("assets");
+      });
+      showWizardStep(0);
+    </script>
+  </body>
+</html>
