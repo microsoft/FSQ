@@ -542,6 +542,57 @@ def _parse_workbench_contract(html: str) -> dict[str, object]:
     }
 
 
+class _PageLayoutContractParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._stack: list[tuple[str, dict[str, str]]] = []
+        self._page_depth: int | None = None
+        self._page_id: str | None = None
+        self.page_children: dict[str, list[dict[str, str]]] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name: value or "" for name, value in attrs}
+        self._stack.append((tag, attributes))
+
+        classes = set(attributes.get("class", "").split())
+        if tag == "section" and "page" in classes:
+            self._page_depth = len(self._stack)
+            self._page_id = attributes.get("id")
+            if self._page_id:
+                self.page_children.setdefault(self._page_id, [])
+            return
+
+        if self._page_id is None or self._page_depth is None:
+            return
+
+        if len(self._stack) == self._page_depth + 1 and tag == "div":
+            self.page_children[self._page_id].append(attributes)
+
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
+        if self._page_depth is not None and len(self._stack) < self._page_depth:
+            self._page_depth = None
+            self._page_id = None
+
+
+def _parse_page_layout_contract(html: str) -> dict[str, list[dict[str, str]]]:
+    parser = _PageLayoutContractParser()
+    parser.feed(html)
+    return parser.page_children
+
+
+def _find_page_child_with_class(
+    page_children: dict[str, list[dict[str, str]]], page_id: str, class_name: str
+) -> dict[str, str]:
+    for child in page_children.get(page_id, []):
+        if child.get("class") == class_name:
+            return child
+    pytest.fail(f'missing "{class_name}" direct child on page "{page_id}"')
+
+
 def _run_workbench_report_state_contract(html: str) -> dict[str, object]:
     start = html.index("const runReports = {")
     end = html.index("const workspaceNav = document.getElementById(\"workspaceNav\");")
@@ -1242,6 +1293,51 @@ def test_fsq_control_plane_promotes_runs_into_primary_navigation() -> None:
         ("button", "runs"),
     ]
     assert nav_contract["footer_views"] == ["config", "settings"]
+
+
+def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or_device_layouts() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    page_children = _parse_page_layout_contract(html)
+    css = _extract_style_block(html)
+
+    page_rule = _extract_css_declarations(rules[".page"][0])
+    content_grid_rule = _extract_css_declarations(rules[".content-grid"][0])
+    workspace_rule = _extract_css_declarations(rules[".github-workspace"][0])
+    device_workbench_rule = _extract_css_declarations(rules[".device-workbench"][0])
+    device_content_grid_rule = _extract_css_declarations(rules["#device .content-grid"][0])
+
+    assert page_rule["padding"] == "28px"
+    assert content_grid_rule["width"] == "100%"
+    assert content_grid_rule["min-width"] == "0"
+    assert "max-width" not in content_grid_rule
+    assert "margin" not in content_grid_rule
+
+    assert _find_page_child_with_class(page_children, "home", "content-grid")["class"] == "content-grid"
+    assert _find_page_child_with_class(page_children, "runs", "content-grid")["class"] == "content-grid"
+    assert (
+        _find_page_child_with_class(page_children, "config", "content-grid environment-grid")["class"]
+        == "content-grid environment-grid"
+    )
+    settings_content = _find_page_child_with_class(page_children, "settings", "content-grid card")
+    assert settings_content["class"] == "content-grid card"
+    assert "max-width" not in settings_content.get("style", "")
+
+    assert _find_page_child_with_class(page_children, "workspace", "github-workspace")["class"] == "github-workspace"
+    assert workspace_rule["height"] == "calc(100vh - 76px)"
+    assert workspace_rule["grid-template-columns"] == "310px minmax(0, 1fr)"
+
+    assert (
+        _find_page_child_with_class(page_children, "device", "content-grid device-workbench")["class"]
+        == "content-grid device-workbench"
+    )
+    assert device_workbench_rule["grid-template-columns"] == "430px minmax(520px, 1fr)"
+    assert device_workbench_rule["min-height"] == "calc(100vh - 108px)"
+    assert device_content_grid_rule["max-width"] == "none"
+    assert re.search(
+        r"@media\s*\(max-width:\s*1120px\)\s*\{[\s\S]*?\.device-workbench,\s*[\s\S]*?grid-template-columns:\s*1fr;",
+        css,
+    )
 
 
 def test_parse_navigation_contract_rejects_nested_primary_nav_buttons() -> None:
