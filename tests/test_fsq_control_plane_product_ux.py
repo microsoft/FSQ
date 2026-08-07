@@ -191,6 +191,7 @@ function buttonState(button) {{
     disabled: button.disabled,
     pending: button.dataset.codeActionPending || "",
     label: button.textContent,
+    ariaLabel: button.attributes.get("aria-label") || "",
   }};
 }}
 function resolveNextClipboardWrite() {{
@@ -258,14 +259,14 @@ console.log(JSON.stringify({{
     assert payload["firstWrite"] == payload["secondWrite"]
     assert payload["secondWrite"] == payload["thirdWrite"] == payload["fourthWrite"]
     assert payload["firstWrite"].startswith("schemaVersion: fsq.ai-test/v1\n")
-    assert payload["rerenderedPending"] == {"disabled": True, "pending": "true", "label": "Copy"}
-    assert payload["successState"] == {"disabled": False, "pending": "", "label": "Copied"}
-    assert payload["pendingAfterSuccessRetry"] == {"disabled": True, "pending": "true", "label": "Copying…"}
-    assert payload["pendingAfterSuccessRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…"}
-    assert payload["retrySuccessState"] == {"disabled": False, "pending": "", "label": "Copied"}
+    assert payload["rerenderedPending"] == {"disabled": True, "pending": "true", "label": "Copying…", "ariaLabel": "Copying…"}
+    assert payload["successState"] == {"disabled": False, "pending": "", "label": "Copied", "ariaLabel": "Copied"}
+    assert payload["pendingAfterSuccessRetry"] == {"disabled": True, "pending": "true", "label": "Copying…", "ariaLabel": "Copying…"}
+    assert payload["pendingAfterSuccessRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…", "ariaLabel": "Copying…"}
+    assert payload["retrySuccessState"] == {"disabled": False, "pending": "", "label": "Copied", "ariaLabel": "Copied"}
     assert payload["resetAfterSuccessRetry"] == "Copy"
-    assert payload["failureState"] == {"disabled": False, "pending": "", "label": "Copy failed"}
-    assert payload["pendingAfterFailureRetry"] == {"disabled": True, "pending": "true", "label": "Copying…"}
-    assert payload["pendingAfterFailureRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…"}
-    assert payload["retryFailureState"] == {"disabled": False, "pending": "", "label": "Copy failed"}
+    assert payload["failureState"] == {"disabled": False, "pending": "", "label": "Copy failed", "ariaLabel": "Copy failed"}
+    assert payload["pendingAfterFailureRetry"] == {"disabled": True, "pending": "true", "label": "Copying…", "ariaLabel": "Copying…"}
+    assert payload["pendingAfterFailureRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…", "ariaLabel": "Copying…"}
+    assert payload["retryFailureState"] == {"disabled": False, "pending": "", "label": "Copy failed", "ariaLabel": "Copy failed"}
     assert payload["resetAfterFailureRetry"] == "Copy"

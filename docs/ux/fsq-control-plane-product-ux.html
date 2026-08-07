@@ -3698,7 +3698,8 @@ properties:
           return `<li class="${classes.join(" ")}" data-source-range="${range}"><span class="source-line-number" aria-hidden="true" data-line-number="${index + 1}"></span><span class="source-line-code">${renderYamlLine(line)}</span></li>`;
         });
         const copyPendingAttributes = fsqCopyState.pending ? ' data-code-action-pending="true" disabled' : "";
-        return `<section class="source-viewer" id="fsqSourceViewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button" data-code-action="wrap" aria-label="Wrap lines" aria-pressed="false">Wrap lines</button><button type="button" data-code-action="copy"${copyPendingAttributes} aria-label="${codeCopyDefaultLabel}">${codeCopyDefaultLabel}</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
+        const copyLabel = fsqCopyState.pending ? codeCopyPendingLabel : codeCopyDefaultLabel;
+        return `<section class="source-viewer" id="fsqSourceViewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button" data-code-action="wrap" aria-label="Wrap lines" aria-pressed="false">Wrap lines</button><button type="button" data-code-action="copy"${copyPendingAttributes} aria-label="${copyLabel}">${copyLabel}</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
       }
       function setCodeActionLabel(button, label) {
         button.textContent = label;
