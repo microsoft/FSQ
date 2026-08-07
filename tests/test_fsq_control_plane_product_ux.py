@@ -43,8 +43,26 @@ def _assert_source_gutter_rules_are_opaque(rules: dict[str, list[str]]) -> None:
     assert rules[".source-line-code"][0] == rules[".source-line-number"][0]
     assert shared_gutter_background_rule["background"] == "var(--source-line-bg)"
     assert "opacity" not in shared_gutter_background_rule, "shared source gutter background must stay opaque"
-    assert gutter_rule["border-right"] == "1px solid var(--cp-border)"
+    assert gutter_rule["border-right"] == "1px solid var(--cp-surface-soft)"
     assert "opacity" not in gutter_rule, "gutter-specific source gutter rule must stay opaque"
+
+
+def _assert_source_command_ranges_stay_neutral(rules: dict[str, list[str]]) -> None:
+    offending_rules: dict[str, dict[str, str]] = {}
+    for selector, rule_bodies in rules.items():
+        if 'data-source-range="commands"' not in selector:
+            continue
+        for rule_body in rule_bodies:
+            declarations = _extract_css_declarations(rule_body)
+            background_declarations = {
+                name: value
+                for name, value in declarations.items()
+                if name.startswith("background")
+                or (name.startswith("--") and ("background" in name or name.endswith("-bg")))
+            }
+            if background_declarations:
+                offending_rules[selector] = background_declarations
+    assert not offending_rules, f"command-range CSS must not set persistent backgrounds: {offending_rules}"
 
 
 def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector() -> None:
@@ -57,7 +75,7 @@ def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector(
           }
 
           .source-line-number {
-            border-right: 1px solid var(--cp-border);
+            border-right: 1px solid var(--cp-surface-soft);
           }
         </style>
         """
@@ -65,7 +83,7 @@ def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector(
 
     assert rules[".source-line-number"] == [
         "background: var(--source-line-bg);",
-        "border-right: 1px solid var(--cp-border);",
+        "border-right: 1px solid var(--cp-surface-soft);",
     ]
     assert rules[".source-line-code"] == ["background: var(--source-line-bg);"]
 
@@ -81,7 +99,7 @@ def test_source_gutter_opacity_check_rejects_shared_background_regression() -> N
           }
 
           .source-line-number {
-            border-right: 1px solid var(--cp-border);
+            border-right: 1px solid var(--cp-surface-soft);
           }
         </style>
         """
@@ -89,6 +107,21 @@ def test_source_gutter_opacity_check_rejects_shared_background_regression() -> N
 
     with pytest.raises(AssertionError, match="shared source gutter background must stay opaque"):
         _assert_source_gutter_rules_are_opaque(rules)
+
+
+def test_source_command_range_background_check_rejects_persistent_fill_regression() -> None:
+    rules = _extract_source_viewer_css_rules(
+        """
+        <style>
+          .source-line[data-source-range="commands"] {
+            --source-line-bg: var(--cp-surface-soft);
+          }
+        </style>
+        """
+    )
+
+    with pytest.raises(AssertionError, match="command-range CSS must not set persistent backgrounds"):
+        _assert_source_command_ranges_stay_neutral(rules)
 
 
 def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
@@ -110,6 +143,7 @@ def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
     assert source_line_rule["--source-line-bg"] == "var(--cp-surface)"
     assert hover_rule["--source-line-bg"] == "var(--cp-surface-soft)"
     _assert_source_gutter_rules_are_opaque(rules)
+    _assert_source_command_ranges_stay_neutral(rules)
     assert yaml_key_rule["color"] == "var(--cp-text)"
     assert yaml_key_rule["font-weight"] in {"500", "600"}
     assert yaml_value_rule["color"] == "var(--cp-text-muted)"
