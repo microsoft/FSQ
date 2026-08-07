@@ -652,6 +652,9 @@ class _ConfigContractParser(HTMLParser):
         self.row_input_types: list[str] = []
         self.row_input_ids: list[str] = []
         self.row_input_names: list[str] = []
+        self.row_input_values: list[str] = []
+        self.row_input_placeholders: list[str] = []
+        self.row_input_data_has_saved_key: list[str] = []
         self.row_label_fors: list[str] = []
         self.row_label_texts: list[str] = []
         self.row_error_ids: list[str] = []
@@ -659,6 +662,7 @@ class _ConfigContractParser(HTMLParser):
         self.footer_buttons: list[str] = []
         self.footer_button_types: list[str] = []
         self.status_ids: list[str] = []
+        self.status_texts: list[str] = []
         self.section_text: list[str] = []
         self.panel_count = 0
         self.header_button_types: list[str] = []
@@ -699,6 +703,9 @@ class _ConfigContractParser(HTMLParser):
                 self._current_row["input_type"] = attributes.get("type", "text")
                 self._current_row["input_id"] = attributes.get("id", "")
                 self._current_row["input_name"] = attributes.get("name", "")
+                self._current_row["input_value"] = attributes.get("value", "")
+                self._current_row["input_placeholder"] = attributes.get("placeholder", "")
+                self._current_row["input_data_has_saved_key"] = attributes.get("data-has-saved-key", "")
             elif "config-error" in classes:
                 self._current_row["error_id"] = attributes.get("id", "")
             elif tag == "button" and any("config-input-wrap" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
@@ -717,6 +724,7 @@ class _ConfigContractParser(HTMLParser):
 
         if "config-status" in classes:
             self.status_ids.append(attributes.get("id", ""))
+            self._text_targets.append(("status_text", []))
 
     def handle_data(self, data: str) -> None:
         if self._config_depth is None:
@@ -754,6 +762,8 @@ class _ConfigContractParser(HTMLParser):
                     toggle_button = self._current_row.get("toggle_button")
                     if isinstance(toggle_button, dict):
                         toggle_button["text"] = text
+                elif target_name == "status_text":
+                    self.status_texts.append(text)
 
         if self._current_row is not None and tag == "div":
             current_tag, current_attributes = self._stack[-1]
@@ -763,6 +773,9 @@ class _ConfigContractParser(HTMLParser):
                 self.row_input_types.append(str(self._current_row.get("input_type", "")))
                 self.row_input_ids.append(str(self._current_row.get("input_id", "")))
                 self.row_input_names.append(str(self._current_row.get("input_name", "")))
+                self.row_input_values.append(str(self._current_row.get("input_value", "")))
+                self.row_input_placeholders.append(str(self._current_row.get("input_placeholder", "")))
+                self.row_input_data_has_saved_key.append(str(self._current_row.get("input_data_has_saved_key", "")))
                 self.row_label_fors.append(str(self._current_row.get("label_for", "")))
                 self.row_label_texts.append(str(self._current_row.get("label_text", "")))
                 self.row_error_ids.append(str(self._current_row.get("error_id", "")))
@@ -793,6 +806,9 @@ def _parse_config_contract(html: str) -> dict[str, object]:
         "row_input_types": parser.row_input_types,
         "row_input_ids": parser.row_input_ids,
         "row_input_names": parser.row_input_names,
+        "row_input_values": parser.row_input_values,
+        "row_input_placeholders": parser.row_input_placeholders,
+        "row_input_data_has_saved_key": parser.row_input_data_has_saved_key,
         "row_label_fors": parser.row_label_fors,
         "row_label_texts": parser.row_label_texts,
         "row_error_ids": parser.row_error_ids,
@@ -800,6 +816,7 @@ def _parse_config_contract(html: str) -> dict[str, object]:
         "footer_buttons": parser.footer_buttons,
         "footer_button_types": parser.footer_button_types,
         "status_ids": parser.status_ids,
+        "status_texts": parser.status_texts,
         "section_text": " ".join(parser.section_text),
         "panel_count": parser.panel_count,
         "header_button_types": parser.header_button_types,
@@ -810,6 +827,10 @@ def _parse_config_contract(html: str) -> dict[str, object]:
 def _run_config_form_contract(html: str) -> dict[str, object]:
     config_contract = _parse_config_contract(html)
     row_input_names = json.dumps(config_contract["row_input_names"])
+    row_input_values = json.dumps(config_contract["row_input_values"])
+    row_input_placeholders = json.dumps(config_contract["row_input_placeholders"])
+    row_input_data_has_saved_key = json.dumps(config_contract["row_input_data_has_saved_key"])
+    status_texts = json.dumps(config_contract["status_texts"])
     start = html.index('const configForm = document.getElementById("configForm");')
     end = html.index("const runReports = {")
     snippet = html[start:end]
@@ -855,6 +876,7 @@ class FakeElement {{
     text = "",
     type = "",
     name = "",
+    placeholder = "",
     value = "",
     dataset = {{}},
     hidden = false,
@@ -869,6 +891,7 @@ class FakeElement {{
     this.textContent = text;
     this.type = type;
     this.value = value;
+    this.placeholder = placeholder;
     this.className = classNames.join(" ");
     this.formOwner = formOwner;
     this.name = name;
@@ -937,24 +960,51 @@ class FakeForm extends FakeElement {{
 class FakeFormData {{
   constructor(form) {{
     this._entries = [];
+    this._values = new Map();
     for (const control of form?.elements || []) {{
       if (!control?.name || control.type === "button" || control.type === "submit") {{
         continue;
       }}
       this._entries.push([control.name, control.value]);
+      this._values.set(control.name, control.value);
     }}
   }}
   entries() {{
     return this._entries[Symbol.iterator]();
   }}
+  get(name) {{
+    return this._values.has(name) ? this._values.get(name) : null;
+  }}
 }}
+
+const FormData = FakeFormData;
 
 const nodes = {{}};
 nodes.configForm = new FakeForm({{ id: "configForm" }});
 const [configBaseUrlName, configApiKeyName, configModelNameName] = {row_input_names};
-nodes.configBaseUrl = new FakeElement({{ id: "configBaseUrl", type: "url", name: configBaseUrlName, value: "ftp://example.test", formOwner: nodes.configForm }});
+const [configBaseUrlValue, configApiKeyValue, configModelNameValue] = {row_input_values};
+const [configBaseUrlPlaceholder, configApiKeyPlaceholder, configModelNamePlaceholder] = {row_input_placeholders};
+const [configBaseUrlSavedKey, configApiKeySavedKey, configModelNameSavedKey] = {row_input_data_has_saved_key};
+const [configStatusText = ""] = {status_texts};
+nodes.configBaseUrl = new FakeElement({{
+  id: "configBaseUrl",
+  type: "url",
+  name: configBaseUrlName,
+  placeholder: configBaseUrlPlaceholder,
+  value: configBaseUrlValue,
+  dataset: {{ hasSavedKey: configBaseUrlSavedKey }},
+  formOwner: nodes.configForm,
+}});
 nodes.configBaseUrlError = new FakeElement({{ id: "configBaseUrlError" }});
-nodes.configApiKey = new FakeElement({{ id: "configApiKey", type: "password", name: configApiKeyName, value: "", formOwner: nodes.configForm }});
+nodes.configApiKey = new FakeElement({{
+  id: "configApiKey",
+  type: "password",
+  name: configApiKeyName,
+  placeholder: configApiKeyPlaceholder,
+  value: configApiKeyValue,
+  dataset: {{ hasSavedKey: configApiKeySavedKey }},
+  formOwner: nodes.configForm,
+}});
 nodes.configApiKeyError = new FakeElement({{ id: "configApiKeyError" }});
 nodes.configApiKeyToggle = new FakeElement({{
   id: "configApiKeyToggle",
@@ -962,11 +1012,19 @@ nodes.configApiKeyToggle = new FakeElement({{
   classNames: ["btn", "small"],
 }});
 nodes.configApiKeyToggle.setAttribute("aria-label", "Show api_key value");
-nodes.configModelName = new FakeElement({{ id: "configModelName", type: "text", name: configModelNameName, value: "", formOwner: nodes.configForm }});
+nodes.configModelName = new FakeElement({{
+  id: "configModelName",
+  type: "text",
+  name: configModelNameName,
+  placeholder: configModelNamePlaceholder,
+  value: configModelNameValue,
+  dataset: {{ hasSavedKey: configModelNameSavedKey }},
+  formOwner: nodes.configForm,
+}});
 nodes.configModelNameError = new FakeElement({{ id: "configModelNameError" }});
 nodes.configSaveButton = new FakeElement({{ id: "configSaveButton", text: "Save changes", type: "submit", formOwner: nodes.configForm }});
 nodes.configTestButton = new FakeElement({{ id: "configTestButton", text: "Test connection", type: "button" }});
-nodes.configStatus = new FakeElement({{ id: "configStatus", classNames: ["config-status"] }});
+nodes.configStatus = new FakeElement({{ id: "configStatus", classNames: ["config-status"], text: configStatusText }});
 nodes.configForm.elements = [
   nodes.configBaseUrl,
   nodes.configApiKey,
@@ -1014,27 +1072,52 @@ function flushTimers() {{
 
 {snippet}
 
+const safePayloads = {{
+  untouched: typeof buildConfigPayload === "function" ? buildConfigPayload(new FormData(configForm)) : null,
+}};
 const initialState = {{
   inputType: configApiKey.type,
+  inputValue: configApiKey.value,
+  inputPlaceholder: configApiKey.placeholder,
+  savedKeyMarker: configApiKey.dataset.hasSavedKey || "",
   toggleLabel: configApiKeyToggle.textContent,
   toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
+  statusText: configStatus.textContent,
 }};
 
 configApiKeyToggle.click();
 const visibleState = {{
   inputType: configApiKey.type,
+  inputValue: configApiKey.value,
+  inputPlaceholder: configApiKey.placeholder,
   toggleLabel: configApiKeyToggle.textContent,
   toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
 }};
 configApiKeyToggle.click();
 const hiddenState = {{
   inputType: configApiKey.type,
+  inputValue: configApiKey.value,
+  inputPlaceholder: configApiKey.placeholder,
   toggleLabel: configApiKeyToggle.textContent,
   toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
 }};
 
+configApiKey.value = "";
+configApiKey.dataset.hasSavedKey = "false";
 configSaveButton.click();
-const invalidSaveState = {{
+const missingKeyState = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+  apiKeyError: configApiKeyError.textContent,
+  apiKeyInvalid: configApiKey.getAttribute("aria-invalid"),
+  submitCount: configForm.submitCount,
+  submitterId: configForm.lastSubmitterId,
+  toastMessages: [...toastMessages],
+}};
+
+configApiKey.dataset.hasSavedKey = "true";
+configSaveButton.click();
+const untouchedSaveState = {{
   statusText: configStatus.textContent,
   statusClassName: configStatus.className,
   baseUrlError: configBaseUrlError.textContent,
@@ -1048,11 +1131,8 @@ const invalidSaveState = {{
   toastMessages: [...toastMessages],
 }};
 
-configBaseUrl.value = "https://models.example.test/openai/v1";
-configApiKey.value = "secret-key";
-configModelName.value = "gpt-5.6";
 configTestButton.click();
-const validTestPending = {{
+const untouchedTestPending = {{
   statusText: configStatus.textContent,
   statusClassName: configStatus.className,
   baseUrlError: configBaseUrlError.textContent,
@@ -1077,18 +1157,9 @@ for (const listener of configModelName.listeners.get("input") || []) {{
 }}
 configTestButton.click();
 flushTimers();
-const validTestConnected = {{
+const untouchedTestConnected = {{
   statusText: configStatus.textContent,
   statusClassName: configStatus.className,
-}};
-
-configSaveButton.click();
-const validSaveState = {{
-  statusText: configStatus.textContent,
-  statusClassName: configStatus.className,
-  submitCount: configForm.submitCount,
-  submitterId: configForm.lastSubmitterId,
-  toastMessages: [...toastMessages],
 }};
 
 configForm.requestSubmit();
@@ -1100,21 +1171,29 @@ const enterSaveState = {{
   toastMessages: [...toastMessages],
 }};
 
-const serializedEntries = [...new FakeFormData(configForm).entries()];
-const serializedConfig = Object.fromEntries(serializedEntries);
+configApiKey.value = "replacement-secret";
+safePayloads.replacement = typeof buildConfigPayload === "function" ? buildConfigPayload(new FormData(configForm)) : null;
+configApiKeyToggle.click();
+const replacementVisibleState = {{
+  inputType: configApiKey.type,
+  inputValue: configApiKey.value,
+  inputPlaceholder: configApiKey.placeholder,
+  toggleLabel: configApiKeyToggle.textContent,
+  toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
+}};
 
 console.log(JSON.stringify({{
   initialState,
   visibleState,
   hiddenState,
-  invalidSaveState,
-  validTestPending,
+  missingKeyState,
+  untouchedSaveState,
+  untouchedTestPending,
   invalidAfterPendingEdit,
-  validTestConnected,
-  validSaveState,
+  untouchedTestConnected,
   enterSaveState,
-  serializedEntries,
-  serializedConfig,
+  replacementVisibleState,
+  safePayloads,
 }}));
 """
     return _run_node_json_script(script, skip_reason="Node.js is required for FSQ config UX script verification.")
@@ -1894,6 +1973,9 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     assert config_contract["row_input_types"] == ["url", "password", "text"]
     assert config_contract["row_input_ids"] == ["configBaseUrl", "configApiKey", "configModelName"]
     assert config_contract["row_input_names"] == ["base_url", "api_key", "model_name"]
+    assert config_contract["row_input_values"][1] == ""
+    assert config_contract["row_input_placeholders"][1] == "Saved key ••••••••"
+    assert config_contract["row_input_data_has_saved_key"][1] == "true"
     assert config_contract["row_label_fors"] == ["configBaseUrl", "configApiKey", "configModelName"]
     assert config_contract["row_label_texts"] == ["base_url", "api_key", "model_name"]
     assert config_contract["row_error_ids"] == [
@@ -1913,7 +1995,7 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     assert config_contract["footer_button_types"] == ["button"]
     assert config_contract["status_ids"] == ["configStatus"]
     assert "compatible model service endpoint" in str(config_contract["row_descriptions"][0]).lower()
-    assert "masked by default" in str(config_contract["row_descriptions"][1]).lower()
+    assert "leave blank to keep the saved key" in str(config_contract["row_descriptions"][1]).lower()
     assert "deployment name" in str(config_contract["row_descriptions"][2]).lower()
 
     for removed_text in [
@@ -1962,39 +2044,56 @@ def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None
 
     assert payload["initialState"] == {
         "inputType": "password",
+        "inputValue": "",
+        "inputPlaceholder": "Saved key ••••••••",
+        "savedKeyMarker": "true",
         "toggleLabel": "Show",
         "toggleAriaLabel": "Show api_key value",
+        "statusText": "Prototype only. Validation runs locally. Leave api_key blank to keep the saved key.",
     }
     assert payload["visibleState"] == {
         "inputType": "text",
+        "inputValue": "",
+        "inputPlaceholder": "Saved key ••••••••",
         "toggleLabel": "Hide",
         "toggleAriaLabel": "Hide api_key value",
     }
     assert payload["hiddenState"] == {
         "inputType": "password",
+        "inputValue": "",
+        "inputPlaceholder": "Saved key ••••••••",
         "toggleLabel": "Show",
         "toggleAriaLabel": "Show api_key value",
     }
-    assert payload["invalidSaveState"] == {
+    assert payload["missingKeyState"] == {
         "statusText": "Please correct the highlighted LLM configuration values before continuing.",
         "statusClassName": "config-status invalid",
-        "baseUrlError": "Enter a valid HTTP or HTTPS URL.",
         "apiKeyError": "Enter an API key.",
-        "modelNameError": "Enter a model or deployment name.",
-        "baseUrlInvalid": "true",
         "apiKeyInvalid": "true",
-        "modelNameInvalid": "true",
         "submitCount": 1,
         "submitterId": "configSaveButton",
         "toastMessages": [],
     }
-    assert payload["validTestPending"] == {
-        "statusText": "Prototype: testing connection…",
+    assert payload["untouchedSaveState"] == {
+        "statusText": "Prototype: LLM configuration saved locally for this mockup. Existing api_key kept.",
+        "statusClassName": "config-status success",
+        "baseUrlError": "",
+        "apiKeyError": "",
+        "modelNameError": "",
+        "baseUrlInvalid": "false",
+        "apiKeyInvalid": "false",
+        "modelNameInvalid": "false",
+        "submitCount": 2,
+        "submitterId": "configSaveButton",
+        "toastMessages": ["Prototype: LLM configuration saved locally for this mockup. Existing api_key kept."],
+    }
+    assert payload["untouchedTestPending"] == {
+        "statusText": "Prototype: testing connection with the saved api_key…",
         "statusClassName": "config-status pending",
         "baseUrlError": "",
         "apiKeyError": "",
         "modelNameError": "",
-        "submitCount": 1,
+        "submitCount": 2,
     }
     assert payload["invalidAfterPendingEdit"] == {
         "statusText": "Please correct the highlighted LLM configuration values before continuing.",
@@ -2002,35 +2101,34 @@ def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None
         "modelNameError": "Enter a model or deployment name.",
         "modelNameInvalid": "true",
     }
-    assert payload["validTestConnected"] == {
-        "statusText": "Prototype: connected. No network request was sent.",
+    assert payload["untouchedTestConnected"] == {
+        "statusText": "Prototype: connected with the saved api_key. No network request was sent.",
         "statusClassName": "config-status success",
-    }
-    assert payload["validSaveState"] == {
-        "statusText": "Prototype: LLM configuration saved locally for this mockup.",
-        "statusClassName": "config-status success",
-        "submitCount": 2,
-        "submitterId": "configSaveButton",
-        "toastMessages": ["Prototype: LLM configuration saved locally for this mockup."],
     }
     assert payload["enterSaveState"] == {
-        "statusText": "Prototype: LLM configuration saved locally for this mockup.",
+        "statusText": "Prototype: LLM configuration saved locally for this mockup. Existing api_key kept.",
         "statusClassName": "config-status success",
         "submitCount": 3,
         "submitterId": None,
         "toastMessages": [
-            "Prototype: LLM configuration saved locally for this mockup.",
-            "Prototype: LLM configuration saved locally for this mockup.",
+            "Prototype: LLM configuration saved locally for this mockup. Existing api_key kept.",
+            "Prototype: LLM configuration saved locally for this mockup. Existing api_key kept.",
         ],
     }
-    assert payload["serializedEntries"] == [
-        ["base_url", "https://models.example.test/openai/v1"],
-        ["api_key", "secret-key"],
-        ["model_name", "gpt-5.6"],
-    ]
-    assert payload["serializedConfig"] == {
+    assert payload["replacementVisibleState"] == {
+        "inputType": "text",
+        "inputValue": "replacement-secret",
+        "inputPlaceholder": "Saved key ••••••••",
+        "toggleLabel": "Hide",
+        "toggleAriaLabel": "Hide api_key value",
+    }
+    assert payload["safePayloads"]["untouched"] == {
         "base_url": "https://models.example.test/openai/v1",
-        "api_key": "secret-key",
+        "model_name": "gpt-5.6",
+    }
+    assert payload["safePayloads"]["replacement"] == {
+        "base_url": "https://models.example.test/openai/v1",
+        "api_key": "replacement-secret",
         "model_name": "gpt-5.6",
     }
 

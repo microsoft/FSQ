@@ -3274,11 +3274,11 @@
                 <div class="config-row">
                   <div class="config-key">
                     <label for="configApiKey"><strong>api_key</strong></label>
-                    <p id="configApiKeyDescription">Required credential for the active Workspace endpoint. Existing values stay masked by default.</p>
+                    <p id="configApiKeyDescription">Required credential for the active Workspace endpoint. Leave blank to keep the saved key shown in the placeholder.</p>
                   </div>
                   <div class="config-control">
                     <div class="config-input-wrap">
-                      <input class="input mono" id="configApiKey" name="api_key" type="password" value="••••••••••••••" aria-describedby="configApiKeyDescription configApiKeyError" aria-invalid="false" required />
+                      <input class="input mono" id="configApiKey" name="api_key" type="password" value="" placeholder="Saved key ••••••••" data-has-saved-key="true" aria-describedby="configApiKeyDescription configApiKeyError" aria-invalid="false" />
                       <button class="btn small" type="button" id="configApiKeyToggle" aria-label="Show api_key value">Show</button>
                     </div>
                     <p class="config-error" id="configApiKeyError" aria-live="polite"></p>
@@ -3298,7 +3298,7 @@
                 </div>
                 <div class="config-footer">
                   <button class="btn small" type="button" id="configTestButton">Test connection</button>
-                  <div class="config-status" id="configStatus" role="status" aria-live="polite">Prototype only. Validation runs locally.</div>
+                  <div class="config-status" id="configStatus" role="status" aria-live="polite">Prototype only. Validation runs locally. Leave api_key blank to keep the saved key.</div>
                 </div>
               </form>
             </section>
@@ -3780,15 +3780,47 @@
         }
       }
 
-      function validateConfigForm() {
-        if (!configBaseUrl || !configApiKey || !configModelName) return false;
+      function hasSavedConfigApiKey() {
+        return Boolean(configApiKey && configApiKey.dataset.hasSavedKey === "true");
+      }
 
-        const baseUrlValue = configBaseUrl.value.trim();
-        const apiKeyValue = configApiKey.value.trim();
-        const modelNameValue = configModelName.value.trim();
-        const baseUrlError = isValidConfigBaseUrl(baseUrlValue) ? "" : "Enter a valid HTTP or HTTPS URL.";
-        const apiKeyError = apiKeyValue ? "" : "Enter an API key.";
-        const modelNameError = modelNameValue ? "" : "Enter a model or deployment name.";
+      function isMaskedConfigApiKeyValue(value) {
+        const normalizedValue = value.trim();
+        return normalizedValue === "" || /^•+$/.test(normalizedValue) || /^Saved key\s+•+$/.test(normalizedValue);
+      }
+
+      function buildConfigPayload(formData) {
+        const baseUrlValue = String(formData.get("base_url") || "").trim();
+        const apiKeyValue = String(formData.get("api_key") || "").trim();
+        const modelNameValue = String(formData.get("model_name") || "").trim();
+        const configPayload = {
+          base_url: baseUrlValue,
+          model_name: modelNameValue,
+        };
+        if (!isMaskedConfigApiKeyValue(apiKeyValue)) {
+          configPayload.api_key = apiKeyValue;
+        }
+        return configPayload;
+      }
+
+      function isUsingSavedConfigApiKey(configPayload) {
+        return !Object.prototype.hasOwnProperty.call(configPayload, "api_key") && hasSavedConfigApiKey();
+      }
+
+      function getConfigReadyStatusMessage(configPayload) {
+        if (isUsingSavedConfigApiKey(configPayload)) {
+          return "Prototype only. Validation runs locally. Leave api_key blank to keep the saved key.";
+        }
+        return "Prototype only. Validation runs locally.";
+      }
+
+      function validateConfigForm(configPayload) {
+        if (!configForm || !configBaseUrl || !configApiKey || !configModelName) return false;
+        const resolvedConfigPayload = configPayload || buildConfigPayload(new FormData(configForm));
+
+        const baseUrlError = isValidConfigBaseUrl(resolvedConfigPayload.base_url) ? "" : "Enter a valid HTTP or HTTPS URL.";
+        const apiKeyError = resolvedConfigPayload.api_key || hasSavedConfigApiKey() ? "" : "Enter an API key.";
+        const modelNameError = resolvedConfigPayload.model_name ? "" : "Enter a model or deployment name.";
 
         setConfigFieldState(configBaseUrl, configBaseUrlError, baseUrlError);
         setConfigFieldState(configApiKey, configApiKeyError, apiKeyError);
@@ -3799,8 +3831,9 @@
 
       function handleConfigInputChange() {
         clearTimeout(configStatusTimer);
-        if (validateConfigForm()) {
-          setConfigStatus("Prototype only. Validation runs locally.");
+        const configPayload = buildConfigPayload(new FormData(configForm));
+        if (validateConfigForm(configPayload)) {
+          setConfigStatus(getConfigReadyStatusMessage(configPayload));
           return;
         }
         setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
@@ -3816,11 +3849,14 @@
       function handleConfigSaveSubmit(event) {
         event.preventDefault();
         clearTimeout(configStatusTimer);
-        if (!validateConfigForm()) {
+        const configPayload = buildConfigPayload(new FormData(configForm));
+        if (!validateConfigForm(configPayload)) {
           setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
           return;
         }
-        const message = "Prototype: LLM configuration saved locally for this mockup.";
+        const message = isUsingSavedConfigApiKey(configPayload)
+          ? "Prototype: LLM configuration saved locally for this mockup. Existing api_key kept."
+          : "Prototype: LLM configuration saved locally for this mockup.";
         setConfigStatus(message, "success");
         showToast(message);
       }
@@ -3851,13 +3887,20 @@
 
         configTestButton.addEventListener("click", () => {
           clearTimeout(configStatusTimer);
-          if (!validateConfigForm()) {
+          const configPayload = buildConfigPayload(new FormData(configForm));
+          if (!validateConfigForm(configPayload)) {
             setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
             return;
           }
-          setConfigStatus("Prototype: testing connection…", "pending");
+          const pendingMessage = isUsingSavedConfigApiKey(configPayload)
+            ? "Prototype: testing connection with the saved api_key…"
+            : "Prototype: testing connection…";
+          const successMessage = isUsingSavedConfigApiKey(configPayload)
+            ? "Prototype: connected with the saved api_key. No network request was sent."
+            : "Prototype: connected. No network request was sent.";
+          setConfigStatus(pendingMessage, "pending");
           configStatusTimer = setTimeout(() => {
-            setConfigStatus("Prototype: connected. No network request was sent.", "success");
+            setConfigStatus(successMessage, "success");
           }, 720);
         });
       }
