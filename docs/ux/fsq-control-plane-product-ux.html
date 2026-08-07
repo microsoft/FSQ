@@ -1112,12 +1112,8 @@
         background: var(--source-line-bg);
       }
 
-      .source-line[data-source-range="metadata"] {
-        --source-line-bg: var(--cp-surface-soft);
-      }
-
       .source-line:hover {
-        --source-line-bg: var(--cp-highlight);
+        --source-line-bg: var(--cp-surface-soft);
       }
 
       .source-line-number,
@@ -1132,6 +1128,7 @@
         padding: 0 12px 0 14px;
         border-right: 1px solid var(--cp-border);
         color: var(--cp-text-soft);
+        opacity: 0.72;
         font-family: Consolas, "Courier New", Courier, monospace;
         font-size: 12px;
         line-height: 1.75;
@@ -1161,11 +1158,12 @@
         background-position: 0 0;
         background-repeat: repeat-x;
         background-size: 2ch 100%;
-        opacity: 0.7;
+        opacity: 0.4;
       }
 
       .yaml-key {
-        color: var(--cp-accent);
+        color: var(--cp-text);
+        font-weight: 600;
       }
 
       .yaml-value {
@@ -1178,14 +1176,6 @@
 
       .yaml-list-marker {
         color: var(--cp-text-soft);
-      }
-
-      .source-command-start {
-        --source-line-bg: var(--cp-accent-soft);
-      }
-
-      .source-command-body {
-        --source-line-bg: var(--cp-sheen);
       }
 
       .source-viewer.wrap-lines .source-scroll {

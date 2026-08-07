@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,12 +10,67 @@ from pathlib import Path
 import pytest
 
 
+def _read_fsq_control_plane_product_ux_html() -> str:
+    html_path = Path(__file__).parents[1] / "docs" / "ux" / "fsq-control-plane-product-ux.html"
+    return html_path.read_text(encoding="utf-8")
+
+
+def _extract_source_viewer_css_rules(html: str) -> dict[str, str]:
+    style_match = re.search(r"<style>\s*(?P<css>[\s\S]*?)</style>", html)
+    assert style_match is not None
+    rules: dict[str, str] = {}
+    for rule_match in re.finditer(r"(?P<selectors>[^{}]+)\{(?P<body>[^{}]*)\}", style_match.group("css")):
+        body = rule_match.group("body").strip()
+        for selector in rule_match.group("selectors").split(","):
+            rules[selector.strip()] = body
+    return rules
+
+
+def _extract_css_declarations(rule_body: str) -> dict[str, str]:
+    declarations: dict[str, str] = {}
+    for declaration in rule_body.split(";"):
+        if ":" not in declaration:
+            continue
+        name, value = declaration.split(":", 1)
+        declarations[name.strip()] = value.strip()
+    return declarations
+
+
+def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+
+    assert '.source-line[data-source-range="metadata"]' not in rules
+    assert ".source-command-start" not in rules
+    assert ".source-command-body" not in rules
+
+    source_line_rule = _extract_css_declarations(rules[".source-line"])
+    hover_rule = _extract_css_declarations(rules[".source-line:hover"])
+    gutter_rule = _extract_css_declarations(rules[".source-line-number"])
+    indent_rule = _extract_css_declarations(rules[".source-indent"])
+    yaml_key_rule = _extract_css_declarations(rules[".yaml-key"])
+    yaml_value_rule = _extract_css_declarations(rules[".yaml-value"])
+    yaml_string_rule = _extract_css_declarations(rules[".yaml-string"])
+    yaml_list_marker_rule = _extract_css_declarations(rules[".yaml-list-marker"])
+
+    assert source_line_rule["--source-line-bg"] in {"transparent", "var(--cp-surface)"}
+    assert hover_rule["--source-line-bg"] == "var(--cp-surface-soft)"
+    assert yaml_key_rule["color"] == "var(--cp-text)"
+    assert yaml_key_rule["font-weight"] in {"500", "600"}
+    assert yaml_value_rule["color"] == "var(--cp-text-muted)"
+    assert yaml_string_rule["color"] == "var(--cp-link)"
+    assert yaml_list_marker_rule["color"] == "var(--cp-text-soft)"
+    assert gutter_rule["border-right"] == "1px solid var(--cp-border)"
+    assert float(gutter_rule["opacity"]) < 0.8
+    assert indent_rule["background-image"] == "linear-gradient(90deg, var(--cp-border) 0 1px, transparent 1px)"
+    assert float(indent_rule["opacity"]) < 0.6
+
+
 def test_fsq_code_copy_state_survives_code_rerenders() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required for FSQ product UX script verification.")
-    html_path = Path(__file__).parents[1] / "docs" / "ux" / "fsq-control-plane-product-ux.html"
-    html = html_path.read_text(encoding="utf-8")
+    html = _read_fsq_control_plane_product_ux_html()
     start = html.index("const fsqYamlSource = `")
     end = html.index("function renderRepoFile(")
     snippet = html[start:end]
