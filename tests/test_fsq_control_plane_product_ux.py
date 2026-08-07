@@ -1302,12 +1302,17 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
     css = _extract_style_block(html)
 
     page_rule = _extract_css_declarations(rules[".page"][0])
+    page_head_rule = _extract_css_declarations(rules[".page-head"][0])
     content_grid_rule = _extract_css_declarations(rules[".content-grid"][0])
     workspace_rule = _extract_css_declarations(rules[".github-workspace"][0])
     device_workbench_rule = _extract_css_declarations(rules[".device-workbench"][0])
     device_content_grid_rule = _extract_css_declarations(rules["#device .content-grid"][0])
 
     assert page_rule["padding"] == "28px"
+    assert page_head_rule["display"] == "flex"
+    assert page_head_rule["justify-content"] == "space-between"
+    assert page_head_rule["margin"] == "2px 0 24px"
+    assert "max-width" not in page_head_rule
     assert content_grid_rule["width"] == "100%"
     assert content_grid_rule["min-width"] == "0"
     assert "max-width" not in content_grid_rule
