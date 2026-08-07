@@ -36,6 +36,17 @@ def _extract_css_declarations(rule_body: str) -> dict[str, str]:
     return declarations
 
 
+def _assert_source_gutter_rules_are_opaque(rules: dict[str, list[str]]) -> None:
+    shared_gutter_background_rule = _extract_css_declarations(rules[".source-line-number"][0])
+    gutter_rule = _extract_css_declarations(rules[".source-line-number"][-1])
+
+    assert rules[".source-line-code"][0] == rules[".source-line-number"][0]
+    assert shared_gutter_background_rule["background"] == "var(--source-line-bg)"
+    assert "opacity" not in shared_gutter_background_rule, "shared source gutter background must stay opaque"
+    assert gutter_rule["border-right"] == "1px solid var(--cp-border)"
+    assert "opacity" not in gutter_rule, "gutter-specific source gutter rule must stay opaque"
+
+
 def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector() -> None:
     rules = _extract_source_viewer_css_rules(
         """
@@ -59,6 +70,27 @@ def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector(
     assert rules[".source-line-code"] == ["background: var(--source-line-bg);"]
 
 
+def test_source_gutter_opacity_check_rejects_shared_background_regression() -> None:
+    rules = _extract_source_viewer_css_rules(
+        """
+        <style>
+          .source-line-number,
+          .source-line-code {
+            background: var(--source-line-bg);
+            opacity: 0.55;
+          }
+
+          .source-line-number {
+            border-right: 1px solid var(--cp-border);
+          }
+        </style>
+        """
+    )
+
+    with pytest.raises(AssertionError, match="shared source gutter background must stay opaque"):
+        _assert_source_gutter_rules_are_opaque(rules)
+
+
 def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
     html = _read_fsq_control_plane_product_ux_html()
     rules = _extract_source_viewer_css_rules(html)
@@ -69,8 +101,6 @@ def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
 
     source_line_rule = _extract_css_declarations(rules[".source-line"][-1])
     hover_rule = _extract_css_declarations(rules[".source-line:hover"][-1])
-    shared_gutter_background_rule = _extract_css_declarations(rules[".source-line-number"][0])
-    gutter_rule = _extract_css_declarations(rules[".source-line-number"][-1])
     indent_rule = _extract_css_declarations(rules[".source-indent"][-1])
     yaml_key_rule = _extract_css_declarations(rules[".yaml-key"][-1])
     yaml_value_rule = _extract_css_declarations(rules[".yaml-value"][-1])
@@ -79,15 +109,12 @@ def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
 
     assert source_line_rule["--source-line-bg"] == "var(--cp-surface)"
     assert hover_rule["--source-line-bg"] == "var(--cp-surface-soft)"
-    assert rules[".source-line-code"][0] == rules[".source-line-number"][0]
-    assert shared_gutter_background_rule["background"] == "var(--source-line-bg)"
+    _assert_source_gutter_rules_are_opaque(rules)
     assert yaml_key_rule["color"] == "var(--cp-text)"
     assert yaml_key_rule["font-weight"] in {"500", "600"}
     assert yaml_value_rule["color"] == "var(--cp-text-muted)"
     assert yaml_string_rule["color"] == "var(--cp-link)"
     assert yaml_list_marker_rule["color"] == "var(--cp-text-soft)"
-    assert gutter_rule["border-right"] == "1px solid var(--cp-border)"
-    assert "opacity" not in gutter_rule
     assert indent_rule["background-image"] == "linear-gradient(90deg, var(--cp-border) 0 1px, transparent 1px)"
     assert float(indent_rule["opacity"]) < 0.6
 
