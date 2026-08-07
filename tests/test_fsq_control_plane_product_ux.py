@@ -15,6 +15,39 @@ def _read_fsq_control_plane_product_ux_html() -> str:
     return html_path.read_text(encoding="utf-8")
 
 
+def _extract_primary_nav_contract(html: str) -> tuple[list[tuple[str, str]], str]:
+    nav_match = re.search(
+        r'<nav class="rail-nav" aria-label="Primary navigation">\s*(?P<nav>[\s\S]*?)\s*</nav>',
+        html,
+    )
+    assert nav_match is not None
+    nav_html = nav_match.group("nav")
+    nav_items = re.findall(
+        r'<button class="nav-button(?: active)?"[^>]*data-view="(?P<view>[^"]+)"[^>]*>[\s\S]*?<span>(?P<label>[^<]+)</span>',
+        nav_html,
+    )
+    return nav_items, nav_html
+
+
+def _extract_footer_nav_views(html: str) -> list[str]:
+    footer_match = re.search(r'<div class="rail-footer">\s*(?P<footer>[\s\S]*?)\s*</div>', html)
+    assert footer_match is not None
+    return re.findall(r'data-view="([^"]+)"', footer_match.group("footer"))
+
+
+def _extract_runs_section(html: str) -> str:
+    runs_match = re.search(r'<section class="page" id="runs">\s*(?P<section>[\s\S]*?)\s*</section>', html)
+    assert runs_match is not None
+    return runs_match.group("section")
+
+
+def _extract_select_option_groups(section_html: str) -> list[list[str]]:
+    return [
+        re.findall(r"<option>([^<]+)</option>", select_html)
+        for select_html in re.findall(r'<select class="select">([\s\S]*?)</select>', section_html)
+    ]
+
+
 def _extract_source_viewer_css_rules(html: str) -> dict[str, list[str]]:
     style_match = re.search(r"<style>\s*(?P<css>[\s\S]*?)</style>", html)
     assert style_match is not None
@@ -413,3 +446,35 @@ console.log(JSON.stringify({{
     assert payload["pendingAfterFailureRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…", "ariaLabel": "Copying…"}
     assert payload["retryFailureState"] == {"disabled": False, "pending": "", "label": "Copy failed", "ariaLabel": "Copy failed"}
     assert payload["resetAfterFailureRetry"] == "Copy"
+
+
+def test_fsq_control_plane_promotes_runs_into_primary_navigation() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    primary_items, primary_nav_html = _extract_primary_nav_contract(html)
+
+    assert primary_items == [
+        ("home", "Overview"),
+        ("workspace", "Workspace"),
+        ("device", "Devices"),
+        ("runs", "Runs"),
+    ]
+    assert _extract_footer_nav_views(html) == ["config", "settings"]
+    assert re.search(
+        r'data-view="workspace"[\s\S]*?<div class="workspace-recents" id="workspaceRecents">[\s\S]*?data-view="device"[\s\S]*?data-view="runs"',
+        primary_nav_html,
+    )
+
+
+def test_fsq_runs_history_page_keeps_auditable_copy_and_filters() -> None:
+    runs_section = _extract_runs_section(_read_fsq_control_plane_product_ux_html())
+
+    assert '<p class="eyebrow">WORKSPACE / RUNS</p>' in runs_section
+    assert "<h1>Run history</h1>" in runs_section
+    assert "auditable execution and evidence records" in runs_section
+    assert 'placeholder="Search runs by goal, case, or run ID"' in runs_section
+    assert _extract_select_option_groups(runs_section) == [
+        ["All modes", "AI explore", "Strict replay"],
+        ["All statuses", "Success", "Failed", "Inconclusive"],
+        ["All platforms", "Web", "Android", "Windows", "macOS"],
+    ]
+    assert re.findall(r"<tr[^>]*data-open-workbench", runs_section)
