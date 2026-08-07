@@ -216,14 +216,15 @@ class FakeClassList {{
 }}
 
 class FakeElement {{
-  constructor({{ id = "", dataset = {{}}, classNames = [], attributes = [] }} = {{}}) {{
+  constructor({{ id = "", dataset = {{}}, classNames = [], attributes = [], queryResults = {{}}, text = "" }} = {{}}) {{
     this.id = id;
     this.dataset = {{ ...dataset }};
     this.classList = new FakeClassList(classNames);
     this.attributeNames = new Set(attributes);
+    this.queryResults = new Map(Object.entries(queryResults).map(([selector, results]) => [selector, Array.isArray(results) ? results : [results]]));
     this.listeners = new Map();
     this.hidden = false;
-    this.textContent = "";
+    this.textContent = text;
     this.className = classNames.join(" ");
   }}
   set className(value) {{
@@ -247,6 +248,30 @@ class FakeElement {{
   hasAttribute(name) {{
     return this.attributeNames.has(name);
   }}
+  querySelector(selector) {{
+    return (this.queryResults.get(selector) || [])[0] || null;
+  }}
+  querySelectorAll(selector) {{
+    return this.queryResults.get(selector) || [];
+  }}
+}}
+
+function createWorkbenchTarget({{ title, summary = "", badge = "", runId = "", cells = [], attributes = [] }}) {{
+  const queryResults = {{
+    strong: new FakeElement({{ text: title }}),
+  }};
+  if (summary) {{
+    queryResults.small = new FakeElement({{ text: summary }});
+  }} else if (runId) {{
+    queryResults.small = new FakeElement({{ text: runId }});
+  }}
+  if (badge) {{
+    queryResults[".badge"] = new FakeElement({{ text: badge }});
+  }}
+  if (cells.length) {{
+    queryResults.td = cells.map((text) => new FakeElement({{ text }}));
+  }}
+  return new FakeElement({{ attributes, queryResults }});
 }}
 
 class FakeDocument {{
@@ -266,7 +291,48 @@ class FakeDocument {{
       new FakeElement({{ dataset: {{ view: "config" }}, classNames: ["nav-button"] }}),
       new FakeElement({{ dataset: {{ view: "settings" }}, classNames: ["nav-button"] }}),
     ];
-    this.openWorkbenchTargets = [new FakeElement({{ attributes: ["data-open-workbench"] }})];
+    this.openWorkbenchTargets = [
+      createWorkbenchTarget({{
+        title: "Create project flow",
+        summary: "AI explore · Web · 4m ago",
+        badge: "success",
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Checkout smoke",
+        runId: "run_20260807_131914",
+        badge: "failed",
+        cells: ["Checkout smoke run_20260807_131914", "↻ Strict replay", "Web", "failed", "34s"],
+        attributes: ["data-open-workbench", "data-failed-run"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Settings profile",
+        summary: "AI explore · macOS · yesterday",
+        badge: "inconclusive",
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Onboarding navigation",
+        runId: "run_20260806_145522",
+        badge: "success",
+        cells: ["Onboarding navigation run_20260806_145522", "↻ Strict replay", "Android", "success", "58s"],
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Desktop launch",
+        runId: "run_20260805_112011",
+        badge: "success",
+        cells: ["Desktop launch run_20260805_112011", "↻ Strict replay", "Windows", "success", "27s"],
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Unexpected smoke",
+        runId: "run_20260801_101010",
+        badge: "success",
+        cells: ["Unexpected smoke run_20260801_101010", "✦ AI explore", "Web", "success", "45s"],
+        attributes: ["data-open-workbench"],
+      }}),
+    ];
     this.steps = Array.from({{ length: 7 }}, (_, index) => new FakeElement({{
       id: `reportStep${{index}}`,
       dataset: {{ stepSlot: String(index) }},
@@ -341,7 +407,7 @@ class FakeDocument {{
     if (selector === ".step") {{
       return this.steps;
     }}
-    if (selector === ".tab") {{
+    if (selector === ".evidence-stage .tab") {{
       return this.tabs;
     }}
     throw new Error(`Unsupported selector: ${{selector}}`);
@@ -513,14 +579,15 @@ class FakeClassList {{
 }}
 
 class FakeElement {{
-  constructor({{ id = "", dataset = {{}}, classNames = [], attributes = [] }} = {{}}) {{
+  constructor({{ id = "", dataset = {{}}, classNames = [], attributes = [], queryResults = {{}}, text = "" }} = {{}}) {{
     this.id = id;
     this.dataset = {{ ...dataset }};
     this.classList = new FakeClassList(classNames);
     this.attributeNames = new Set(attributes);
+    this.queryResults = new Map(Object.entries(queryResults).map(([selector, results]) => [selector, Array.isArray(results) ? results : [results]]));
     this.listeners = new Map();
     this.hidden = false;
-    this.textContent = "";
+    this.textContent = text;
     this.className = classNames.join(" ");
   }}
   set className(value) {{
@@ -544,6 +611,30 @@ class FakeElement {{
   hasAttribute(name) {{
     return this.attributeNames.has(name);
   }}
+  querySelector(selector) {{
+    return (this.queryResults.get(selector) || [])[0] || null;
+  }}
+  querySelectorAll(selector) {{
+    return this.queryResults.get(selector) || [];
+  }}
+}}
+
+function createWorkbenchTarget({{ title, summary = "", badge = "", runId = "", cells = [], attributes = [] }}) {{
+  const queryResults = {{
+    strong: new FakeElement({{ text: title }}),
+  }};
+  if (summary) {{
+    queryResults.small = new FakeElement({{ text: summary }});
+  }} else if (runId) {{
+    queryResults.small = new FakeElement({{ text: runId }});
+  }}
+  if (badge) {{
+    queryResults[".badge"] = new FakeElement({{ text: badge }});
+  }}
+  if (cells.length) {{
+    queryResults.td = cells.map((text) => new FakeElement({{ text }}));
+  }}
+  return new FakeElement({{ attributes, queryResults }});
 }}
 
 class FakeDocument {{
@@ -564,8 +655,46 @@ class FakeDocument {{
       new FakeElement({{ dataset: {{ view: "settings" }}, classNames: ["nav-button"] }}),
     ];
     this.openWorkbenchTargets = [
-      new FakeElement({{ attributes: ["data-open-workbench"] }}),
-      new FakeElement({{ attributes: ["data-open-workbench", "data-failed-run"] }}),
+      createWorkbenchTarget({{
+        title: "Create project flow",
+        summary: "AI explore · Web · 4m ago",
+        badge: "success",
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Checkout smoke",
+        runId: "run_20260807_131914",
+        badge: "failed",
+        cells: ["Checkout smoke run_20260807_131914", "↻ Strict replay", "Web", "failed", "34s"],
+        attributes: ["data-open-workbench", "data-failed-run"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Settings profile",
+        summary: "AI explore · macOS · yesterday",
+        badge: "inconclusive",
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Onboarding navigation",
+        runId: "run_20260806_145522",
+        badge: "success",
+        cells: ["Onboarding navigation run_20260806_145522", "↻ Strict replay", "Android", "success", "58s"],
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Desktop launch",
+        runId: "run_20260805_112011",
+        badge: "success",
+        cells: ["Desktop launch run_20260805_112011", "↻ Strict replay", "Windows", "success", "27s"],
+        attributes: ["data-open-workbench"],
+      }}),
+      createWorkbenchTarget({{
+        title: "Unexpected smoke",
+        runId: "run_20260801_101010",
+        badge: "success",
+        cells: ["Unexpected smoke run_20260801_101010", "✦ AI explore", "Web", "success", "45s"],
+        attributes: ["data-open-workbench"],
+      }}),
     ];
     this.steps = Array.from({{ length: 7 }}, (_, index) => new FakeElement({{
       id: `reportStep${{index}}`,
@@ -641,7 +770,7 @@ class FakeDocument {{
     if (selector === ".step") {{
       return this.steps;
     }}
-    if (selector === ".tab") {{
+    if (selector === ".evidence-stage .tab") {{
       return this.tabs;
     }}
     throw new Error(`Unsupported selector: ${{selector}}`);
@@ -671,41 +800,76 @@ function showView(view) {{
 
 {snippet}
 
-const successRun = document.openWorkbenchTargets[0];
+function captureState() {{
+  return {{
+    reportContext: document.getElementById("reportContext").textContent,
+    runTitle: document.getElementById("runTitle").textContent,
+    runId: document.getElementById("runId").textContent,
+    runMode: document.getElementById("runMode").textContent,
+    runPlatform: document.getElementById("runPlatform").textContent,
+    runDuration: document.getElementById("runDuration").textContent,
+    runStatusText: document.getElementById("runStatus").textContent,
+    runStatusClass: document.getElementById("runStatus").className,
+    evidenceTitle: document.getElementById("evidenceTitle").textContent,
+    evidenceStepStatus: document.getElementById("evidenceStepStatus").textContent,
+    missingReasonHidden: document.getElementById("evidenceMissingReason").hidden,
+    missingReason: document.getElementById("evidenceMissingReason").textContent,
+    afterText: document.getElementById("evidenceAfterText").textContent,
+    conclusion: document.getElementById("verifierConclusion").textContent,
+    failedStepIndexes: document.steps
+      .map((step, index) => step.classList.contains("failed") ? index : -1)
+      .filter((index) => index >= 0),
+    activeStepIndexes: document.steps
+      .map((step, index) => step.classList.contains("active") ? index : -1)
+      .filter((index) => index >= 0),
+    activeTabLabels: document.tabs
+      .filter((tab) => tab.classList.contains("active"))
+      .map((tab) => tab.textContent),
+  }};
+}}
+
+const createProjectRun = document.openWorkbenchTargets[0];
 const failedRun = document.openWorkbenchTargets[1];
-successRun.click();
-const successState = {{
-  runTitle: document.getElementById("runTitle").textContent,
-  runStatusText: document.getElementById("runStatus").textContent,
-  runStatusClass: document.getElementById("runStatus").className,
-  evidenceTitle: document.getElementById("evidenceTitle").textContent,
-  evidenceStepStatus: document.getElementById("evidenceStepStatus").textContent,
-  missingReasonHidden: document.getElementById("evidenceMissingReason").hidden,
-  activeStepIndexes: document.steps
-    .map((step, index) => step.classList.contains("active") ? index : -1)
-    .filter((index) => index >= 0),
-}};
+const settingsRun = document.openWorkbenchTargets[2];
+const onboardingRun = document.openWorkbenchTargets[3];
+const desktopRun = document.openWorkbenchTargets[4];
+const unknownRun = document.openWorkbenchTargets[5];
+
+createProjectRun.click();
+const createProjectState = captureState();
 
 failedRun.click();
-const failedState = {{
-  runTitle: document.getElementById("runTitle").textContent,
-  runStatusText: document.getElementById("runStatus").textContent,
-  runStatusClass: document.getElementById("runStatus").className,
-  evidenceTitle: document.getElementById("evidenceTitle").textContent,
-  evidenceStepStatus: document.getElementById("evidenceStepStatus").textContent,
-  missingReasonHidden: document.getElementById("evidenceMissingReason").hidden,
-  missingReason: document.getElementById("evidenceMissingReason").textContent,
-  afterText: document.getElementById("evidenceAfterText").textContent,
-  conclusion: document.getElementById("verifierConclusion").textContent,
-  failedStepIndexes: document.steps
-    .map((step, index) => step.classList.contains("failed") ? index : -1)
-    .filter((index) => index >= 0),
-  activeStepIndexes: document.steps
-    .map((step, index) => step.classList.contains("active") ? index : -1)
-    .filter((index) => index >= 0),
+const failedState = captureState();
+
+settingsRun.click();
+const settingsState = captureState();
+
+onboardingRun.click();
+const onboardingState = captureState();
+
+desktopRun.click();
+const desktopState = captureState();
+
+document.tabs[2].click();
+const logsSelectedState = {{
+  activeTabLabels: document.tabs
+    .filter((tab) => tab.classList.contains("active"))
+    .map((tab) => tab.textContent),
 }};
 
-console.log(JSON.stringify({{ successState, failedState, toastMessages }}));
+unknownRun.click();
+const unknownState = captureState();
+
+console.log(JSON.stringify({{
+  createProjectState,
+  failedState,
+  settingsState,
+  onboardingState,
+  desktopState,
+  logsSelectedState,
+  unknownState,
+  toastMessages,
+}}));
 """
     return _run_node_json_script(script, skip_reason="Node.js is required for FSQ product UX script verification.")
 
@@ -1142,14 +1306,11 @@ def test_fsq_workbench_entries_keep_pre_task2_handler_shape() -> None:
     html = _read_fsq_control_plane_product_ux_html()
 
     assert "function openRunReport" not in html
-    assert re.search(
-        r'document\.querySelectorAll\("\[data-open-workbench\]"\)\.forEach\(\(target\) => \{\s*'
-        r'target\.addEventListener\("click", \(\) => \{\s*'
-        r'const failed = target\.hasAttribute\("data-failed-run"\);\s*'
-        r'renderRunReport\(failed \? "failed" : "success"\);\s*'
-        r'showView\("workbench"\);',
-        html,
-    )
+    assert 'document.querySelectorAll("[data-open-workbench]").forEach((target) => {' in html
+    assert "const title = visibleRunTitle(target);" in html
+    assert "renderRunReport(runReportStates[title] || buildFallbackRunReportState(target, title));" in html
+    assert 'showView("workbench");' in html
+    assert 'const reportEvidenceTabs = [...document.querySelectorAll(".evidence-stage .tab")];' in html
 
 
 def test_fsq_run_report_structure_matches_approved_contract() -> None:
@@ -1188,19 +1349,33 @@ def test_fsq_run_report_css_uses_two_columns_and_stacks_responsively() -> None:
     )
 
 
-def test_fsq_run_report_state_contract_supports_success_and_failed_variants() -> None:
+def test_fsq_run_report_state_contract_keeps_run_metadata_and_tab_resets() -> None:
     payload = _run_workbench_report_state_contract(_read_fsq_control_plane_product_ux_html())
 
-    assert payload["successState"] == {
+    assert payload["createProjectState"] == {
+        "reportContext": "RUN REPORT",
         "runTitle": "Create project flow",
+        "runId": "run_20260807_135642",
+        "runMode": "AI explore",
+        "runPlatform": "Web",
+        "runDuration": "1m 42s",
         "runStatusText": "success",
         "runStatusClass": "tag success",
         "evidenceTitle": "assertVisible project row",
         "evidenceStepStatus": "passed",
         "missingReasonHidden": True,
+        "missingReason": "",
+        "afterText": "New matching row is visible and selected.",
+        "conclusion": "Verification passed because the after evidence shows the new project row in the selected state.",
+        "failedStepIndexes": [],
         "activeStepIndexes": [5],
+        "activeTabLabels": ["Screen"],
     }
     assert payload["failedState"]["runTitle"] == "Checkout smoke"
+    assert payload["failedState"]["runId"] == "run_20260807_131914"
+    assert payload["failedState"]["runMode"] == "Strict replay"
+    assert payload["failedState"]["runPlatform"] == "Web"
+    assert payload["failedState"]["runDuration"] == "34s"
     assert payload["failedState"]["runStatusText"] == "failed"
     assert payload["failedState"]["runStatusClass"] == "tag failed"
     assert payload["failedState"]["evidenceTitle"] == "assertVisible checkout confirmation"
@@ -1211,3 +1386,38 @@ def test_fsq_run_report_state_contract_supports_success_and_failed_variants() ->
     assert "verification failed" in payload["failedState"]["conclusion"].lower()
     assert payload["failedState"]["failedStepIndexes"] == [5]
     assert payload["failedState"]["activeStepIndexes"] == [5]
+    assert payload["settingsState"]["reportContext"] == "RUN REPORT · Inconclusive"
+    assert payload["settingsState"]["runTitle"] == "Settings profile"
+    assert payload["settingsState"]["runId"] == "run_20260806_172305"
+    assert payload["settingsState"]["runMode"] == "AI explore"
+    assert payload["settingsState"]["runPlatform"] == "macOS"
+    assert payload["settingsState"]["runDuration"] == "2m 09s"
+    assert payload["settingsState"]["runStatusText"] == "inconclusive"
+    assert payload["settingsState"]["runStatusClass"] == "tag warning"
+    assert payload["settingsState"]["evidenceTitle"] == "Evidence verifier"
+    assert payload["settingsState"]["evidenceStepStatus"] == "inconclusive"
+    assert payload["settingsState"]["activeStepIndexes"] == [6]
+    assert "inconclusive" in payload["settingsState"]["conclusion"].lower()
+    assert payload["onboardingState"]["runTitle"] == "Onboarding navigation"
+    assert payload["onboardingState"]["runId"] == "run_20260806_145522"
+    assert payload["onboardingState"]["runMode"] == "Strict replay"
+    assert payload["onboardingState"]["runPlatform"] == "Android"
+    assert payload["onboardingState"]["runDuration"] == "58s"
+    assert payload["onboardingState"]["runStatusText"] == "success"
+    assert payload["desktopState"]["runTitle"] == "Desktop launch"
+    assert payload["desktopState"]["runId"] == "run_20260805_112011"
+    assert payload["desktopState"]["runMode"] == "Strict replay"
+    assert payload["desktopState"]["runPlatform"] == "Windows"
+    assert payload["desktopState"]["runDuration"] == "27s"
+    assert payload["desktopState"]["runStatusText"] == "success"
+    assert payload["logsSelectedState"] == {"activeTabLabels": ["Logs"]}
+    assert payload["unknownState"]["reportContext"] == "RUN REPORT · Success"
+    assert payload["unknownState"]["runTitle"] == "Unexpected smoke"
+    assert payload["unknownState"]["runId"] == "run_20260801_101010"
+    assert payload["unknownState"]["runMode"] == "AI explore"
+    assert payload["unknownState"]["runPlatform"] == "Web"
+    assert payload["unknownState"]["runDuration"] == "45s"
+    assert payload["unknownState"]["runStatusText"] == "success"
+    assert payload["unknownState"]["runTitle"] != "Create project flow"
+    assert payload["unknownState"]["activeTabLabels"] == ["Screen"]
+    assert "fallback metadata" in payload["unknownState"]["conclusion"].lower()

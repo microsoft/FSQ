@@ -3908,9 +3908,168 @@
         },
       };
 
+      const runReportStates = {
+        "Create project flow": { reportKey: "success" },
+        "Checkout smoke": { reportKey: "failed" },
+        "Settings profile": {
+          reportKey: "success",
+          context: "RUN REPORT · Inconclusive",
+          meta: {
+            title: "Settings profile",
+            runId: "run_20260806_172305",
+            mode: "AI explore",
+            platform: "macOS",
+            duration: "2m 09s",
+            status: "inconclusive",
+            statusTone: "warning",
+          },
+          defaultStepIndex: 6,
+          verification: {
+            goal: "Confirm that the profile settings surface loads and remains reviewable in the macOS desktop client.",
+            keyActions: "launchApp → clickOn Settings → clickOn Profile → assertVisible profile editor",
+            conclusion: "Verification remained inconclusive because the final profile evidence was partially captured, but the run did not preserve enough proof to confirm the expected desktop state.",
+          },
+          stepOverrides: {
+            6: {
+              status: "inconclusive",
+              tone: "warning",
+              meta: "report ready · additional review needed",
+              detail: "The evidence bundle preserved the last stable profile capture, but the final review remained inconclusive.",
+              surfaceStatus: "Verifier summary · partial evidence",
+              surfaceTitle: "Verifier summary",
+              surfaceNote: "The verifier recorded why the captured desktop evidence requires follow-up review.",
+              outcome: "needs review",
+              outcomeTone: "warning",
+              beforeLabel: "Goal",
+              beforeText: "Show that the profile settings surface is visible and interactive in the macOS client.",
+              afterLabel: "Result",
+              afterText: "The goal could not be proven from the preserved evidence, so the run stayed inconclusive.",
+              action: { target: "Settings profile goal", duration: "436 ms" },
+            },
+          },
+        },
+        "Onboarding navigation": {
+          reportKey: "success",
+          meta: {
+            title: "Onboarding navigation",
+            runId: "run_20260806_145522",
+            mode: "Strict replay",
+            platform: "Android",
+            duration: "58s",
+            status: "success",
+            statusTone: "success",
+          },
+          verification: {
+            goal: "Confirm that the Android onboarding flow advances through the expected screens and lands on the final checklist.",
+            keyActions: "launchApp → clickOn Continue → swipe onboarding panels → assertVisible final checklist",
+            conclusion: "Verification passed because the replay reached the Android onboarding checklist with evidence preserved for the final screen.",
+          },
+        },
+        "Desktop launch": {
+          reportKey: "success",
+          meta: {
+            title: "Desktop launch",
+            runId: "run_20260805_112011",
+            mode: "Strict replay",
+            platform: "Windows",
+            duration: "27s",
+            status: "success",
+            statusTone: "success",
+          },
+          verification: {
+            goal: "Confirm that the Windows desktop application launches and presents the primary workspace shell.",
+            keyActions: "launchApp → waitMs 1000 → assertVisible workspace shell",
+            conclusion: "Verification passed because the Windows desktop shell appeared and the preserved evidence showed the application ready for interaction.",
+          },
+        },
+      };
+
       const reportSteps = [...document.querySelectorAll(".step")];
-      let activeRunReportKey = "success";
+      const reportEvidenceTabs = [...document.querySelectorAll(".evidence-stage .tab")];
+      let activeRunReport = buildRunReport("success");
       let activeRunStepIndex = runReports.success.defaultStepIndex;
+
+      function cleanReportText(value) {
+        return String(value || "").replace(/\s+/g, " ").trim();
+      }
+
+      function statusToneForLabel(status) {
+        const normalized = cleanReportText(status).toLowerCase();
+        if (normalized === "failed") {
+          return "failed";
+        }
+        if (normalized === "inconclusive" || normalized === "unknown") {
+          return "warning";
+        }
+        return "success";
+      }
+
+      function visibleRunTitle(target) {
+        return cleanReportText(target.querySelector("strong")?.textContent || target.textContent);
+      }
+
+      function humanizeStatus(status) {
+        const normalized = cleanReportText(status).toLowerCase();
+        return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Unknown";
+      }
+
+      function mergeStepState(baseStep, override = {}) {
+        return {
+          ...baseStep,
+          ...override,
+          action: { ...baseStep.action, ...(override.action || {}) },
+          artifacts: { ...baseStep.artifacts, ...(override.artifacts || {}) },
+        };
+      }
+
+      function buildFallbackRunReportState(target, title = visibleRunTitle(target)) {
+        const summary = cleanReportText(target.querySelector("small")?.textContent);
+        const summaryParts = summary.split("·").map((part) => cleanReportText(part)).filter(Boolean);
+        const cells = [...target.querySelectorAll("td")];
+        const status = cleanReportText(target.querySelector(".badge")?.textContent || (target.hasAttribute("data-failed-run") ? "failed" : "unknown")).toLowerCase() || "unknown";
+        const modeCell = cleanReportText(cells[1]?.textContent).replace(/^[^A-Za-z]+/, "");
+        const runId = cells.length ? cleanReportText(target.querySelector("small")?.textContent) : "";
+        return {
+          reportKey: status === "failed" ? "failed" : "success",
+          context: `RUN REPORT · ${humanizeStatus(status)}`,
+          meta: {
+            title: title || "Unknown run",
+            runId: runId || "Not represented",
+            mode: modeCell || summaryParts[0] || "Unknown mode",
+            platform: cleanReportText(cells[2]?.textContent) || summaryParts[1] || "Unknown platform",
+            duration: cleanReportText(cells[4]?.textContent) || "Not represented",
+            status,
+            statusTone: statusToneForLabel(status),
+          },
+          verification: {
+            conclusion: `Prototype fallback metadata is shown for “${title || "Unknown run"}” because this entry is not mapped to a dedicated Task 2 run report yet.`,
+          },
+        };
+      }
+
+      function resolveRunReportState(reportStateOrKey) {
+        if (typeof reportStateOrKey === "string") {
+          return runReportStates[reportStateOrKey] || { reportKey: reportStateOrKey };
+        }
+        return reportStateOrKey;
+      }
+
+      function buildRunReport(reportStateOrKey, overrides = {}) {
+        const state = resolveRunReportState(reportStateOrKey);
+        const baseReport = runReports[state.reportKey];
+        const stepOverrides = state.stepOverrides || {};
+        return {
+          context: state.context || baseReport.context,
+          meta: { ...baseReport.meta, ...(state.meta || {}), ...overrides },
+          defaultStepIndex: state.defaultStepIndex ?? baseReport.defaultStepIndex,
+          verification: { ...baseReport.verification, ...(state.verification || {}) },
+          steps: baseReport.steps.map((step, index) => mergeStepState(step, stepOverrides[index])),
+        };
+      }
+
+      function resetReportEvidenceTabs() {
+        reportEvidenceTabs.forEach((tab, index) => tab.classList.toggle("active", index === 0));
+      }
 
       function setText(id, value) {
         const element = document.getElementById(id);
@@ -3981,30 +4140,31 @@
       }
 
       function renderRunReport(reportKey, overrides = {}) {
-        activeRunReportKey = reportKey;
-        activeRunStepIndex = runReports[reportKey].defaultStepIndex;
-        const report = runReports[reportKey];
-        renderReportHeader(report, overrides);
+        const report = buildRunReport(reportKey, overrides);
+        activeRunReport = report;
+        activeRunStepIndex = report.defaultStepIndex;
+        resetReportEvidenceTabs();
+        renderReportHeader(report);
         renderReportTimeline(report);
         renderReportEvidence(report, activeRunStepIndex);
       }
 
       document.querySelectorAll("[data-open-workbench]").forEach((target) => {
         target.addEventListener("click", () => {
-          const failed = target.hasAttribute("data-failed-run");
-          renderRunReport(failed ? "failed" : "success");
+          const title = visibleRunTitle(target);
+          renderRunReport(runReportStates[title] || buildFallbackRunReportState(target, title));
           showView("workbench");
         });
       });
 
       reportSteps.forEach((step) => step.addEventListener("click", () => {
         activeRunStepIndex = Number(step.dataset.stepSlot || "0");
-        renderReportTimeline(runReports[activeRunReportKey]);
-        renderReportEvidence(runReports[activeRunReportKey], activeRunStepIndex);
+        renderReportTimeline(activeRunReport);
+        renderReportEvidence(activeRunReport, activeRunStepIndex);
       }));
 
-      document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
-        document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
+      reportEvidenceTabs.forEach((tab) => tab.addEventListener("click", () => {
+        reportEvidenceTabs.forEach((item) => item.classList.remove("active"));
         tab.classList.add("active");
         showToast(`${tab.textContent} evidence selected`);
       }));
