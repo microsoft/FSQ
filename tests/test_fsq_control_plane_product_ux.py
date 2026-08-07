@@ -15,14 +15,14 @@ def _read_fsq_control_plane_product_ux_html() -> str:
     return html_path.read_text(encoding="utf-8")
 
 
-def _extract_source_viewer_css_rules(html: str) -> dict[str, str]:
+def _extract_source_viewer_css_rules(html: str) -> dict[str, list[str]]:
     style_match = re.search(r"<style>\s*(?P<css>[\s\S]*?)</style>", html)
     assert style_match is not None
-    rules: dict[str, str] = {}
+    rules: dict[str, list[str]] = {}
     for rule_match in re.finditer(r"(?P<selectors>[^{}]+)\{(?P<body>[^{}]*)\}", style_match.group("css")):
         body = rule_match.group("body").strip()
         for selector in rule_match.group("selectors").split(","):
-            rules[selector.strip()] = body
+            rules.setdefault(selector.strip(), []).append(body)
     return rules
 
 
@@ -36,6 +36,29 @@ def _extract_css_declarations(rule_body: str) -> dict[str, str]:
     return declarations
 
 
+def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector() -> None:
+    rules = _extract_source_viewer_css_rules(
+        """
+        <style>
+          .source-line-number,
+          .source-line-code {
+            background: var(--source-line-bg);
+          }
+
+          .source-line-number {
+            border-right: 1px solid var(--cp-border);
+          }
+        </style>
+        """
+    )
+
+    assert rules[".source-line-number"] == [
+        "background: var(--source-line-bg);",
+        "border-right: 1px solid var(--cp-border);",
+    ]
+    assert rules[".source-line-code"] == ["background: var(--source-line-bg);"]
+
+
 def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
     html = _read_fsq_control_plane_product_ux_html()
     rules = _extract_source_viewer_css_rules(html)
@@ -44,17 +67,20 @@ def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
     assert ".source-command-start" not in rules
     assert ".source-command-body" not in rules
 
-    source_line_rule = _extract_css_declarations(rules[".source-line"])
-    hover_rule = _extract_css_declarations(rules[".source-line:hover"])
-    gutter_rule = _extract_css_declarations(rules[".source-line-number"])
-    indent_rule = _extract_css_declarations(rules[".source-indent"])
-    yaml_key_rule = _extract_css_declarations(rules[".yaml-key"])
-    yaml_value_rule = _extract_css_declarations(rules[".yaml-value"])
-    yaml_string_rule = _extract_css_declarations(rules[".yaml-string"])
-    yaml_list_marker_rule = _extract_css_declarations(rules[".yaml-list-marker"])
+    source_line_rule = _extract_css_declarations(rules[".source-line"][-1])
+    hover_rule = _extract_css_declarations(rules[".source-line:hover"][-1])
+    shared_gutter_background_rule = _extract_css_declarations(rules[".source-line-number"][0])
+    gutter_rule = _extract_css_declarations(rules[".source-line-number"][-1])
+    indent_rule = _extract_css_declarations(rules[".source-indent"][-1])
+    yaml_key_rule = _extract_css_declarations(rules[".yaml-key"][-1])
+    yaml_value_rule = _extract_css_declarations(rules[".yaml-value"][-1])
+    yaml_string_rule = _extract_css_declarations(rules[".yaml-string"][-1])
+    yaml_list_marker_rule = _extract_css_declarations(rules[".yaml-list-marker"][-1])
 
     assert source_line_rule["--source-line-bg"] == "var(--cp-surface)"
     assert hover_rule["--source-line-bg"] == "var(--cp-surface-soft)"
+    assert rules[".source-line-code"][0] == rules[".source-line-number"][0]
+    assert shared_gutter_background_rule["background"] == "var(--source-line-bg)"
     assert yaml_key_rule["color"] == "var(--cp-text)"
     assert yaml_key_rule["font-weight"] in {"500", "600"}
     assert yaml_value_rule["color"] == "var(--cp-text-muted)"
