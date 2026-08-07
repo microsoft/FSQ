@@ -3706,6 +3706,14 @@ properties:
           setCodeActionLabel(button, restoreLabel);
         }, 1200);
       }
+      function setCodeActionPending(button, isPending) {
+        button.disabled = isPending;
+        if (isPending) {
+          button.dataset.codeActionPending = "true";
+          return;
+        }
+        delete button.dataset.codeActionPending;
+      }
       async function handleFsqSourceAction(button) {
         if (button.dataset.codeAction === "wrap") {
           const viewer = document.getElementById("fsqSourceViewer");
@@ -3719,15 +3727,25 @@ properties:
         if (button.dataset.codeAction !== "copy") {
           return;
         }
+        if (button.dataset.codeActionPending === "true") {
+          return;
+        }
         if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
           setTemporaryCodeActionLabel(button, "Copy failed");
           return;
         }
+        setCodeActionPending(button, true);
         try {
           await navigator.clipboard.writeText(fsqYamlSource);
-          setTemporaryCodeActionLabel(button, "Copied");
+          if (button.isConnected) {
+            setTemporaryCodeActionLabel(button, "Copied");
+          }
         } catch (error) {
-          setTemporaryCodeActionLabel(button, "Copy failed");
+          if (button.isConnected) {
+            setTemporaryCodeActionLabel(button, "Copy failed");
+          }
+        } finally {
+          setCodeActionPending(button, false);
         }
       }
       filePreview.addEventListener("click", (event) => {
