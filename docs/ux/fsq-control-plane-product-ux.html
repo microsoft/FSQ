@@ -1,0 +1,3792 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FSQ Control Plane — Product UX Prototype</title>
+    <script>
+      (() => {
+        const param = new URLSearchParams(window.location.search).get("scoutTheme");
+        const theme =
+          param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --cp-bg: #f7f4ef;
+        --cp-bg-elevated: #fcfbf8;
+        --cp-surface: #ffffff;
+        --cp-surface-soft: #f5f5f5;
+        --cp-border: #dedede;
+        --cp-border-strong: #919191;
+        --cp-text: #242424;
+        --cp-text-muted: #5c5c5c;
+        --cp-text-soft: #6f6f6f;
+        --cp-accent: #b11f4b;
+        --cp-accent-hover: #9a1a41;
+        --cp-accent-soft: rgba(177, 31, 75, 0.08);
+        --cp-accent-fg: #ffffff;
+        --cp-success: #16a34a;
+        --cp-danger: #dc2626;
+        --cp-warning: #f59e0b;
+        --cp-link: #0078d4;
+        --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+        --cp-overlay: rgba(255, 255, 255, 0.8);
+        --cp-panel: rgba(255, 255, 255, 0.86);
+        --cp-panel-strong: rgba(255, 255, 255, 0.96);
+        --cp-sheen: rgba(255, 255, 255, 0.55);
+        --cp-highlight: rgba(177, 31, 75, 0.12);
+      }
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --cp-bg: #3d3b3a;
+        --cp-bg-elevated: #343231;
+        --cp-surface: #292929;
+        --cp-surface-soft: #2e2e2e;
+        --cp-border: #474747;
+        --cp-border-strong: #5f5f5f;
+        --cp-text: #dedede;
+        --cp-text-muted: #919191;
+        --cp-text-soft: #b0b0b0;
+        --cp-accent: #fd8ea1;
+        --cp-accent-hover: #fb7b91;
+        --cp-accent-soft: rgba(253, 142, 161, 0.14);
+        --cp-accent-fg: #1a1a1a;
+        --cp-success: #4ade80;
+        --cp-danger: #f87171;
+        --cp-warning: #fbbf24;
+        --cp-link: #4da6ff;
+        --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+        --cp-overlay: rgba(41, 41, 41, 0.88);
+        --cp-panel: rgba(41, 41, 41, 0.72);
+        --cp-panel-strong: rgba(41, 41, 41, 0.96);
+        --cp-sheen: rgba(255, 255, 255, 0.04);
+        --cp-highlight: rgba(253, 142, 161, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        background:
+          linear-gradient(90deg, var(--cp-border) 1px, transparent 1px) 0 0 / 32px 32px,
+          linear-gradient(0deg, var(--cp-border) 1px, transparent 1px) 0 0 / 32px 32px,
+          var(--cp-bg);
+        color: var(--cp-text);
+        font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 14px;
+        overflow-x: hidden;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        color: inherit;
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      code,
+      pre,
+      .mono {
+        font-family: Consolas, "Courier New", Courier, monospace;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 248px minmax(0, 1fr);
+      }
+
+      .rail {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        z-index: 30;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        padding: 14px 10px;
+        border-right: 1px solid var(--cp-border);
+        background: var(--cp-panel-strong);
+      }
+
+      .mark {
+        width: 46px;
+        height: 46px;
+        display: grid;
+        place-items: center;
+        margin: 0 4px 18px;
+        border-radius: 0.625rem;
+        background: var(--cp-text);
+        color: var(--cp-surface);
+        font-weight: 900;
+        letter-spacing: -1px;
+      }
+
+      .rail-nav {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 3px;
+        min-height: 0;
+        overflow-y: auto;
+      }
+
+      .nav-button {
+        width: 100%;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        position: relative;
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: 0.625rem;
+        background: transparent;
+        color: var(--cp-text-muted);
+      }
+
+      .nav-button:hover,
+      .nav-button.active {
+        border-color: var(--cp-border);
+        background: var(--cp-surface);
+        color: var(--cp-accent);
+      }
+
+      .nav-button.active::before {
+        content: "";
+        position: absolute;
+        left: -11px;
+        width: 3px;
+        height: 24px;
+        border-radius: 0.625rem;
+        background: var(--cp-accent);
+      }
+
+      .nav-button svg,
+      .icon svg {
+        width: 20px;
+        height: 20px;
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8;
+      }
+
+      .nav-button::after {
+        display: none;
+      }
+
+      .rail-footer {
+        display: grid;
+        gap: 3px;
+        padding-top: 10px;
+        border-top: 1px solid var(--cp-border);
+      }
+
+      .rail-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 4px;
+      }
+
+      .rail-brand .mark {
+        flex: 0 0 auto;
+      }
+
+      .rail-brand-copy strong,
+      .rail-brand-copy small {
+        display: block;
+      }
+
+      .rail-brand-copy small {
+        margin-top: 2px;
+        color: var(--cp-text-muted);
+        font-size: 11px;
+      }
+
+      .rail-section-label {
+        margin: 16px 10px 7px;
+        color: var(--cp-text-soft);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+      }
+
+      .device-group {
+        margin-bottom: 5px;
+      }
+
+      .device-group-title {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 10px;
+        color: var(--cp-text-muted);
+        font-weight: 700;
+      }
+
+      .device-group-title svg {
+        width: 17px;
+        height: 17px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.7;
+      }
+
+      .device-entry {
+        width: 100%;
+        min-height: 35px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px 7px 38px;
+        border: 0;
+        border-radius: 0.625rem;
+        background: transparent;
+        color: var(--cp-text-muted);
+        text-align: left;
+      }
+
+      .device-entry:hover,
+      .device-entry.active {
+        background: var(--cp-accent-soft);
+        color: var(--cp-text);
+      }
+
+      .device-empty {
+        padding: 5px 12px 8px 38px;
+        color: var(--cp-text-soft);
+        font-size: 12px;
+      }
+
+      .workspace-recents {
+        display: grid;
+        gap: 3px;
+        margin: 2px 0 8px;
+        padding-left: 14px;
+      }
+
+      .workspace-recent {
+        width: 100%;
+        min-height: 34px;
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr);
+        align-items: center;
+        gap: 7px;
+        padding: 6px 8px;
+        border: 0;
+        border-radius: 0.625rem;
+        background: transparent;
+        color: var(--cp-text-muted);
+        text-align: left;
+      }
+
+      .workspace-recent:hover,
+      .workspace-recent.active {
+        background: var(--cp-accent-soft);
+        color: var(--cp-text);
+      }
+
+      .workspace-recent-copy {
+        min-width: 0;
+      }
+
+      .workspace-recent-copy strong,
+      .workspace-recent-copy small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-recent-copy small {
+        margin-top: 1px;
+        color: var(--cp-text-soft);
+        font-size: 10px;
+      }
+
+      .workspace-chevron {
+        margin-left: auto;
+        color: var(--cp-text-muted);
+        transition: transform 140ms ease;
+      }
+
+      .nav-button[aria-expanded="false"] .workspace-chevron {
+        transform: rotate(-90deg);
+      }
+
+      .shell {
+        min-width: 0;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 25;
+        height: 76px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 0 28px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-overlay);
+        backdrop-filter: blur(16px);
+      }
+
+      .project-button {
+        min-width: 260px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 11px;
+        border: 1px solid transparent;
+        border-radius: 0.625rem;
+        background: transparent;
+        text-align: left;
+      }
+
+      .project-button:hover {
+        border-color: var(--cp-border);
+        background: var(--cp-surface);
+      }
+
+      .project-glyph {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 0.625rem;
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+        font-weight: 800;
+      }
+
+      .project-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .project-copy strong,
+      .project-copy small {
+        display: block;
+      }
+
+      .project-copy small {
+        overflow: hidden;
+        margin-top: 2px;
+        color: var(--cp-text-muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chevron {
+        color: var(--cp-text-muted);
+      }
+
+      .top-actions,
+      .inline-actions,
+      .filters,
+      .status-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .topbar-context strong,
+      .topbar-context small {
+        display: block;
+      }
+
+      .topbar-context strong {
+        font-size: 16px;
+      }
+
+      .topbar-context small {
+        max-width: 520px;
+        margin-top: 3px;
+        color: var(--cp-text-muted);
+        font-size: 12px;
+      }
+
+      .target-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .target-select-control {
+        min-width: 175px;
+        display: grid;
+        gap: 1px;
+        padding: 5px 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .target-select-control.device {
+        min-width: 230px;
+      }
+
+      .target-select-control span {
+        color: var(--cp-text-muted);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+      }
+
+      .target-select-control select {
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--cp-text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .btn {
+        min-height: 38px;
+        padding: 8px 13px;
+        border: 1px solid var(--cp-border-strong);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+        color: var(--cp-text);
+        font-weight: 700;
+      }
+
+      .btn:hover {
+        border-color: var(--cp-accent);
+        color: var(--cp-accent);
+      }
+
+      .btn.primary {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent);
+        color: var(--cp-accent-fg);
+      }
+
+      .btn.primary:hover {
+        border-color: var(--cp-accent-hover);
+        background: var(--cp-accent-hover);
+        color: var(--cp-accent-fg);
+      }
+
+      .btn.ghost {
+        border-color: transparent;
+        background: transparent;
+        color: var(--cp-text-muted);
+      }
+
+      .btn.small {
+        min-height: 32px;
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+
+      .btn.danger {
+        border-color: var(--cp-danger);
+        color: var(--cp-danger);
+      }
+
+      .page {
+        display: none;
+        min-width: 0;
+        padding: 28px;
+      }
+
+      .page.active {
+        display: block;
+        animation: page-in 220ms ease-out both;
+      }
+
+      @keyframes page-in {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .page-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 20px;
+        margin: 2px auto 24px;
+        max-width: 1480px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 1.4px;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 8px;
+        font-size: clamp(28px, 3vw, 44px);
+        letter-spacing: -1.7px;
+        line-height: 1.04;
+      }
+
+      h2 {
+        margin-bottom: 6px;
+        font-size: 18px;
+        letter-spacing: -0.3px;
+      }
+
+      h3 {
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+
+      p {
+        margin-bottom: 0;
+        line-height: 1.55;
+      }
+
+      .muted {
+        color: var(--cp-text-muted);
+      }
+
+      .page-head .muted {
+        max-width: 720px;
+        font-size: 15px;
+      }
+
+      .content-grid {
+        max-width: 1480px;
+        margin: 0 auto;
+      }
+
+      .card {
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-panel-strong);
+        box-shadow: 0 1px 2px var(--cp-border);
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 18px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .card-body {
+        padding: 18px;
+      }
+
+      .tag,
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 25px;
+        padding: 3px 8px;
+        border: 1px solid var(--cp-border);
+        border-radius: 999px;
+        background: var(--cp-surface-soft);
+        color: var(--cp-text-muted);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .tag.success,
+      .badge.success {
+        border-color: var(--cp-success);
+        background: var(--cp-sheen);
+        color: var(--cp-success);
+      }
+
+      .tag.failed,
+      .badge.failed {
+        border-color: var(--cp-danger);
+        background: var(--cp-sheen);
+        color: var(--cp-danger);
+      }
+
+      .tag.warning,
+      .badge.warning {
+        border-color: var(--cp-warning);
+        background: var(--cp-sheen);
+        color: var(--cp-warning);
+      }
+
+      .tag.accent {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: var(--cp-text-muted);
+      }
+
+      .dot.success {
+        background: var(--cp-success);
+      }
+
+      .dot.warning {
+        background: var(--cp-warning);
+      }
+
+      .dot.failed {
+        background: var(--cp-danger);
+      }
+
+      .launch-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .launch-card {
+        width: 100%;
+        min-width: 0;
+        min-height: 310px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        position: relative;
+        padding: 24px;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-panel-strong);
+        text-align: left;
+      }
+
+      .launch-card::after {
+        content: "";
+        position: absolute;
+        right: -54px;
+        bottom: -64px;
+        width: 210px;
+        height: 210px;
+        border: 44px solid var(--cp-accent-soft);
+        border-radius: 50%;
+      }
+
+      .launch-card:hover {
+        border-color: var(--cp-accent);
+        box-shadow: var(--cp-shadow);
+        transform: translateY(-2px);
+      }
+
+      .launch-card .number {
+        margin-bottom: 54px;
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .launch-card h2 {
+        max-width: 460px;
+        margin-bottom: 12px;
+        font-size: clamp(25px, 2.5vw, 37px);
+        letter-spacing: -1.1px;
+      }
+
+      .launch-card p {
+        max-width: 540px;
+        color: var(--cp-text-muted);
+        font-size: 15px;
+        overflow-wrap: anywhere;
+      }
+
+      .launch-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: auto;
+        padding-top: 24px;
+      }
+
+      .arrow {
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        position: relative;
+        z-index: 2;
+        border-radius: 50%;
+        background: var(--cp-accent);
+        color: var(--cp-accent-fg);
+        font-size: 20px;
+      }
+
+      .loop-strip {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0;
+        overflow: hidden;
+        margin-top: 16px;
+      }
+
+      .loop-step {
+        min-height: 112px;
+        padding: 16px;
+        position: relative;
+        border-right: 1px solid var(--cp-border);
+      }
+
+      .loop-step:last-child {
+        border-right: 0;
+      }
+
+      .loop-step .mono {
+        color: var(--cp-accent);
+        font-size: 11px;
+      }
+
+      .loop-step strong {
+        display: block;
+        margin: 15px 0 5px;
+      }
+
+      .loop-step small {
+        color: var(--cp-text-muted);
+        line-height: 1.4;
+      }
+
+      .dashboard-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.5fr) minmax(310px, 0.7fr);
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .list-row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 14px;
+        padding: 13px 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+        text-align: left;
+      }
+
+      .list-row:hover {
+        border-color: var(--cp-accent);
+      }
+
+      .list-row strong,
+      .list-row small {
+        display: block;
+      }
+
+      .list-row small {
+        margin-top: 4px;
+        color: var(--cp-text-muted);
+      }
+
+      .health-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .health-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 11px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .health-row:last-child {
+        padding-bottom: 0;
+        border-bottom: 0;
+      }
+
+      .health-row small {
+        display: block;
+        margin-top: 2px;
+        color: var(--cp-text-muted);
+      }
+
+      .filter-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+        padding: 12px;
+      }
+
+      .search {
+        min-width: 260px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .search input {
+        width: 100%;
+        border: 0;
+        outline: 0;
+        background: transparent;
+      }
+
+      .select {
+        min-height: 36px;
+        padding: 7px 28px 7px 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .table-card {
+        overflow: hidden;
+      }
+
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .table th {
+        padding: 11px 16px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-surface-soft);
+        color: var(--cp-text-muted);
+        font-size: 11px;
+        letter-spacing: 0.7px;
+        text-align: left;
+        text-transform: uppercase;
+      }
+
+      .table td {
+        padding: 15px 16px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .table tbody tr {
+        cursor: pointer;
+      }
+
+      .table tbody tr:hover {
+        background: var(--cp-accent-soft);
+      }
+
+      .table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .primary-cell strong,
+      .primary-cell small {
+        display: block;
+      }
+
+      .primary-cell small {
+        margin-top: 4px;
+        color: var(--cp-text-muted);
+      }
+
+      .mode-mark {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-weight: 700;
+      }
+
+      .mode-mark .icon-box {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 0.625rem;
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+      }
+
+      .cases-layout {
+        display: grid;
+        grid-template-columns: 390px minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .case-list {
+        display: grid;
+        gap: 8px;
+        max-height: calc(100vh - 230px);
+        overflow: auto;
+      }
+
+      .case-item {
+        padding: 13px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+        cursor: pointer;
+      }
+
+      .case-item:hover,
+      .case-item.active {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .case-item-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .case-item small {
+        display: block;
+        margin-top: 6px;
+        color: var(--cp-text-muted);
+      }
+
+      .case-detail {
+        min-height: 640px;
+      }
+
+      .case-summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .metric {
+        padding: 12px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+      }
+
+      .metric small,
+      .metric strong {
+        display: block;
+      }
+
+      .metric small {
+        color: var(--cp-text-muted);
+      }
+
+      .metric strong {
+        margin-top: 8px;
+        font-size: 16px;
+      }
+
+      .yaml {
+        min-height: 390px;
+        overflow: auto;
+        margin: 0;
+        padding: 18px;
+        border-radius: 0.625rem;
+        background: var(--cp-text);
+        color: var(--cp-surface);
+        font-size: 12px;
+        line-height: 1.65;
+        white-space: pre-wrap;
+      }
+
+      .source-viewer {
+        border: 1px solid var(--cp-border);
+        border-radius: 0.75rem;
+        background: var(--cp-surface);
+        overflow: hidden;
+      }
+
+      .source-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-bg-elevated);
+      }
+
+      .source-language {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        color: var(--cp-text-muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .source-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .source-actions button {
+        min-height: 28px;
+        padding: 4px 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 999px;
+        background: var(--cp-surface);
+        color: var(--cp-text-muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .source-scroll {
+        overflow: auto;
+        background: var(--cp-surface);
+      }
+
+      .source-lines {
+        width: max-content;
+        min-width: 100%;
+        margin: 0;
+        padding: 8px 0;
+        list-style: none;
+      }
+
+      .source-line {
+        --source-line-bg: transparent;
+        display: grid;
+        grid-template-columns: 60px minmax(0, 1fr);
+        min-width: 100%;
+        background: var(--source-line-bg);
+      }
+
+      .source-line[data-source-range="metadata"] {
+        --source-line-bg: var(--cp-surface-soft);
+      }
+
+      .source-line:hover {
+        --source-line-bg: var(--cp-highlight);
+      }
+
+      .source-line-number,
+      .source-line-code {
+        background: var(--source-line-bg);
+      }
+
+      .source-line-number {
+        position: sticky;
+        left: 0;
+        z-index: 1;
+        padding: 0 12px 0 14px;
+        border-right: 1px solid var(--cp-border);
+        color: var(--cp-text-soft);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 12px;
+        line-height: 1.75;
+        text-align: right;
+        user-select: none;
+      }
+
+      .source-line-code {
+        display: block;
+        min-width: 0;
+        padding: 0 16px;
+        color: var(--cp-text);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 12px;
+        line-height: 1.75;
+        white-space: pre;
+      }
+
+      .source-indent-guide {
+        display: inline-block;
+        width: 2ch;
+        height: 1.35em;
+        vertical-align: top;
+        box-shadow: inset 1px 0 0 var(--cp-border);
+        opacity: 0.7;
+      }
+
+      .yaml-key {
+        color: var(--cp-accent);
+      }
+
+      .yaml-value {
+        color: var(--cp-text-muted);
+      }
+
+      .yaml-string {
+        color: var(--cp-link);
+      }
+
+      .yaml-list-marker {
+        color: var(--cp-text-soft);
+      }
+
+      .source-command-start {
+        --source-line-bg: var(--cp-accent-soft);
+      }
+
+      .source-command-body {
+        --source-line-bg: var(--cp-sheen);
+      }
+
+      .source-viewer.wrap-lines .source-scroll {
+        overflow-x: hidden;
+      }
+
+      .source-viewer.wrap-lines .source-line-code {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .environment-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .environment-card {
+        min-height: 320px;
+      }
+
+      .env-icon {
+        width: 42px;
+        height: 42px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 32px;
+        border-radius: 0.625rem;
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .env-details {
+        display: grid;
+        gap: 10px;
+        margin: 18px 0;
+      }
+
+      .env-line {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding-bottom: 9px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .env-line span:first-child {
+        color: var(--cp-text-muted);
+      }
+
+      .platform-board {
+        margin-top: 16px;
+      }
+
+      .platform-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .platform-tile {
+        padding: 15px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .platform-tile.active {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .platform-tile strong,
+      .platform-tile small {
+        display: block;
+      }
+
+      .platform-tile small {
+        margin: 7px 0 14px;
+        color: var(--cp-text-muted);
+        line-height: 1.4;
+      }
+
+      .workspace-layout {
+        display: grid;
+        grid-template-columns: 330px minmax(0, 1fr);
+        min-height: calc(100vh - 190px);
+        overflow: hidden;
+      }
+
+      #workspace {
+        padding: 0;
+      }
+
+      .github-workspace {
+        height: calc(100vh - 76px);
+        display: grid;
+        grid-template-columns: 310px minmax(0, 1fr);
+        overflow: hidden;
+        background: var(--cp-surface);
+      }
+
+      .repo-sidebar {
+        min-height: 0;
+        overflow: auto;
+        border-right: 1px solid var(--cp-border);
+        background: var(--cp-bg-elevated);
+      }
+
+      .repo-sidebar-head {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        padding: 14px 13px 10px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-bg-elevated);
+      }
+
+      .files-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+        font-size: 15px;
+        font-weight: 800;
+      }
+
+      .files-title .icon {
+        width: 29px;
+        height: 29px;
+        display: grid;
+        place-items: center;
+        border-radius: 7px;
+        background: var(--cp-surface-soft);
+        color: var(--cp-text-muted);
+      }
+
+      .repo-tools {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 34px 34px;
+        gap: 6px;
+        margin-bottom: 7px;
+      }
+
+      .repo-tool,
+      .branch-select {
+        min-height: 34px;
+        border: 1px solid var(--cp-border);
+        border-radius: 7px;
+        background: var(--cp-surface);
+      }
+
+      .branch-select {
+        padding: 6px 9px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .repo-tool {
+        display: grid;
+        place-items: center;
+        color: var(--cp-text-muted);
+        font-size: 16px;
+      }
+
+      .go-to-file {
+        width: 100%;
+        min-height: 32px;
+        padding: 6px 9px;
+        border: 1px solid var(--cp-border);
+        border-radius: 7px;
+        outline: 0;
+        background: var(--cp-surface);
+        font-size: 12px;
+      }
+
+      .github-tree {
+        padding: 10px 8px 24px;
+        font-family: "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 12px;
+      }
+
+      .github-tree .tree-row {
+        min-height: 31px;
+        padding-top: 4px;
+        padding-bottom: 4px;
+      }
+
+      .github-tree .tree-row.active {
+        border-left: 3px solid var(--cp-accent);
+        background: var(--cp-accent-soft);
+        color: var(--cp-text);
+      }
+
+      .folder-icon {
+        color: var(--cp-link);
+      }
+
+      .repo-file-view {
+        min-width: 0;
+        overflow: auto;
+        background: var(--cp-surface);
+      }
+
+      .repo-file-head {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 58px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-surface);
+      }
+
+      .breadcrumb {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 14px;
+      }
+
+      .breadcrumb strong:first-child {
+        color: var(--cp-link);
+      }
+
+      .copy-button {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        background: transparent;
+        color: var(--cp-text-muted);
+        font-size: 17px;
+      }
+
+      .commit-strip {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 10px 14px;
+        padding: 10px 12px;
+        border: 1px solid var(--cp-border);
+        border-radius: 7px;
+        color: var(--cp-text-muted);
+        font-size: 12px;
+      }
+
+      .commit-avatar {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--cp-surface-soft);
+        color: var(--cp-text-soft);
+        font-size: 10px;
+        font-weight: 800;
+      }
+
+      .file-panel {
+        margin: 0 14px 20px;
+        overflow: hidden;
+        border: 1px solid var(--cp-border);
+        border-radius: 7px;
+      }
+
+      .file-panel-toolbar {
+        min-height: 42px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 8px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-surface-soft);
+      }
+
+      .file-tab {
+        min-height: 30px;
+        padding: 5px 11px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--cp-text-muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .file-tab.active {
+        border: 1px solid var(--cp-border);
+        background: var(--cp-surface);
+        color: var(--cp-text);
+      }
+
+      .file-stats {
+        margin-left: 4px;
+        color: var(--cp-text-muted);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+      }
+
+      .rendered-markdown {
+        max-width: 940px;
+        margin: 0 auto;
+        padding: 30px 34px 54px;
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .rendered-markdown h1 {
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--cp-border);
+        font-size: 30px;
+        letter-spacing: -0.8px;
+      }
+
+      .rendered-markdown h2 {
+        margin-top: 28px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .rendered-markdown code {
+        padding: 2px 5px;
+        border-radius: 5px;
+        background: var(--cp-surface-soft);
+        font-size: 12px;
+      }
+
+      .rendered-markdown pre {
+        padding: 15px;
+        border-radius: 7px;
+        background: var(--cp-surface-soft);
+        line-height: 1.5;
+      }
+
+      .rendered-markdown li {
+        margin-bottom: 5px;
+      }
+
+      .fsq-friendly-preview {
+        padding: 22px;
+      }
+
+      .fsq-case-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .fsq-case-heading h1 {
+        margin-bottom: 6px;
+        font-size: 24px;
+        letter-spacing: -0.6px;
+      }
+
+      .fsq-case-meta {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin: 14px 0;
+      }
+
+      .fsq-case-meta .metric {
+        background: var(--cp-surface);
+      }
+
+      .fsq-section {
+        margin-top: 18px;
+      }
+
+      .fsq-section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 9px;
+      }
+
+      .fsq-section-title h2 {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .hook-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        padding: 11px;
+        border: 1px solid var(--cp-border);
+        border-radius: 7px;
+        background: var(--cp-surface-soft);
+      }
+
+      .fsq-command-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .fsq-command {
+        display: grid;
+        grid-template-columns: 34px minmax(150px, 0.45fr) minmax(220px, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        min-height: 56px;
+        padding: 9px 11px;
+        border: 1px solid var(--cp-border);
+        border-radius: 7px;
+        background: var(--cp-surface);
+      }
+
+      .fsq-command:hover {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .fsq-command-index {
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+      }
+
+      .fsq-command-name {
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .fsq-command-params {
+        overflow: hidden;
+        color: var(--cp-text-muted);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .fsq-runs {
+        display: grid;
+        gap: 8px;
+        padding: 18px;
+      }
+
+      .file-browser {
+        border-right: 1px solid var(--cp-border);
+        background: var(--cp-surface-soft);
+      }
+
+      .file-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 12px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .file-tree {
+        padding: 10px;
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 12px;
+      }
+
+      .tree-row {
+        width: 100%;
+        min-height: 32px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 8px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        text-align: left;
+      }
+
+      .tree-row:hover,
+      .tree-row.active {
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+      }
+
+      .tree-row.fsq-file {
+        font-weight: 700;
+      }
+
+      .tree-indent-1 {
+        padding-left: 26px;
+      }
+
+      .tree-indent-2 {
+        padding-left: 44px;
+      }
+
+      .file-viewer {
+        min-width: 0;
+        background: var(--cp-surface);
+      }
+
+      .file-viewer-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .structured-case {
+        display: grid;
+        grid-template-columns: minmax(0, 0.9fr) minmax(340px, 1.1fr);
+        gap: 14px;
+        padding: 16px;
+      }
+
+      .command-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .command-row {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        padding: 11px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .command-index {
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+      }
+
+      .device-workbench {
+        display: grid;
+        grid-template-columns: 430px minmax(520px, 1fr);
+        gap: 16px;
+        min-height: calc(100vh - 108px);
+      }
+
+      #device {
+        padding: 16px;
+      }
+
+      #device .content-grid {
+        max-width: none;
+      }
+
+      .device-screen {
+        min-height: 610px;
+        display: grid;
+        place-items: center;
+        padding: 26px;
+        background:
+          linear-gradient(90deg, var(--cp-border) 1px, transparent 1px) 0 0 / 24px 24px,
+          linear-gradient(0deg, var(--cp-border) 1px, transparent 1px) 0 0 / 24px 24px,
+          var(--cp-surface-soft);
+      }
+
+      .phone-frame {
+        width: 250px;
+        height: 500px;
+        overflow: hidden;
+        padding: 14px;
+        border: 8px solid var(--cp-text);
+        border-radius: 34px;
+        background: var(--cp-surface);
+        box-shadow: var(--cp-shadow);
+      }
+
+      .phone-status {
+        height: 20px;
+        display: flex;
+        justify-content: space-between;
+        color: var(--cp-text-muted);
+        font-size: 10px;
+      }
+
+      .phone-app {
+        display: grid;
+        gap: 12px;
+        padding-top: 18px;
+      }
+
+      .phone-card {
+        height: 76px;
+        border: 1px solid var(--cp-border);
+        border-radius: 12px;
+        background: var(--cp-surface-soft);
+      }
+
+      .device-sidebar {
+        display: grid;
+        align-content: start;
+        gap: 12px;
+      }
+
+      .device-targets {
+        display: flex;
+        align-items: flex-end;
+        gap: 10px;
+      }
+
+      .compact-field {
+        display: grid;
+        gap: 5px;
+        min-width: 180px;
+        color: var(--cp-text-muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .compact-field .select {
+        color: var(--cp-text);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .device-control {
+        overflow: hidden;
+      }
+
+      .mode-switch {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px;
+        padding: 4px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+      }
+
+      .mode-switch button {
+        min-height: 38px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--cp-text-muted);
+        font-weight: 700;
+      }
+
+      .mode-switch button.active {
+        background: var(--cp-surface);
+        color: var(--cp-accent);
+        box-shadow: 0 1px 2px var(--cp-border);
+      }
+
+      .device-source-pane {
+        display: none;
+        padding-top: 18px;
+      }
+
+      .device-source-pane.active {
+        display: block;
+      }
+
+      .run-source-summary {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+        text-align: left;
+      }
+
+      .run-source-summary small {
+        display: block;
+        overflow: hidden;
+        margin-top: 4px;
+        color: var(--cp-text-muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .live-timeline {
+        display: grid;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .live-step {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 9px;
+        padding: 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .live-step.running {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .live-step-index {
+        color: var(--cp-accent);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+      }
+
+      .device-status-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 11px 14px;
+        border-top: 1px solid var(--cp-border);
+        color: var(--cp-text-muted);
+        font-size: 12px;
+      }
+
+      .capability-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .capability {
+        padding: 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+      }
+
+      .settings-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .settings-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 18px;
+        padding: 15px 0;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .settings-row:last-child {
+        border-bottom: 0;
+      }
+
+      .settings-row small {
+        display: block;
+        margin-top: 4px;
+        color: var(--cp-text-muted);
+      }
+
+      .workbench-page {
+        padding: 0;
+      }
+
+      .workbench-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        min-height: 88px;
+        padding: 16px 22px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-panel-strong);
+      }
+
+      .back-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 6px;
+        border: 0;
+        background: transparent;
+        color: var(--cp-text-muted);
+        padding: 0;
+      }
+
+      .workbench-layout {
+        height: calc(100vh - 164px);
+        display: grid;
+        grid-template-columns: 330px minmax(440px, 1fr) 360px;
+        gap: 1px;
+        background: var(--cp-border);
+      }
+
+      .workbench-panel {
+        min-width: 0;
+        overflow: auto;
+        background: var(--cp-bg-elevated);
+      }
+
+      .panel-title {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        padding: 15px 16px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-panel-strong);
+      }
+
+      .timeline {
+        padding: 12px;
+      }
+
+      .phase {
+        margin: 16px 4px 8px;
+        color: var(--cp-text-muted);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+
+      .step {
+        width: 100%;
+        display: block;
+        position: relative;
+        margin-bottom: 8px;
+        padding: 12px 12px 12px 16px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+        text-align: left;
+      }
+
+      .step::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 12px;
+        bottom: 12px;
+        width: 3px;
+        border-radius: 0.625rem;
+        background: var(--cp-success);
+      }
+
+      .step.failed::before {
+        background: var(--cp-danger);
+      }
+
+      .step.active {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .step-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .step small {
+        display: block;
+        margin-top: 7px;
+        color: var(--cp-text-muted);
+        line-height: 1.35;
+      }
+
+      .evidence-stage {
+        display: grid;
+        grid-template-rows: auto minmax(280px, 1fr) auto;
+        min-height: 100%;
+        padding: 16px;
+        gap: 12px;
+      }
+
+      .stage-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 4px;
+        padding: 3px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+      }
+
+      .tab {
+        padding: 6px 9px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--cp-text-muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .tab.active {
+        background: var(--cp-surface);
+        color: var(--cp-accent);
+      }
+
+      .browser-preview {
+        min-height: 340px;
+        display: grid;
+        grid-template-rows: 34px 1fr;
+        overflow: hidden;
+        border: 1px solid var(--cp-border-strong);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+      }
+
+      .browser-bar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 10px;
+        border-bottom: 1px solid var(--cp-border);
+        background: var(--cp-surface);
+      }
+
+      .window-dot {
+        width: 8px;
+        height: 8px;
+        border: 1px solid var(--cp-border-strong);
+        border-radius: 50%;
+      }
+
+      .address {
+        flex: 1;
+        overflow: hidden;
+        margin-left: 8px;
+        padding: 4px 8px;
+        border: 1px solid var(--cp-border);
+        border-radius: 999px;
+        color: var(--cp-text-muted);
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .mock-app {
+        display: grid;
+        grid-template-columns: 150px 1fr;
+        background: var(--cp-bg);
+      }
+
+      .mock-sidebar {
+        display: grid;
+        align-content: start;
+        gap: 11px;
+        padding: 18px 14px;
+        background: var(--cp-text);
+      }
+
+      .mock-line {
+        height: 8px;
+        border-radius: 999px;
+        background: var(--cp-border-strong);
+      }
+
+      .mock-main {
+        padding: 24px;
+      }
+
+      .mock-toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 22px;
+      }
+
+      .mock-heading {
+        width: 190px;
+        height: 17px;
+        border-radius: 0.625rem;
+        background: var(--cp-text);
+      }
+
+      .mock-cta {
+        width: 94px;
+        height: 32px;
+        border-radius: 0.625rem;
+        background: var(--cp-accent);
+      }
+
+      .mock-projects {
+        display: grid;
+        gap: 10px;
+      }
+
+      .mock-row {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr 90px;
+        gap: 16px;
+        padding: 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .mock-row.selected {
+        border: 2px solid var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .mock-row span {
+        height: 8px;
+        border-radius: 999px;
+        background: var(--cp-border-strong);
+      }
+
+      .compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .compare-card {
+        padding: 11px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .compare-card strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 11px;
+      }
+
+      .compare-card p {
+        color: var(--cp-text-muted);
+        font-size: 12px;
+      }
+
+      .inspector-body {
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      .inspector-block {
+        padding: 13px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .inspector-block h3 {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 95px minmax(0, 1fr);
+        gap: 7px 10px;
+        margin-top: 12px;
+        font-size: 12px;
+      }
+
+      .kv dt {
+        color: var(--cp-text-muted);
+      }
+
+      .kv dd {
+        overflow-wrap: anywhere;
+        margin: 0;
+        font-family: Consolas, "Courier New", Courier, monospace;
+      }
+
+      .result-callout {
+        border-left: 3px solid var(--cp-success);
+      }
+
+      .modal-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: var(--cp-overlay);
+        backdrop-filter: blur(12px);
+      }
+
+      .modal {
+        width: min(1080px, 96vw);
+        max-height: 92vh;
+        overflow: auto;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-bg-elevated);
+        box-shadow: var(--cp-shadow);
+      }
+
+      .modal.compact {
+        width: min(760px, 96vw);
+      }
+
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .close {
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--cp-border);
+        border-radius: 50%;
+        background: var(--cp-surface);
+        font-size: 20px;
+      }
+
+      .setup-layout {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr);
+        min-height: 610px;
+      }
+
+      .setup-aside {
+        padding: 24px;
+        border-right: 1px solid var(--cp-border);
+        background: var(--cp-surface-soft);
+      }
+
+      .setup-brand {
+        margin-bottom: 38px;
+      }
+
+      .setup-brand .mark {
+        margin-bottom: 16px;
+      }
+
+      .setup-steps {
+        display: grid;
+        gap: 9px;
+      }
+
+      .setup-step {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        padding: 9px;
+        border-radius: 0.625rem;
+        color: var(--cp-text-muted);
+      }
+
+      .setup-step.active {
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+        font-weight: 700;
+      }
+
+      .setup-step.done {
+        color: var(--cp-success);
+      }
+
+      .step-num {
+        width: 27px;
+        height: 27px;
+        display: grid;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 50%;
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 11px;
+      }
+
+      .setup-main {
+        display: grid;
+        grid-template-rows: 1fr auto;
+        min-width: 0;
+      }
+
+      .setup-pane {
+        display: none;
+        padding: 34px;
+      }
+
+      .setup-pane.active {
+        display: block;
+      }
+
+      .setup-pane h1 {
+        max-width: 650px;
+        font-size: 34px;
+      }
+
+      .setup-pane > .muted {
+        max-width: 650px;
+        margin-bottom: 28px;
+        font-size: 15px;
+      }
+
+      .setup-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 15px 20px;
+        border-top: 1px solid var(--cp-border);
+      }
+
+      .field-stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .field {
+        display: grid;
+        gap: 7px;
+        font-weight: 700;
+      }
+
+      .field small {
+        color: var(--cp-text-muted);
+        font-weight: 400;
+      }
+
+      .input,
+      .textarea {
+        width: 100%;
+        padding: 10px 11px;
+        border: 1px solid var(--cp-border-strong);
+        border-radius: 0.625rem;
+        outline: 0;
+        background: var(--cp-surface);
+      }
+
+      .input:focus,
+      .textarea:focus {
+        border-color: var(--cp-accent);
+        box-shadow: 0 0 0 3px var(--cp-accent-soft);
+      }
+
+      .textarea {
+        min-height: 118px;
+        resize: vertical;
+      }
+
+      .choice-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .choice {
+        min-height: 130px;
+        padding: 16px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+        text-align: left;
+      }
+
+      .choice:hover,
+      .choice.active {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+      }
+
+      .choice strong,
+      .choice small {
+        display: block;
+      }
+
+      .choice small {
+        margin-top: 8px;
+        color: var(--cp-text-muted);
+        line-height: 1.45;
+      }
+
+      .readiness-review {
+        display: grid;
+        gap: 10px;
+      }
+
+      .review-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .review-row small {
+        display: block;
+        margin-top: 3px;
+        color: var(--cp-text-muted);
+      }
+
+      .run-mode-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        padding: 20px;
+      }
+
+      .run-mode-card {
+        min-height: 410px;
+        padding: 20px;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-surface);
+      }
+
+      .run-mode-card.active {
+        border-color: var(--cp-accent);
+        box-shadow: 0 0 0 2px var(--cp-accent-soft);
+      }
+
+      .run-mode-card h2 {
+        margin-top: 34px;
+        font-size: 25px;
+      }
+
+      .run-mode-card .field-stack {
+        margin-top: 22px;
+      }
+
+      .preflight {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 7px;
+        margin-top: 18px;
+      }
+
+      .preflight-item {
+        padding: 9px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        color: var(--cp-text-muted);
+        font-size: 11px;
+      }
+
+      .project-menu {
+        position: fixed;
+        top: 68px;
+        left: 92px;
+        z-index: 80;
+        width: 370px;
+        overflow: hidden;
+        border: 1px solid var(--cp-border);
+        border-radius: 16px;
+        background: var(--cp-panel-strong);
+        box-shadow: var(--cp-shadow);
+      }
+
+      .project-menu-head {
+        padding: 13px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .project-option {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border: 0;
+        border-bottom: 1px solid var(--cp-border);
+        background: transparent;
+        text-align: left;
+      }
+
+      .project-option:hover {
+        background: var(--cp-accent-soft);
+      }
+
+      .project-option small {
+        display: block;
+        overflow: hidden;
+        margin-top: 2px;
+        color: var(--cp-text-muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .toast {
+        position: fixed;
+        right: 22px;
+        bottom: 22px;
+        z-index: 200;
+        min-width: 310px;
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 13px 15px;
+        border: 1px solid var(--cp-success);
+        border-radius: 0.625rem;
+        background: var(--cp-panel-strong);
+        box-shadow: var(--cp-shadow);
+        animation: toast-in 180ms ease-out both;
+      }
+
+      @keyframes toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+      }
+
+      @media (max-width: 1120px) {
+        .environment-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .platform-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .workbench-layout {
+          height: auto;
+          grid-template-columns: 280px minmax(0, 1fr);
+        }
+
+        .workbench-layout .workbench-panel:last-child {
+          grid-column: 1 / -1;
+        }
+
+        .device-workbench,
+        .structured-case {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .rail {
+          position: fixed;
+          top: auto;
+          right: 0;
+          bottom: 0;
+          left: 0;
+          width: 100%;
+          height: 64px;
+          flex-direction: row;
+          padding: 6px 12px;
+          border-top: 1px solid var(--cp-border);
+          border-right: 0;
+        }
+
+        .mark,
+        .rail-brand,
+        .rail-footer,
+        .rail-section-label,
+        .device-group,
+        .workspace-recents {
+          display: none;
+        }
+
+        .rail-nav {
+          flex-direction: row;
+          justify-content: space-around;
+        }
+
+        .nav-button.active::before {
+          top: -7px;
+          left: 12px;
+          width: 24px;
+          height: 3px;
+        }
+
+        .topbar {
+          padding: 0 14px;
+        }
+
+        .project-button {
+          min-width: 0;
+          width: min(220px, calc(100vw - 112px));
+        }
+
+        .status-line,
+        .top-actions .btn {
+          display: none;
+        }
+
+        .page {
+          padding: 18px 14px 88px;
+        }
+
+        .page-head {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .page-head > div {
+          min-width: 0;
+        }
+
+        .launch-grid,
+        .dashboard-grid,
+        .cases-layout,
+        .workspace-layout,
+        .device-workbench,
+        .choice-grid,
+        .run-mode-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .file-browser {
+          max-height: 320px;
+          overflow: auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--cp-border);
+        }
+
+        .loop-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .loop-step {
+          border-right: 0;
+          border-bottom: 1px solid var(--cp-border);
+        }
+
+        .setup-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .setup-aside {
+          display: none;
+        }
+
+        .workbench-layout {
+          display: block;
+        }
+
+        .workbench-panel {
+          max-height: none;
+          border-bottom: 1px solid var(--cp-border);
+        }
+
+        .table-card {
+          overflow-x: auto;
+        }
+
+        .table {
+          min-width: 760px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="rail">
+        <div class="rail-brand">
+          <div class="mark">FSQ</div>
+          <div class="rail-brand-copy"><strong>Control Plane</strong><small>Local automation workspace</small></div>
+        </div>
+        <nav class="rail-nav" aria-label="Primary navigation">
+          <button class="nav-button active" data-view="home" aria-label="Overview">
+            <svg viewBox="0 0 24 24"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-3H4zM14 7h6V4h-6z" /></svg>
+            <span>Overview</span>
+          </button>
+          <button class="nav-button" id="workspaceNav" data-view="workspace" aria-label="Workspace" aria-expanded="true">
+            <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z" /><path d="M15 3v5h4M9 12h7M9 16h7" /></svg>
+            <span>Workspace</span>
+            <span class="workspace-chevron">⌄</span>
+          </button>
+          <div class="workspace-recents" id="workspaceRecents">
+            <button class="workspace-recent" id="addWorkspace">
+              <span style="text-align:center">＋</span>
+              <span class="workspace-recent-copy"><strong>Open folder…</strong><small>Add a local workspace</small></span>
+            </button>
+            <button class="workspace-recent active" data-workspace="Control Plane Demo">
+              <span class="project-glyph" style="width:22px;height:22px;font-size:9px">CP</span>
+              <span class="workspace-recent-copy"><strong>Control Plane Demo</strong><small>~/projects/fsq-control-plane-demo</small></span>
+            </button>
+            <button class="workspace-recent" data-workspace="Commerce App">
+              <span class="project-glyph" style="width:22px;height:22px;font-size:9px">CA</span>
+              <span class="workspace-recent-copy"><strong>Commerce App</strong><small>~/projects/commerce-app</small></span>
+            </button>
+            <button class="workspace-recent" data-workspace="Mobile Client">
+              <span class="project-glyph" style="width:22px;height:22px;font-size:9px">MC</span>
+              <span class="workspace-recent-copy"><strong>Mobile Client</strong><small>~/projects/mobile-client</small></span>
+            </button>
+          </div>
+          <button class="nav-button" data-view="device" aria-label="Devices">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="1" /><path d="M8 21h8M12 17v4" /></svg>
+            <span>Devices</span>
+          </button>
+        </nav>
+        <div class="rail-footer">
+          <button class="nav-button" data-view="config" aria-label="Config">
+            <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z" /></svg>
+            <span>Config</span>
+          </button>
+          <button class="nav-button" data-view="settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24"><path d="M12 18h.01M9.1 9a3 3 0 1 1 5.6 1.5c-.9 1.1-2.7 1.5-2.7 3" /><circle cx="12" cy="12" r="9" /></svg>
+            <span>Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="shell">
+        <header class="topbar" id="contextTopbar">
+          <div class="topbar-context" id="deviceTopbarContext" hidden>
+            <strong>Device workspace</strong>
+            <small>Select a target, choose how FSQ should test it, and watch the live screen while the run progresses.</small>
+          </div>
+          <div class="target-controls" id="deviceTopbarControls" hidden>
+            <label class="target-select-control"><span>Platform</span><select id="devicePlatform"><option>Android</option><option>Web</option><option>Windows</option><option>macOS</option></select></label>
+            <label class="target-select-control device"><span>Device</span><select id="deviceSelect"><option>Pixel 8 · 145e66aa</option><option>Pixel Tablet · emulator-5554</option></select></label>
+            <span class="tag success"><span class="dot success"></span>Connected</span>
+            <button class="btn">Refresh</button>
+          </div>
+        </header>
+
+        <section class="page active" id="home">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow">FSQ CONTROL PLANE / OVERVIEW</p>
+              <h1>Learn FSQ by running it.</h1>
+              <p class="muted">Start with the core loop, follow a guided tutorial, or launch a task on one of your connected devices.</p>
+            </div>
+            <button class="btn" id="learnFsq">How FSQ works</button>
+          </div>
+          <div class="content-grid">
+            <div class="launch-grid">
+              <button class="launch-card" data-open-run data-mode="explore">
+                <span class="number">01 / DYNAMIC LOOP</span>
+                <h2>Explore with AI</h2>
+                <p>Describe a user-visible goal. FSQ plans, operates your app, captures every step, verifies the result, and drafts a replayable case.</p>
+                <span class="launch-footer">
+                  <span class="tag accent">Uses configured LLM</span>
+                  <span class="arrow">→</span>
+                </span>
+              </button>
+              <button class="launch-card" data-open-run data-mode="replay">
+                <span class="number">02 / STRICT LOOP</span>
+                <h2>Replay a Case</h2>
+                <p>Select a reviewed YAML case. FSQ executes authored commands exactly and produces fresh evidence for regression testing.</p>
+                <span class="launch-footer">
+                  <span class="tag">No planning LLM</span>
+                  <span class="arrow">→</span>
+                </span>
+              </button>
+            </div>
+
+            <div class="card loop-strip" id="loopStrip">
+              <div class="loop-step"><span class="mono">01</span><strong>Explore</strong><small>Turn a human goal into key actions.</small></div>
+              <div class="loop-step"><span class="mono">02</span><strong>Capture</strong><small>Record screenshots, UI trees, and tool facts.</small></div>
+              <div class="loop-step"><span class="mono">03</span><strong>Verify</strong><small>Judge the goal from evidence, not self-report.</small></div>
+              <div class="loop-step"><span class="mono">04</span><strong>Save Case</strong><small>Review actual successful actions as YAML.</small></div>
+              <div class="loop-step"><span class="mono">05</span><strong>Replay</strong><small>Run deterministically for regression.</small></div>
+            </div>
+
+            <div class="dashboard-grid">
+              <section class="card">
+                <div class="card-head">
+                  <div><h2>Recent activity</h2><p class="muted">Evidence from this workspace</p></div>
+                  <button class="btn small" data-open-workspace>Open workspace</button>
+                </div>
+                <div class="card-body list">
+                  <button class="list-row" data-open-workbench>
+                    <span><strong>Create project flow</strong><small>AI explore · Web · 4m ago</small></span>
+                    <span class="badge success">success</span>
+                  </button>
+                  <button class="list-row" data-open-workbench data-failed-run>
+                    <span><strong>Checkout smoke</strong><small>Strict replay · Web · 38m ago</small></span>
+                    <span class="badge failed">failed</span>
+                  </button>
+                  <button class="list-row" data-open-workbench>
+                    <span><strong>Settings profile</strong><small>AI explore · macOS · yesterday</small></span>
+                    <span class="badge warning">inconclusive</span>
+                  </button>
+                </div>
+              </section>
+              <section class="card">
+                <div class="card-head">
+                  <div><h2>Environment</h2><p class="muted">Ready to run</p></div>
+                  <span class="tag success">3 / 3</span>
+                </div>
+                <div class="card-body health-list">
+                  <div class="health-row"><span class="dot success"></span><span><strong>Provider</strong><small>GitHub Copilot · authenticated</small></span><span class="tag success">ready</span></div>
+                  <div class="health-row"><span class="dot success"></span><span><strong>Platform</strong><small>Web · Playwright · Chrome</small></span><span class="tag success">ready</span></div>
+                  <div class="health-row"><span class="dot success"></span><span><strong>Workspace</strong><small>Cases and evidence writable</small></span><span class="tag success">ready</span></div>
+                  <button class="btn small" data-view-jump="config">Manage config</button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="workspace">
+          <div class="github-workspace">
+            <aside class="repo-sidebar">
+              <div class="repo-sidebar-head">
+                <div class="files-title"><span class="icon">◧</span><span>Files</span></div>
+                <div class="repo-tools">
+                  <select class="branch-select"><option>⌘ main</option><option>design-fsq-control-plane-ux</option></select>
+                  <button class="repo-tool" aria-label="Add file">＋</button>
+                  <button class="repo-tool" aria-label="Search">⌕</button>
+                </div>
+                <input class="go-to-file" placeholder="⌕  Go to file" />
+              </div>
+              <div class="github-tree">
+                <button class="tree-row"><span>›</span><span class="folder-icon">■</span><span>.github</span></button>
+                <button class="tree-row"><span>⌄</span><span class="folder-icon">■</span><span>docs</span></button>
+                <button class="tree-row tree-indent-1"><span>›</span><span class="folder-icon">■</span><span>assets</span></button>
+                <button class="tree-row tree-indent-1"><span>›</span><span class="folder-icon">■</span><span>examples</span></button>
+                <button class="tree-row tree-indent-1" data-repo-file="fsq-agent-architecture-deep-dive.md" data-file-type="markdown"><span>▧</span><span>fsq-agent-architecture-deep-dive.md</span></button>
+                <button class="tree-row tree-indent-1" data-repo-file="fsq-agent-architecture-v2.md" data-file-type="markdown"><span>▧</span><span>fsq-agent-architecture-v2.md</span></button>
+                <button class="tree-row"><span>›</span><span class="folder-icon">■</span><span>frontend</span></button>
+                <button class="tree-row"><span>›</span><span class="folder-icon">■</span><span>fsq_agent</span></button>
+                <button class="tree-row"><span>›</span><span class="folder-icon">■</span><span>knowledge</span></button>
+                <button class="tree-row"><span>›</span><span class="folder-icon">■</span><span>tests</span></button>
+                <button class="tree-row"><span>▧</span><span>.env.example</span></button>
+                <button class="tree-row"><span>▧</span><span>.gitignore</span></button>
+                <button class="tree-row active" data-repo-file="AGENTS.md" data-file-type="markdown"><span>▧</span><span>AGENTS.md</span></button>
+                <button class="tree-row" data-repo-file="README.md" data-file-type="markdown"><span>▧</span><span>README.md</span></button>
+                <button class="tree-row" data-repo-file="SPEC.md" data-file-type="markdown"><span>▧</span><span>SPEC.md</span></button>
+                <button class="tree-row" data-repo-file="config.web.yaml" data-file-type="yaml"><span>◇</span><span>config.web.yaml</span></button>
+                <button class="tree-row" data-repo-file="create-project-flow.codex.yaml" data-file-type="fsq"><span>◇</span><span>create-project-flow.codex.yaml</span></button>
+              </div>
+            </aside>
+            <main class="repo-file-view">
+              <div class="repo-file-head">
+                <div class="breadcrumb"><strong>FSQ</strong><span>/</span><strong id="repoFileName">AGENTS.md</strong><button class="copy-button" aria-label="Copy path">▣</button></div>
+              </div>
+              <div class="commit-strip"><span class="commit-avatar">ZG</span><strong>zhengda</strong><span>chore: prepare repository for open source release</span></div>
+              <section class="file-panel">
+                <div class="file-panel-toolbar" id="fileTabs">
+                  <button class="file-tab active">Preview</button>
+                  <button class="file-tab">Code</button>
+                  <span class="file-stats">22 lines (14 loc) · 902 Bytes</span>
+                </div>
+                <article class="rendered-markdown" id="filePreview">
+                  <h1>Agent Instructions</h1>
+                  <p>This repository uses Python Spec-Driven Development.</p>
+                  <p>Root <code>SPEC.md</code> is the project-level source of truth. Relevant module <code>SPEC.md</code> files must be read before changes.</p>
+                  <p>For non-trivial work:</p>
+                  <ol>
+                    <li>Invoke <code>requirements-to-design</code> to clarify requirements and produce a confirmed design document.</li>
+                    <li>After the user confirms the design, invoke <code>spec-driven</code> with the design document path.</li>
+                    <li><code>spec-driven</code> updates SPEC files, waits for confirmation, implements, verifies, synchronizes, and audits.</li>
+                  </ol>
+                  <p>Use the repository skills under <code>.github/skills/</code> when available. For Python architecture decisions, apply <code>python-architecture</code> through the SDD flow.</p>
+                  <p>New Python source files must start with:</p>
+                  <pre># Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.</pre>
+                  <p>Do not treat this file as a specification. Keep project and module requirements in <code>SPEC.md</code> files.</p>
+                </article>
+              </section>
+            </main>
+          </div>
+        </section>
+
+        <section class="page" id="device">
+          <div class="content-grid device-workbench">
+            <aside class="card device-control">
+              <div class="card-head"><div><h2>FSQ operation</h2><p class="muted">Target: Pixel 8 · 145e66aa</p></div><span class="tag">idle</span></div>
+              <div class="card-body" id="deviceRunComposer">
+                <div class="mode-switch">
+                  <button class="active" data-device-mode="explore">Explore</button>
+                  <button data-device-mode="strict">Strict Replay</button>
+                </div>
+                <section class="device-source-pane active" data-device-pane="explore">
+                  <label class="field">What should FSQ prove?<textarea class="textarea" style="min-height:190px">Open the app, create a project named "Control Plane UX", and verify it appears in the project list.</textarea><small>FSQ uses the configured LLM to plan, operate, capture evidence, and verify this goal.</small></label>
+                </section>
+                <section class="device-source-pane" data-device-pane="strict">
+                  <label class="field">Case<select class="input"><option>Create project flow</option><option>Onboarding navigation</option><option>Profile settings</option></select><small>The selected Case must support the current platform.</small></label>
+                  <div class="review-row" style="margin-top:12px"><span class="dot success"></span><span><strong>6 commands validated</strong><small>No planning LLM required.</small></span><span class="tag success">ready</span></div>
+                </section>
+                <div class="preflight" style="margin-top:18px"><span class="preflight-item"><span class="dot success"></span> Device</span><span class="preflight-item"><span class="dot success"></span> Workspace</span><span class="preflight-item"><span class="dot success"></span> Provider</span></div>
+                <button class="btn primary" id="startDeviceRun" style="width:100%;margin-top:14px">Start exploration</button>
+              </div>
+              <div class="card-body" id="deviceRunProgress" hidden>
+                <button class="run-source-summary" id="toggleRunSource"><span><strong>Run source · Explore</strong><small>Open the app, create a project named “Control Plane UX”…</small></span><span>⌄</span></button>
+                <div id="collapsedRunSource" hidden style="padding:12px;border:1px solid var(--cp-border);border-top:0;border-radius:0 0 10px 10px"><p class="muted">Open the app, create a project named “Control Plane UX”, and verify it appears in the project list.</p></div>
+                <div class="live-timeline">
+                  <div class="live-step"><span class="live-step-index">01</span><span><strong>Pre-plan generated</strong><small class="muted">3 key actions</small></span><span class="tag success">done</span></div>
+                  <div class="live-step"><span class="live-step-index">02</span><span><strong>launchApp</strong><small class="muted">Android session ready</small></span><span class="tag success">done</span></div>
+                  <div class="live-step running"><span class="live-step-index">03</span><span><strong>clickOn New Project</strong><small class="muted">Capturing after evidence…</small></span><span class="tag accent">running</span></div>
+                  <div class="live-step"><span class="live-step-index">04</span><span><strong>typeText project name</strong></span><span class="tag">waiting</span></div>
+                  <div class="live-step"><span class="live-step-index">05</span><span><strong>Verify goal</strong></span><span class="tag">waiting</span></div>
+                </div>
+                <button class="btn danger" id="cancelDeviceRun" style="width:100%;margin-top:14px">Cancel run</button>
+              </div>
+            </aside>
+            <section class="card">
+              <div class="card-head"><div><h2>Live Screen</h2><p class="muted" id="liveTargetLabel">Android · Pixel 8 · 145e66aa</p></div><div class="tabs"><button class="tab active">Screen</button><button class="tab">UI Tree</button><button class="tab">Logs</button></div></div>
+              <div class="device-screen">
+                <div class="phone-frame">
+                  <div class="phone-status"><span>9:41</span><span>5G · 92%</span></div>
+                  <div class="phone-app"><div class="mock-heading" style="width:140px"></div><div class="phone-card"></div><div class="phone-card"></div><div class="phone-card"></div><div class="mock-cta" style="width:100%;height:42px"></div></div>
+                </div>
+              </div>
+              <div class="device-status-bar"><span><span class="dot success"></span> Live · 1080 × 2400</span><span>Android 15 · com.example.app · uiautomator2</span></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" id="config">
+          <div class="page-head">
+            <div><p class="eyebrow">WORKSPACE / CONFIG</p><h1>Workspace configuration</h1><p class="muted">Provider, platform defaults, runtime parameters, and project-local environment values for Control Plane Demo.</p></div>
+            <button class="btn primary">Save changes</button>
+          </div>
+          <div class="content-grid environment-grid">
+            <section class="card"><div class="card-head"><div><h2>LLM Provider</h2><p class="muted">Used by dynamic exploration and AI assertions</p></div><span class="tag success">ready</span></div><div class="card-body settings-list"><label class="field">Provider<select class="input"><option>GitHub Copilot</option><option>Azure OpenAI</option></select></label><label class="field">Account<input class="input" value="qunmi · Enterprise" disabled /></label><button class="btn small">Reconnect provider</button></div></section>
+            <section class="card"><div class="card-head"><div><h2>Run defaults</h2><p class="muted">Applied to new runs in this workspace</p></div></div><div class="card-body settings-list"><label class="field">Default platform<select class="input"><option>Web</option><option>Android</option><option>Windows</option><option>macOS</option></select></label><label class="field">Post-action delay<input class="input" value="0.5 seconds" /></label><label class="field">Max agent turns<input class="input" value="50" /></label></div></section>
+            <section class="card"><div class="card-head"><div><h2>Project environment</h2><p class="muted">Local values saved in .env</p></div><span class="tag success">gitignored</span></div><div class="card-body settings-list"><label class="field">Browser executable<input class="input mono" value="/Applications/Google Chrome.app" /></label><label class="field">Base URL<input class="input mono" value="https://app.example.test" /></label><button class="btn small">Open .env</button></div></section>
+          </div>
+        </section>
+
+        <section class="page" id="settings">
+          <div class="page-head">
+            <div><p class="eyebrow">CONTROL PLANE / SETTINGS</p><h1>Application settings</h1><p class="muted">Global preferences for the local Control Plane. These settings are not tied to a workspace.</p></div>
+          </div>
+          <div class="content-grid card" style="max-width:900px">
+            <div class="card-head"><div><h2>General</h2><p class="muted">Appearance and behavior</p></div></div>
+            <div class="card-body settings-list">
+              <div class="settings-row"><span><strong>Theme</strong><small>Use light, dark, or follow the operating system.</small></span><select class="select"><option>System</option><option>Light</option><option>Dark</option></select></div>
+              <div class="settings-row"><span><strong>Open files with</strong><small>Editor used for complex YAML and project source files.</small></span><select class="select"><option>Visual Studio Code</option><option>System default</option></select></div>
+              <div class="settings-row"><span><strong>Diagnostic logging</strong><small>Keep local Control Plane and runtime logs for troubleshooting.</small></span><button class="btn small">Enabled</button></div>
+              <div class="settings-row"><span><strong>Updates</strong><small>Check for new FSQ releases when Control Plane starts.</small></span><button class="btn small">Check now</button></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="runs">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow">PROJECT / RUNS</p>
+              <h1>Run history</h1>
+              <p class="muted">Every run is an auditable record of what FSQ attempted, what the harness observed, and why the verifier decided.</p>
+            </div>
+            <button class="btn primary" data-open-run>New run</button>
+          </div>
+          <div class="content-grid">
+            <div class="card filter-bar">
+              <label class="search"><span>⌕</span><input placeholder="Search runs by goal, case, or run ID" /></label>
+              <div class="filters">
+                <select class="select"><option>All modes</option><option>AI explore</option><option>Strict replay</option></select>
+                <select class="select"><option>All statuses</option><option>Success</option><option>Failed</option><option>Inconclusive</option></select>
+                <select class="select"><option>All platforms</option><option>Web</option><option>Android</option><option>Windows</option><option>macOS</option></select>
+              </div>
+            </div>
+            <div class="card table-card">
+              <table class="table">
+                <thead><tr><th>Run</th><th>Mode</th><th>Platform</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
+                <tbody>
+                  <tr data-open-workbench><td class="primary-cell"><strong>Create project flow</strong><small>run_20260807_135642</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>Web</td><td><span class="badge success">success</span></td><td>1m 42s</td><td>4 min ago</td></tr>
+                  <tr data-open-workbench data-failed-run><td class="primary-cell"><strong>Checkout smoke</strong><small>run_20260807_131914</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Web</td><td><span class="badge failed">failed</span></td><td>34s</td><td>38 min ago</td></tr>
+                  <tr data-open-workbench><td class="primary-cell"><strong>Settings profile</strong><small>run_20260806_172305</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>macOS</td><td><span class="badge warning">inconclusive</span></td><td>2m 09s</td><td>Yesterday</td></tr>
+                  <tr data-open-workbench><td class="primary-cell"><strong>Onboarding navigation</strong><small>run_20260806_145522</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Android</td><td><span class="badge success">success</span></td><td>58s</td><td>Yesterday</td></tr>
+                  <tr data-open-workbench><td class="primary-cell"><strong>Desktop launch</strong><small>run_20260805_112011</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Windows</td><td><span class="badge success">success</span></td><td>27s</td><td>2 days ago</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" id="cases">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow">PROJECT / CASES</p>
+              <h1>Replayable test assets</h1>
+              <p class="muted">Authored cases are maintained in your project. Generated cases stay in review until you accept their actions and parameters.</p>
+            </div>
+            <div class="inline-actions"><button class="btn">Open cases folder</button><button class="btn primary" data-open-run data-mode="replay">Replay selected</button></div>
+          </div>
+          <div class="content-grid cases-layout">
+            <section class="card">
+              <div class="card-head"><div><h2>Cases</h2><p class="muted">6 in this project</p></div><span class="tag">cases/</span></div>
+              <div class="card-body case-list">
+                <div class="case-item active" data-case="create"><div class="case-item-top"><strong>Create project flow</strong><span class="tag warning">review</span></div><small>Generated · Web · 8 commands</small></div>
+                <div class="case-item" data-case="checkout"><div class="case-item-top"><strong>Checkout smoke</strong><span class="tag success">authored</span></div><small>Maintained · Web · 12 commands</small></div>
+                <div class="case-item" data-case="onboarding"><div class="case-item-top"><strong>Onboarding navigation</strong><span class="tag success">authored</span></div><small>Maintained · Android · 9 commands</small></div>
+                <div class="case-item" data-case="desktop"><div class="case-item-top"><strong>Desktop launch</strong><span class="tag success">authored</span></div><small>Maintained · Windows · 5 commands</small></div>
+                <div class="case-item" data-case="profile"><div class="case-item-top"><strong>Profile settings</strong><span class="tag">draft</span></div><small>Generated · macOS · 7 commands</small></div>
+              </div>
+            </section>
+            <section class="card case-detail">
+              <div class="card-head">
+                <div><h2 id="caseTitle">Create project flow</h2><p class="muted" id="casePath">cases/generated/create-project-flow.codex.yaml</p></div>
+                <div class="inline-actions"><button class="btn small">Open in editor</button><button class="btn small primary" id="reviewCase">Review generated Case</button></div>
+              </div>
+              <div class="card-body">
+                <div class="case-summary">
+                  <div class="metric"><small>Source</small><strong id="caseSource">AI explore</strong></div>
+                  <div class="metric"><small>Replayable commands</small><strong id="caseCommands">8 / 8</strong></div>
+                  <div class="metric"><small>Secret scan</small><strong class="status-line"><span class="dot success"></span>Safe</strong></div>
+                </div>
+                <pre class="yaml" id="yamlPreview"></pre>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page" id="environment">
+          <div class="page-head">
+            <div>
+              <p class="eyebrow">PROJECT / ENVIRONMENT</p>
+              <h1>Environment readiness</h1>
+              <p class="muted">Configure the local ingredients FSQ needs. Values stay with this project; secrets are masked after save.</p>
+            </div>
+            <button class="btn" id="rerunChecks">Run all checks</button>
+          </div>
+          <div class="content-grid">
+            <div class="environment-grid">
+              <section class="card environment-card">
+                <div class="card-body">
+                  <div class="env-icon">LLM</div>
+                  <div class="status-line" style="justify-content: space-between"><h2>Provider</h2><span class="tag success">ready</span></div>
+                  <p class="muted">Planning, recovery, verification, and optional AI assertions.</p>
+                  <div class="env-details">
+                    <div class="env-line"><span>Provider</span><strong>GitHub Copilot</strong></div>
+                    <div class="env-line"><span>Account</span><strong>qunmi</strong></div>
+                    <div class="env-line"><span>Credential</span><strong>••••••••</strong></div>
+                  </div>
+                  <button class="btn small" data-setup-step="1">Change provider</button>
+                </div>
+              </section>
+              <section class="card environment-card">
+                <div class="card-body">
+                  <div class="env-icon">RUN</div>
+                  <div class="status-line" style="justify-content: space-between"><h2>Active platform</h2><span class="tag success">ready</span></div>
+                  <p class="muted">The harness and target FSQ controls during a run.</p>
+                  <div class="env-details">
+                    <div class="env-line"><span>Platform</span><strong>Web</strong></div>
+                    <div class="env-line"><span>Backend</span><strong>Playwright</strong></div>
+                    <div class="env-line"><span>Browser</span><strong>Chrome</strong></div>
+                  </div>
+                  <button class="btn small" data-setup-step="2">Configure platform</button>
+                </div>
+              </section>
+              <section class="card environment-card">
+                <div class="card-body">
+                  <div class="env-icon">DIR</div>
+                  <div class="status-line" style="justify-content: space-between"><h2>Workspace</h2><span class="tag success">ready</span></div>
+                  <p class="muted">Project cases, knowledge, credentials, and evidence output.</p>
+                  <div class="env-details">
+                    <div class="env-line"><span>Cases</span><strong>6 found</strong></div>
+                    <div class="env-line"><span>Knowledge</span><strong>project.md</strong></div>
+                    <div class="env-line"><span>.env</span><strong>gitignored</strong></div>
+                  </div>
+                  <button class="btn small" data-setup-step="0">Change project</button>
+                </div>
+              </section>
+            </div>
+            <section class="card platform-board">
+              <div class="card-head"><div><h2>Platforms</h2><p class="muted">Web is the active default. Configure other local targets when needed.</p></div><span class="tag">1 active · 2 configured</span></div>
+              <div class="card-body platform-grid">
+                <div class="platform-tile active"><strong>Web</strong><small>Playwright · Chrome executable found</small><span class="tag success">active</span></div>
+                <div class="platform-tile"><strong>Android</strong><small>uiautomator2 · emulator-5554 online</small><span class="tag success">configured</span></div>
+                <div class="platform-tile"><strong>Windows</strong><small>pywinauto · configure on a Windows host</small><span class="tag">not configured</span></div>
+                <div class="platform-tile"><strong>macOS</strong><small>Appium Mac2 · server not detected</small><span class="tag warning">needs attention</span></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page workbench-page" id="workbench">
+          <div class="workbench-header">
+            <div>
+              <button class="back-link" data-view-jump="runs">← Back to runs</button>
+              <div class="status-line"><h2 id="runTitle" style="margin: 0">Create project flow</h2><span class="tag">AI explore</span><span class="tag success" id="runStatus">success</span></div>
+              <p class="muted mono" style="margin-top: 5px">run_20260807_135642 · Web · 1m 42s</p>
+            </div>
+            <div class="inline-actions"><button class="btn">Open report</button><button class="btn">Retry</button><button class="btn primary" id="reviewGenerated">Review generated Case</button></div>
+          </div>
+          <div class="workbench-layout">
+            <aside class="workbench-panel">
+              <div class="panel-title"><h2>Timeline</h2><p class="muted">Plan, execute, verify</p></div>
+              <div class="timeline">
+                <div class="phase">Planning</div>
+                <button class="step" data-step-name="Pre-plan generated" data-step-detail="FSQ converted the goal into three key actions and one final verification goal."><span class="step-top"><strong>Pre-plan generated</strong><span class="tag success">passed</span></span><small>3 key actions · verification goal</small></button>
+                <div class="phase">Execution</div>
+                <button class="step" data-step-name="startBrowser" data-step-detail="Chrome launched through the Playwright harness."><span class="step-top"><strong>startBrowser</strong><span class="tag success">passed</span></span><small>setup · after evidence</small></button>
+                <button class="step" data-step-name="navigateTo projects" data-step-detail="Navigated to the project list and captured the initial UI state."><span class="step-top"><strong>navigateTo projects</strong><span class="tag success">passed</span></span><small>action · replayable</small></button>
+                <button class="step" data-step-name="clickOn New Project" data-step-detail="The New Project action opened the creation form."><span class="step-top"><strong>clickOn New Project</strong><span class="tag success">passed</span></span><small>action · replayable</small></button>
+                <button class="step" data-step-name="typeText project name" data-step-detail="Entered a non-secret project name into the target field."><span class="step-top"><strong>typeText project name</strong><span class="tag success">passed</span></span><small>action · safe parameters</small></button>
+                <button class="step active" data-step-name="assertVisible project row" data-step-detail="The after evidence contains the expected project row."><span class="step-top"><strong>assertVisible project row</strong><span class="tag success">passed</span></span><small>assertion · before/after evidence</small></button>
+                <div class="phase">Verification</div>
+                <button class="step" data-step-name="Evidence verifier" data-step-detail="The evidence bundle supports the final verification goal."><span class="step-top"><strong>Evidence verifier</strong><span class="tag success">success</span></span><small>goal satisfied · report ready</small></button>
+              </div>
+            </aside>
+            <section class="workbench-panel">
+              <div class="evidence-stage">
+                <div class="stage-head">
+                  <div><h2 id="evidenceTitle">assertVisible project row</h2><p class="muted" id="evidenceDetail">The after evidence contains the expected project row.</p></div>
+                  <div class="tabs"><button class="tab active">Screenshot</button><button class="tab">UI Tree</button><button class="tab">Replay</button></div>
+                </div>
+                <div class="browser-preview">
+                  <div class="browser-bar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><div class="address">https://app.example.test/projects</div></div>
+                  <div class="mock-app">
+                    <div class="mock-sidebar"><span class="mock-line"></span><span class="mock-line"></span><span class="mock-line"></span><span class="mock-line"></span></div>
+                    <div class="mock-main">
+                      <div class="mock-toolbar"><span class="mock-heading"></span><span class="mock-cta"></span></div>
+                      <div class="mock-projects">
+                        <div class="mock-row"><span></span><span></span><span></span></div>
+                        <div class="mock-row selected"><span></span><span></span><span></span></div>
+                        <div class="mock-row"><span></span><span></span><span></span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="compare">
+                  <div class="compare-card"><strong>Before · 13:57:18.204</strong><p>Project list did not contain “Control Plane UX”.</p></div>
+                  <div class="compare-card"><strong>After · 13:57:19.871</strong><p>New matching row is visible and selected.</p></div>
+                </div>
+              </div>
+            </section>
+            <aside class="workbench-panel">
+              <div class="panel-title"><h2>Inspector</h2><p class="muted">Facts for selected step</p></div>
+              <div class="inspector-body">
+                <div class="inspector-block result-callout"><h3>Step result <span class="tag success">passed</span></h3><p class="muted">Expected UI state is present in captured evidence.</p></div>
+                <div class="inspector-block"><h3>Action</h3><dl class="kv"><dt>capability</dt><dd>assert_visible</dd><dt>target</dt><dd>Control Plane UX</dd><dt>kind</dt><dd>assertion</dd><dt>duration</dt><dd>1,667 ms</dd></dl></div>
+                <div class="inspector-block"><h3>Evidence <span class="tag">4 artifacts</span></h3><dl class="kv"><dt>before</dt><dd>screenshot.png</dd><dt>after</dt><dd>screenshot.png</dd><dt>UI tree</dt><dd>after.xml</dd><dt>diff</dt><dd>ui-tree.diff</dd></dl></div>
+                <div class="inspector-block"><h3>Run result</h3><p>The verifier found sufficient evidence that the newly created project appears in the project list.</p><div class="inline-actions" style="margin-top: 12px"><span class="tag success">goal satisfied</span><span class="tag">evidence-backed</span></div></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="modal-layer" id="setupModal" hidden>
+      <div class="modal">
+        <div class="setup-layout">
+          <aside class="setup-aside">
+            <div class="setup-brand"><div class="mark">FSQ</div><h2>Set up a project</h2><p class="muted">Configure once. Run directly afterward.</p></div>
+            <div class="setup-steps">
+              <div class="setup-step active"><span class="step-num">1</span><span>Project</span></div>
+              <div class="setup-step"><span class="step-num">2</span><span>Provider</span></div>
+              <div class="setup-step"><span class="step-num">3</span><span>Platform</span></div>
+              <div class="setup-step"><span class="step-num">4</span><span>Review</span></div>
+            </div>
+          </aside>
+          <div class="setup-main">
+            <section class="setup-pane active">
+              <p class="eyebrow">STEP 1 / PROJECT</p>
+              <h1>Where should FSQ keep your work?</h1>
+              <p class="muted">Choose the coding project that owns cases, knowledge, configuration, and run evidence.</p>
+              <div class="field-stack">
+                <label class="field">Project directory<input class="input mono" value="/Users/qunmi/projects/fsq-control-plane-demo" /><small>FSQ will inspect this directory before writing anything.</small></label>
+                <div class="review-row"><span class="dot success"></span><span><strong>Existing project detected</strong><small>6 cases, knowledge/project.md, and .fsq-agent-workspace found.</small></span><span class="tag success">compatible</span></div>
+                <div class="review-row"><span class="dot success"></span><span><strong>.env is protected</strong><small>The project .gitignore already excludes local credentials.</small></span><span class="tag success">gitignored</span></div>
+              </div>
+            </section>
+            <section class="setup-pane">
+              <p class="eyebrow">STEP 2 / PROVIDER</p>
+              <h1>Connect the model you already use.</h1>
+              <p class="muted">FSQ guides authentication and stores project-local settings. You do not need to know environment variable names.</p>
+              <div class="choice-grid">
+                <button class="choice active"><span class="tag accent">recommended</span><strong style="margin-top: 12px">GitHub Copilot</strong><small>Sign in with a device code. FSQ detects your Copilot plan and configures the endpoint automatically.</small></button>
+                <button class="choice"><span class="tag">BYOK</span><strong style="margin-top: 12px">Azure OpenAI</strong><small>Provide your endpoint, deployment name, and API key. Values are saved to the project .env.</small></button>
+              </div>
+              <div class="review-row" style="margin-top: 14px"><span class="dot success"></span><span><strong>GitHub Copilot authenticated</strong><small>Signed in as qunmi · Enterprise plan · token cached in project workspace.</small></span><button class="btn small">Reconnect</button></div>
+            </section>
+            <section class="setup-pane">
+              <p class="eyebrow">STEP 3 / PLATFORM</p>
+              <h1>What will FSQ operate first?</h1>
+              <p class="muted">Web is the most complete path. You can add other local platforms later from Environment.</p>
+              <div class="choice-grid">
+                <button class="choice active"><span class="tag accent">default</span><strong style="margin-top: 12px">Web</strong><small>Playwright · Chrome detected at /Applications/Google Chrome.app</small></button>
+                <button class="choice"><strong>Android</strong><small>uiautomator2 · configure app ID and select an online ADB device.</small></button>
+                <button class="choice"><strong>Windows</strong><small>pywinauto · select the application executable and backend.</small></button>
+                <button class="choice"><strong>macOS</strong><small>Appium Mac2 · connect the Appium server and choose an app target.</small></button>
+              </div>
+            </section>
+            <section class="setup-pane">
+              <p class="eyebrow">STEP 4 / REVIEW</p>
+              <h1>Your project is ready for FSQ.</h1>
+              <p class="muted">Review what will be used. No test will run until you create one from the Launchpad.</p>
+              <div class="readiness-review">
+                <div class="review-row"><span class="dot success"></span><span><strong>Project</strong><small>Control Plane Demo · cases and evidence paths writable</small></span><span class="tag success">ready</span></div>
+                <div class="review-row"><span class="dot success"></span><span><strong>Provider</strong><small>GitHub Copilot · authenticated as qunmi</small></span><span class="tag success">ready</span></div>
+                <div class="review-row"><span class="dot success"></span><span><strong>Platform</strong><small>Web · Playwright · Chrome</small></span><span class="tag success">ready</span></div>
+                <div class="review-row"><span class="dot success"></span><span><strong>Files</strong><small>.env values masked · .gitignore protection confirmed</small></span><span class="tag success">safe</span></div>
+              </div>
+            </section>
+            <footer class="setup-footer">
+              <button class="btn ghost" id="closeSetup">Cancel</button>
+              <span class="muted mono" id="setupCaption">Step 1 of 4</span>
+              <div class="inline-actions"><button class="btn" id="setupBack">Back</button><button class="btn primary" id="setupNext">Continue</button></div>
+            </footer>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-layer" id="folderModal" hidden>
+      <div class="modal compact" style="width:min(560px,96vw)">
+        <div class="modal-head">
+          <div><h2 style="margin:0">Open workspace folder</h2></div>
+          <button class="close" id="closeFolder">×</button>
+        </div>
+        <div class="card-body">
+          <label class="field">
+            Folder
+            <div class="inline-actions">
+              <input class="input mono" id="folderPath" value="/Users/qunmi/projects/" style="flex:1" />
+              <button class="btn" id="chooseFolder">Choose…</button>
+              <input id="nativeFolderInput" type="file" webkitdirectory hidden />
+            </div>
+          </label>
+          <div class="inline-actions" style="justify-content:flex-end;margin-top:20px">
+            <button class="btn" id="cancelFolder">Cancel</button>
+            <button class="btn primary" id="confirmFolder">Open folder</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-layer" id="runModal" hidden>
+      <div class="modal">
+        <div class="modal-head"><div><p class="eyebrow">NEW RUN</p><h2>Choose how FSQ should run</h2></div><button class="close" id="closeRun">×</button></div>
+        <div class="run-mode-grid">
+          <section class="run-mode-card active" data-run-mode="explore">
+            <span class="tag accent">AI explore</span>
+            <h2>Describe the workflow to prove</h2>
+            <p class="muted">FSQ plans and adapts while capturing evidence. A successful run can become a strict Case.</p>
+            <div class="field-stack">
+              <label class="field">Goal<textarea class="textarea">Open https://app.example.test, create a project named "Control Plane UX", and verify it appears in the project list.</textarea></label>
+              <label class="field">Platform<select class="input"><option>Web · Playwright · Chrome</option><option>Android · emulator-5554</option><option>macOS · Appium Mac2</option></select></label>
+            </div>
+            <div class="preflight"><span class="preflight-item"><span class="dot success"></span> Provider</span><span class="preflight-item"><span class="dot success"></span> Platform</span><span class="preflight-item"><span class="dot success"></span> Workspace</span></div>
+            <button class="btn primary" style="width: 100%; margin-top: 16px" id="startExplore">Start AI exploration</button>
+          </section>
+          <section class="run-mode-card" data-run-mode="replay">
+            <span class="tag">Strict replay</span>
+            <h2>Replay a reviewed Case</h2>
+            <p class="muted">FSQ executes authored commands exactly and produces fresh evidence. No planning LLM is used.</p>
+            <div class="field-stack">
+              <label class="field">Case<select class="input"><option>Create project flow · generated / review</option><option>Checkout smoke · authored</option><option>Onboarding navigation · authored</option></select></label>
+              <label class="field">Platform<select class="input"><option>Use Case platform · Web</option><option>Web · Playwright · Chrome</option></select></label>
+            </div>
+            <div class="preflight"><span class="preflight-item"><span class="dot success"></span> Case valid</span><span class="preflight-item"><span class="dot success"></span> Platform</span><span class="preflight-item"><span class="dot success"></span> No AI assert</span></div>
+            <button class="btn primary" style="width: 100%; margin-top: 16px" id="startReplay">Start strict replay</button>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-layer" id="reviewModal" hidden>
+      <div class="modal compact">
+        <div class="modal-head"><div><p class="eyebrow">GENERATED CASE / REVIEW</p><h2>Accept this run as a maintained Case</h2></div><button class="close" id="closeReview">×</button></div>
+        <div class="card-body">
+          <div class="readiness-review">
+            <div class="review-row"><span class="dot success"></span><span><strong>8 replayable commands</strong><small>All actions came from successful capability events.</small></span><span class="tag success">valid</span></div>
+            <div class="review-row"><span class="dot success"></span><span><strong>No literal secrets detected</strong><small>Sensitive values use runtimeSecret references or were omitted.</small></span><span class="tag success">safe</span></div>
+            <div class="review-row"><span class="dot warning"></span><span><strong>Generated output requires review</strong><small>Confirm names, targets, and assertions before saving into cases/generated/.</small></span><span class="tag warning">review</span></div>
+          </div>
+          <div class="field-stack" style="margin-top: 18px">
+            <label class="field">Case name<input class="input" value="Create project flow" /></label>
+            <label class="field">Tags<input class="input" value="project-management, smoke" /></label>
+            <label class="field">Save path<input class="input mono" value="cases/generated/create-project-flow.codex.yaml" /></label>
+          </div>
+          <div class="inline-actions" style="justify-content: flex-end; margin-top: 20px"><button class="btn" id="reviewInEditor">Open full YAML</button><button class="btn primary" id="saveCase">Save Case and replay</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" hidden><span class="dot success"></span><span id="toastText">Environment checks completed.</span></div>
+
+    <script>
+      const pages = [...document.querySelectorAll(".page")];
+      const navButtons = [...document.querySelectorAll(".nav-button[data-view]")];
+      const setupModal = document.getElementById("setupModal");
+      const folderModal = document.getElementById("folderModal");
+      const runModal = document.getElementById("runModal");
+      const reviewModal = document.getElementById("reviewModal");
+      const toast = document.getElementById("toast");
+      const toastText = document.getElementById("toastText");
+      let toastTimer;
+      let setupIndex = 0;
+
+      function showView(view) {
+        pages.forEach((page) => page.classList.toggle("active", page.id === view));
+        navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === view || (view === "workbench" && button.dataset.view === "runs")));
+        const deviceActive = view === "device";
+        document.getElementById("deviceTopbarContext").hidden = !deviceActive;
+        document.getElementById("deviceTopbarControls").hidden = !deviceActive;
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
+      navButtons.forEach((button) => button.addEventListener("click", () => {
+        document.querySelectorAll(".device-entry").forEach((entry) => entry.classList.remove("active"));
+        showView(button.dataset.view);
+      }));
+      document.querySelectorAll("[data-view-jump]").forEach((button) => button.addEventListener("click", () => {
+        document.querySelectorAll(".device-entry").forEach((entry) => entry.classList.remove("active"));
+        showView(button.dataset.viewJump);
+      }));
+      document.querySelectorAll("[data-open-workspace]").forEach((button) => button.addEventListener("click", () => showView("workspace")));
+      document.querySelectorAll(".device-entry").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".device-entry").forEach((entry) => entry.classList.remove("active"));
+          navButtons.forEach((nav) => nav.classList.remove("active"));
+          button.classList.add("active");
+          document.getElementById("deviceTitle").textContent = button.dataset.device;
+          showView("device");
+          navButtons.forEach((nav) => nav.classList.remove("active"));
+          button.classList.add("active");
+        });
+      });
+      document.querySelectorAll("[data-open-workbench]").forEach((target) => {
+        target.addEventListener("click", () => {
+          const failed = target.hasAttribute("data-failed-run");
+          document.getElementById("runTitle").textContent = failed ? "Checkout smoke" : "Create project flow";
+          const status = document.getElementById("runStatus");
+          status.textContent = failed ? "failed" : "success";
+          status.className = `tag ${failed ? "failed" : "success"}`;
+          showView("workbench");
+        });
+      });
+
+      const workspaceNav = document.getElementById("workspaceNav");
+      const workspaceRecents = document.getElementById("workspaceRecents");
+      workspaceNav.addEventListener("click", () => {
+        const expanded = workspaceNav.getAttribute("aria-expanded") === "true";
+        workspaceNav.setAttribute("aria-expanded", String(!expanded));
+        workspaceRecents.hidden = expanded;
+      });
+      document.querySelectorAll(".workspace-recent[data-workspace]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll(".workspace-recent").forEach((entry) => entry.classList.remove("active"));
+          button.classList.add("active");
+          showView("workspace");
+          showToast(`Opened ${button.dataset.workspace}`);
+        });
+      });
+      document.getElementById("addWorkspace").addEventListener("click", () => folderModal.hidden = false);
+      document.getElementById("closeFolder").addEventListener("click", () => folderModal.hidden = true);
+      document.getElementById("cancelFolder").addEventListener("click", () => folderModal.hidden = true);
+      document.getElementById("chooseFolder").addEventListener("click", () => document.getElementById("nativeFolderInput").click());
+      document.getElementById("nativeFolderInput").addEventListener("change", (event) => {
+        const firstFile = event.target.files?.[0];
+        if (!firstFile) return;
+        const rootName = firstFile.webkitRelativePath.split("/")[0];
+        document.getElementById("folderPath").value = rootName;
+      });
+      document.getElementById("confirmFolder").addEventListener("click", () => {
+        folderModal.hidden = true;
+        showView("workspace");
+        showToast("Workspace folder opened.");
+      });
+
+      function renderSetup() {
+        const panes = [...document.querySelectorAll(".setup-pane")];
+        const steps = [...document.querySelectorAll(".setup-step")];
+        panes.forEach((pane, index) => pane.classList.toggle("active", index === setupIndex));
+        steps.forEach((step, index) => {
+          step.classList.toggle("active", index === setupIndex);
+          step.classList.toggle("done", index < setupIndex);
+          step.querySelector(".step-num").textContent = index < setupIndex ? "✓" : String(index + 1);
+        });
+        document.getElementById("setupCaption").textContent = `Step ${setupIndex + 1} of ${panes.length}`;
+        document.getElementById("setupBack").disabled = setupIndex === 0;
+        document.getElementById("setupNext").textContent = setupIndex === panes.length - 1 ? "Finish setup" : "Continue";
+      }
+
+      function openSetup(index = 0) {
+        setupIndex = index;
+        renderSetup();
+        setupModal.hidden = false;
+      }
+
+      document.getElementById("closeSetup").addEventListener("click", () => setupModal.hidden = true);
+      document.getElementById("setupBack").addEventListener("click", () => {
+        setupIndex = Math.max(0, setupIndex - 1);
+        renderSetup();
+      });
+      document.getElementById("setupNext").addEventListener("click", () => {
+        if (setupIndex < 3) {
+          setupIndex += 1;
+          renderSetup();
+          return;
+        }
+        setupModal.hidden = true;
+        showView("home");
+        showToast("Project setup complete. No run was started.");
+      });
+      document.querySelectorAll("[data-setup-step]").forEach((button) => button.addEventListener("click", () => openSetup(Number(button.dataset.setupStep))));
+      document.querySelectorAll(".choice").forEach((button) => button.addEventListener("click", () => {
+        const parent = button.parentElement;
+        [...parent.children].forEach((choice) => choice.classList.remove("active"));
+        button.classList.add("active");
+      }));
+
+      function openRun(mode = "explore") {
+        runModal.hidden = false;
+        document.querySelectorAll(".run-mode-card").forEach((card) => card.classList.toggle("active", card.dataset.runMode === mode));
+      }
+
+      document.querySelectorAll("[data-open-run]").forEach((button) => button.addEventListener("click", () => openRun(button.dataset.mode || "explore")));
+      document.getElementById("closeRun").addEventListener("click", () => runModal.hidden = true);
+      document.querySelectorAll(".run-mode-card").forEach((card) => card.addEventListener("click", () => {
+        document.querySelectorAll(".run-mode-card").forEach((item) => item.classList.remove("active"));
+        card.classList.add("active");
+      }));
+      document.getElementById("startExplore").addEventListener("click", (event) => {
+        event.stopPropagation();
+        runModal.hidden = true;
+        showView("workbench");
+        showToast("Prototype run opened with prepared evidence.");
+      });
+      document.getElementById("startReplay").addEventListener("click", (event) => {
+        event.stopPropagation();
+        runModal.hidden = true;
+        showView("workbench");
+        showToast("Strict replay opened with prepared evidence.");
+      });
+
+      const deviceOptions = {
+        Android: ["Pixel 8 · 145e66aa", "Pixel Tablet · emulator-5554"],
+        Web: ["Chrome · Local"],
+        Windows: ["No devices found"],
+        macOS: ["MacBook Pro · Local"],
+      };
+      const devicePlatform = document.getElementById("devicePlatform");
+      const deviceSelect = document.getElementById("deviceSelect");
+      function refreshDeviceOptions() {
+        const devices = deviceOptions[devicePlatform.value] || [];
+        deviceSelect.innerHTML = "";
+        devices.forEach((device) => {
+          const option = document.createElement("option");
+          option.textContent = device;
+          option.disabled = device === "No devices found";
+          deviceSelect.append(option);
+        });
+        deviceSelect.selectedIndex = 0;
+        updateLiveTarget();
+      }
+      function updateLiveTarget() {
+        const target = deviceSelect.options[deviceSelect.selectedIndex]?.textContent || "No device";
+        document.getElementById("liveTargetLabel").textContent = `${devicePlatform.value} · ${target}`;
+      }
+      devicePlatform.addEventListener("change", refreshDeviceOptions);
+      deviceSelect.addEventListener("change", updateLiveTarget);
+
+      document.querySelectorAll("[data-device-mode]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const mode = button.dataset.deviceMode;
+          document.querySelectorAll("[data-device-mode]").forEach((item) => item.classList.toggle("active", item === button));
+          document.querySelectorAll("[data-device-pane]").forEach((pane) => pane.classList.toggle("active", pane.dataset.devicePane === mode));
+          document.getElementById("startDeviceRun").textContent = mode === "strict" ? "Start strict replay" : "Start exploration";
+        });
+      });
+      document.getElementById("startDeviceRun").addEventListener("click", () => {
+        document.getElementById("deviceRunComposer").hidden = true;
+        document.getElementById("deviceRunProgress").hidden = false;
+      });
+      document.getElementById("cancelDeviceRun").addEventListener("click", () => {
+        document.getElementById("deviceRunProgress").hidden = true;
+        document.getElementById("deviceRunComposer").hidden = false;
+      });
+      document.getElementById("toggleRunSource").addEventListener("click", () => {
+        const source = document.getElementById("collapsedRunSource");
+        source.hidden = !source.hidden;
+      });
+
+      document.querySelectorAll(".step").forEach((step) => step.addEventListener("click", () => {
+        document.querySelectorAll(".step").forEach((item) => item.classList.remove("active"));
+        step.classList.add("active");
+        document.getElementById("evidenceTitle").textContent = step.dataset.stepName;
+        document.getElementById("evidenceDetail").textContent = step.dataset.stepDetail;
+      }));
+      document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
+        tab.classList.add("active");
+        showToast(`${tab.textContent} evidence selected`);
+      }));
+
+      const caseData = {
+        create: ["Create project flow", "cases/generated/create-project-flow.codex.yaml", "AI explore", "8 / 8"],
+        checkout: ["Checkout smoke", "cases/checkout-smoke.codex.yaml", "Authored", "12 / 12"],
+        onboarding: ["Onboarding navigation", "cases/android/onboarding-navigation.codex.yaml", "Authored", "9 / 9"],
+        desktop: ["Desktop launch", "cases/windows/desktop-launch.codex.yaml", "Authored", "5 / 5"],
+        profile: ["Profile settings", "cases/generated/profile-settings.codex.yaml", "AI explore", "7 / 7"],
+      };
+      document.querySelectorAll(".case-item").forEach((item) => item.addEventListener("click", () => {
+        document.querySelectorAll(".case-item").forEach((caseItem) => caseItem.classList.remove("active"));
+        item.classList.add("active");
+        const data = caseData[item.dataset.case];
+        document.getElementById("caseTitle").textContent = data[0];
+        document.getElementById("casePath").textContent = data[1];
+        document.getElementById("caseSource").textContent = data[2];
+        document.getElementById("caseCommands").textContent = data[3];
+      }));
+
+      const fileTabsByType = {
+        markdown: ["Preview", "Code"],
+        fsq: ["Structured", "Code", "Runs"],
+        yaml: ["Preview", "Code"],
+        text: ["Code"],
+      };
+      const fsqYamlSource = `schemaVersion: fsq.ai-test/v1
+name: Create project flow
+platform: web
+tags:
+  - generated
+  - project-management
+properties:
+  recording:
+    source_status: success
+    reviewed: false
+---
+- startBrowser: {}
+- navigateTo:
+    url: https://app.example.test/projects
+- clickOn:
+    target: New Project
+- typeText:
+    target: Project name
+    text: Control Plane UX
+- clickOn:
+    target: Create
+- assertVisible:
+    target: Control Plane UX`;
+      document.getElementById("yamlPreview").textContent = fsqYamlSource;
+      function escapeSourceHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+      function renderSourceIndent(indent) {
+        const fullGuides = Math.floor(indent.length / 2);
+        const remainder = indent.length % 2;
+        return `${'<span class="source-indent-guide"></span>'.repeat(fullGuides)}${remainder ? " " : ""}`;
+      }
+      function renderYamlScalar(value) {
+        if (!value) {
+          return "";
+        }
+        const syntaxClass = /^https?:\/\/\S+$/i.test(value) || /^['"].*['"]$/.test(value) ? "yaml-string" : "yaml-value";
+        return `<span class="${syntaxClass}">${escapeSourceHtml(value)}</span>`;
+      }
+      function renderYamlLine(line) {
+        const [, indent = "", body = ""] = line.match(/^(\s*)(.*)$/) || [];
+        if (!body) {
+          return renderSourceIndent(indent);
+        }
+        if (body === "---") {
+          return `${renderSourceIndent(indent)}${escapeSourceHtml(body)}`;
+        }
+        const listMatch = body.match(/^-(\s+)(.*)$/);
+        const listPrefix = listMatch ? `<span class="yaml-list-marker">-</span>${escapeSourceHtml(listMatch[1])}` : "";
+        const content = listMatch ? listMatch[2] : body;
+        const keyMatch = content.match(/^([^:]+):(\s*)(.*)$/);
+        if (!keyMatch) {
+          return `${renderSourceIndent(indent)}${listPrefix}${renderYamlScalar(content)}`;
+        }
+        const [, key, spacing, rawValue] = keyMatch;
+        const valueMarkup = rawValue ? renderYamlScalar(rawValue) : "";
+        return `${renderSourceIndent(indent)}${listPrefix}<span class="yaml-key">${escapeSourceHtml(key)}</span>:${escapeSourceHtml(spacing)}${valueMarkup}`;
+      }
+      function renderFsqSourceViewer(source) {
+        const lines = source.split("\n");
+        let inCommands = false;
+        const rows = lines.map((line, index) => {
+          const classes = ["source-line"];
+          let range = "metadata";
+          if (inCommands && line.trim()) {
+            classes.push(/^\s*-\s+/.test(line) ? "source-command-start" : "source-command-body");
+            range = "commands";
+          }
+          if (line.trim() === "---") {
+            inCommands = true;
+          }
+          return `<li class="${classes.join(" ")}" data-source-range="${range}"><span class="source-line-number" aria-hidden="true">${index + 1}</span><span class="source-line-code">${renderYamlLine(line)}</span></li>`;
+        });
+        return `<section class="source-viewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button">Wrap lines</button><button type="button">Copy</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
+      }
+      function renderRepoFile(type, tab, name) {
+        const preview = document.getElementById("filePreview");
+        if (type === "fsq" && tab === "Structured") {
+          preview.className = "fsq-friendly-preview";
+          preview.innerHTML = `
+            <div class="fsq-case-heading">
+              <div><p class="eyebrow">FSQ AI TEST CASE</p><h1>Create project flow</h1><p class="muted">Create a project and verify it appears in the project list.</p></div>
+              <div class="inline-actions"><span class="tag success">validated</span><button class="btn small">Replay Case</button></div>
+            </div>
+            <div class="fsq-case-meta">
+              <div class="metric"><small>Platform</small><strong>Web</strong></div>
+              <div class="metric"><small>Schema</small><strong>v1</strong></div>
+              <div class="metric"><small>Commands</small><strong>6</strong></div>
+              <div class="metric"><small>Last replay</small><strong class="status-line"><span class="dot success"></span>Passed</strong></div>
+            </div>
+            <section class="fsq-section">
+              <div class="fsq-section-title"><h2>Lifecycle</h2><span class="tag">optional hooks</span></div>
+              <div class="hook-strip"><span class="tag accent">onCaseStart</span><span class="mono">runShell: prepare-test-data</span><span>→</span><span class="tag">onCaseComplete</span><span class="mono">runShell: cleanup</span></div>
+            </section>
+            <section class="fsq-section">
+              <div class="fsq-section-title"><h2>Commands</h2><span class="muted">Executed in authored order</span></div>
+              <div class="fsq-command-list">
+                <div class="fsq-command"><span class="fsq-command-index">01</span><span class="fsq-command-name">startBrowser</span><span class="fsq-command-params">{}</span><span class="tag">setup</span></div>
+                <div class="fsq-command"><span class="fsq-command-index">02</span><span class="fsq-command-name">navigateTo</span><span class="fsq-command-params">url: https://app.example.test/projects</span><span class="tag success">replayable</span></div>
+                <div class="fsq-command"><span class="fsq-command-index">03</span><span class="fsq-command-name">clickOn</span><span class="fsq-command-params">target: New Project</span><span class="tag success">replayable</span></div>
+                <div class="fsq-command"><span class="fsq-command-index">04</span><span class="fsq-command-name">typeText</span><span class="fsq-command-params">target: Project name · text: Control Plane UX</span><span class="tag success">safe params</span></div>
+                <div class="fsq-command"><span class="fsq-command-index">05</span><span class="fsq-command-name">clickOn</span><span class="fsq-command-params">target: Create</span><span class="tag success">replayable</span></div>
+                <div class="fsq-command"><span class="fsq-command-index">06</span><span class="fsq-command-name">assertVisible</span><span class="fsq-command-params">target: Control Plane UX</span><span class="tag accent">assertion</span></div>
+              </div>
+            </section>`;
+          return;
+        }
+        if (type === "fsq" && tab === "Code") {
+          preview.className = "";
+          preview.innerHTML = renderFsqSourceViewer(fsqYamlSource);
+          return;
+        }
+        if (type === "fsq" && tab === "Runs") {
+          preview.className = "fsq-runs";
+          preview.innerHTML = '<div class="list-row"><span><strong>run_20260807_135642</strong><small>Web · 1m 42s · 4 minutes ago</small></span><span class="tag success">passed</span></div><div class="list-row"><span><strong>run_20260806_172305</strong><small>Web · 1m 55s · yesterday</small></span><span class="tag success">passed</span></div><div class="list-row"><span><strong>run_20260805_112011</strong><small>Web · 34s · 2 days ago</small></span><span class="tag failed">failed</span></div>';
+          return;
+        }
+        preview.className = "rendered-markdown";
+        if (tab === "Code") {
+          preview.innerHTML = `<pre># ${name}\n\nThis file is displayed from the active local workspace.</pre>`;
+          return;
+        }
+        preview.innerHTML = `<h1>${name}</h1><p>This file is displayed from the active local workspace.</p><p>Use the file-type tabs above to switch between the available views.</p>`;
+      }
+      document.querySelectorAll("[data-repo-file]").forEach((item) => {
+        item.addEventListener("click", () => {
+          document.querySelectorAll(".github-tree .tree-row").forEach((row) => row.classList.remove("active"));
+          item.classList.add("active");
+          document.getElementById("repoFileName").textContent = item.dataset.repoFile;
+          const toolbar = document.getElementById("fileTabs");
+          const tabs = fileTabsByType[item.dataset.fileType] || fileTabsByType.text;
+          toolbar.innerHTML = tabs.map((tab, index) => `<button class="file-tab${index === 0 ? " active" : ""}">${tab}</button>`).join("") + '<span class="file-stats">Local workspace file</span>';
+          toolbar.querySelectorAll(".file-tab").forEach((tab) => tab.addEventListener("click", () => {
+            toolbar.querySelectorAll(".file-tab").forEach((button) => button.classList.remove("active"));
+            tab.classList.add("active");
+            renderRepoFile(item.dataset.fileType, tab.textContent, item.dataset.repoFile);
+          }));
+          renderRepoFile(item.dataset.fileType, tabs[0], item.dataset.repoFile);
+        });
+      });
+
+      function openReview() {
+        reviewModal.hidden = false;
+      }
+      document.getElementById("reviewCase").addEventListener("click", openReview);
+      document.getElementById("reviewGenerated").addEventListener("click", openReview);
+      document.getElementById("closeReview").addEventListener("click", () => reviewModal.hidden = true);
+      document.getElementById("reviewInEditor").addEventListener("click", () => showToast("Prototype: full YAML would open in the configured editor."));
+      document.getElementById("saveCase").addEventListener("click", () => {
+        reviewModal.hidden = true;
+        showView("cases");
+        showToast("Case saved to cases/generated and ready for replay.");
+      });
+
+      document.getElementById("learnFsq").addEventListener("click", () => document.getElementById("loopStrip").scrollIntoView({ behavior: "smooth", block: "center" }));
+      document.getElementById("rerunChecks").addEventListener("click", () => showToast("All environment checks passed."));
+
+      function showToast(message) {
+        window.clearTimeout(toastTimer);
+        toastText.textContent = message;
+        toast.hidden = false;
+        toastTimer = window.setTimeout(() => toast.hidden = true, 2600);
+      }
+
+      document.querySelectorAll(".modal-layer").forEach((layer) => layer.addEventListener("click", (event) => {
+        if (event.target === layer) layer.hidden = true;
+      }));
+
+      const previewParams = new URLSearchParams(window.location.search);
+      const previewView = previewParams.get("view");
+      const previewOverlay = previewParams.get("overlay");
+      if (previewView && document.getElementById(previewView)?.classList.contains("page")) showView(previewView);
+      if (previewOverlay === "setup") openSetup(Number(previewParams.get("step") || 0));
+      if (previewOverlay === "folder") folderModal.hidden = false;
+      if (previewOverlay === "run") openRun(previewParams.get("mode") || "explore");
+      if (previewOverlay === "review") openReview();
+      if (previewParams.get("state") === "running") {
+        document.getElementById("deviceRunComposer").hidden = true;
+        document.getElementById("deviceRunProgress").hidden = false;
+      }
+      if (previewParams.get("file") === "fsq") document.querySelector('[data-file-type="fsq"]').click();
+    </script>
+  </body>
+</html>
