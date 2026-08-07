@@ -1105,7 +1105,7 @@
       }
 
       .source-line {
-        --source-line-bg: transparent;
+        --source-line-bg: var(--cp-surface);
         display: grid;
         grid-template-columns: 60px minmax(0, 1fr);
         min-width: 100%;
@@ -1128,7 +1128,6 @@
         padding: 0 12px 0 14px;
         border-right: 1px solid var(--cp-border);
         color: var(--cp-text-soft);
-        opacity: 0.72;
         font-family: Consolas, "Courier New", Courier, monospace;
         font-size: 12px;
         line-height: 1.75;

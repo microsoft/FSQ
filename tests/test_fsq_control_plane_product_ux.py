@@ -53,7 +53,7 @@ def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
     yaml_string_rule = _extract_css_declarations(rules[".yaml-string"])
     yaml_list_marker_rule = _extract_css_declarations(rules[".yaml-list-marker"])
 
-    assert source_line_rule["--source-line-bg"] in {"transparent", "var(--cp-surface)"}
+    assert source_line_rule["--source-line-bg"] == "var(--cp-surface)"
     assert hover_rule["--source-line-bg"] == "var(--cp-surface-soft)"
     assert yaml_key_rule["color"] == "var(--cp-text)"
     assert yaml_key_rule["font-weight"] in {"500", "600"}
@@ -61,7 +61,7 @@ def test_fsq_code_source_viewer_uses_neutral_visual_contract() -> None:
     assert yaml_string_rule["color"] == "var(--cp-link)"
     assert yaml_list_marker_rule["color"] == "var(--cp-text-soft)"
     assert gutter_rule["border-right"] == "1px solid var(--cp-border)"
-    assert float(gutter_rule["opacity"]) < 0.8
+    assert "opacity" not in gutter_rule
     assert indent_rule["background-image"] == "linear-gradient(90deg, var(--cp-border) 0 1px, transparent 1px)"
     assert float(indent_rule["opacity"]) < 0.6
 
