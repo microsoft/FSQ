@@ -3636,6 +3636,8 @@ properties:
 - assertVisible:
     target: Control Plane UX`;
       document.getElementById("yamlPreview").textContent = fsqYamlSource;
+      const filePreview = document.getElementById("filePreview");
+      const codeCopyDefaultLabel = "Copy";
       function escapeSourceHtml(value) {
         return value
           .replaceAll("&", "&amp;")
@@ -3688,10 +3690,55 @@ properties:
           }
           return `<li class="${classes.join(" ")}" data-source-range="${range}"><span class="source-line-number" aria-hidden="true" data-line-number="${index + 1}"></span><span class="source-line-code">${renderYamlLine(line)}</span></li>`;
         });
-        return `<section class="source-viewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button">Wrap lines</button><button type="button">Copy</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
+        return `<section class="source-viewer" id="fsqSourceViewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button" data-code-action="wrap" aria-label="Wrap lines" aria-pressed="false">Wrap lines</button><button type="button" data-code-action="copy" aria-label="${codeCopyDefaultLabel}">${codeCopyDefaultLabel}</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
       }
+      function setCodeActionLabel(button, label) {
+        button.textContent = label;
+        button.setAttribute("aria-label", label);
+      }
+      function setTemporaryCodeActionLabel(button, label, restoreLabel = codeCopyDefaultLabel) {
+        clearTimeout(button.codeActionResetTimer);
+        setCodeActionLabel(button, label);
+        button.codeActionResetTimer = window.setTimeout(() => {
+          if (!button.isConnected) {
+            return;
+          }
+          setCodeActionLabel(button, restoreLabel);
+        }, 1200);
+      }
+      async function handleFsqSourceAction(button) {
+        if (button.dataset.codeAction === "wrap") {
+          const viewer = document.getElementById("fsqSourceViewer");
+          if (!viewer) {
+            return;
+          }
+          const isWrapped = viewer.classList.toggle("wrap-lines");
+          button.setAttribute("aria-pressed", String(isWrapped));
+          return;
+        }
+        if (button.dataset.codeAction !== "copy") {
+          return;
+        }
+        if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+          setTemporaryCodeActionLabel(button, "Copy failed");
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(fsqYamlSource);
+          setTemporaryCodeActionLabel(button, "Copied");
+        } catch (error) {
+          setTemporaryCodeActionLabel(button, "Copy failed");
+        }
+      }
+      filePreview.addEventListener("click", (event) => {
+        const actionButton = event.target.closest("[data-code-action]");
+        if (!actionButton || !filePreview.contains(actionButton)) {
+          return;
+        }
+        void handleFsqSourceAction(actionButton);
+      });
       function renderRepoFile(type, tab, name) {
-        const preview = document.getElementById("filePreview");
+        const preview = filePreview;
         if (type === "fsq" && tab === "Structured") {
           preview.className = "fsq-friendly-preview";
           preview.innerHTML = `
