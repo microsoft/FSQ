@@ -52,12 +52,7 @@ class _NavigationContractParser(HTMLParser):
                 else:
                     self.errors.append(f'footer navigation button "{view}" must be a direct footer child')
 
-        if (
-            tag == "div"
-            and in_primary_nav
-            and parent_tag == "nav"
-            and attributes.get("id") == "workspaceRecents"
-        ):
+        if tag == "div" and in_primary_nav and parent_tag == "nav" and attributes.get("id") == "workspaceRecents":
             self.primary_children.append(("div", "workspaceRecents"))
 
         self._stack.append((tag, attributes))
@@ -109,10 +104,7 @@ def _extract_workbench_section(html: str) -> str:
 
 
 def _extract_select_option_groups(section_html: str) -> list[list[str]]:
-    return [
-        re.findall(r"<option>([^<]+)</option>", select_html)
-        for select_html in re.findall(r'<select class="select">([\s\S]*?)</select>', section_html)
-    ]
+    return [re.findall(r"<option>([^<]+)</option>", select_html) for select_html in re.findall(r'<select class="select">([\s\S]*?)</select>', section_html)]
 
 
 def _extract_source_viewer_css_rules(html: str) -> dict[str, list[str]]:
@@ -142,6 +134,60 @@ def _extract_css_declarations(rule_body: str) -> dict[str, str]:
     return declarations
 
 
+def _extract_css_blocks(css: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    index = 0
+    while index < len(css):
+        while index < len(css) and css[index].isspace():
+            index += 1
+        if index >= len(css):
+            break
+        body_start = css.find("{", index)
+        assert body_start != -1, f"unterminated CSS block starting at: {css[index : index + 40]!r}"
+        header = css[index:body_start].strip()
+        depth = 1
+        body_end = body_start + 1
+        while body_end < len(css) and depth > 0:
+            if css[body_end] == "{":
+                depth += 1
+            elif css[body_end] == "}":
+                depth -= 1
+            body_end += 1
+        assert depth == 0, f"unterminated CSS block for: {header!r}"
+        blocks.append((header, css[body_start + 1 : body_end - 1].strip()))
+        index = body_end
+    return blocks
+
+
+def _extract_media_rule_with_selector(css: str, *, media_condition: str, selector: str) -> tuple[list[str], dict[str, str]]:
+    media_header = f"@media ({media_condition})"
+    for header, body in _extract_css_blocks(css):
+        if header != media_header:
+            continue
+        for selector_group, rule_body in _extract_css_blocks(body):
+            selectors = [candidate.strip() for candidate in selector_group.split(",")]
+            if selector in selectors:
+                return selectors, _extract_css_declarations(rule_body)
+    raise AssertionError(f'missing selector "{selector}" inside {media_header}')
+
+
+def _assert_media_rule_declaration(
+    css: str,
+    *,
+    media_condition: str,
+    selector: str,
+    property_name: str,
+    expected_value: str,
+) -> None:
+    selectors, declarations = _extract_media_rule_with_selector(
+        css,
+        media_condition=media_condition,
+        selector=selector,
+    )
+    actual_value = declarations.get(property_name)
+    assert actual_value == expected_value, f"missing declaration {property_name}: {expected_value} for selector group {selectors} inside @media ({media_condition}); found {declarations}"
+
+
 def _assert_source_gutter_rules_are_opaque(rules: dict[str, list[str]]) -> None:
     shared_gutter_background_rule = _extract_css_declarations(rules[".source-line-number"][0])
     gutter_rule = _extract_css_declarations(rules[".source-line-number"][-1])
@@ -161,10 +207,7 @@ def _assert_source_command_ranges_stay_neutral(rules: dict[str, list[str]]) -> N
         for rule_body in rule_bodies:
             declarations = _extract_css_declarations(rule_body)
             background_declarations = {
-                name: value
-                for name, value in declarations.items()
-                if name.startswith("background")
-                or (name.startswith("--") and ("background" in name or name.endswith("-bg")))
+                name: value for name, value in declarations.items() if name.startswith("background") or (name.startswith("--") and ("background" in name or name.endswith("-bg")))
             }
             if background_declarations:
                 offending_rules[selector] = background_declarations
@@ -486,13 +529,9 @@ class _WorkbenchContractParser(HTMLParser):
             self._text_targets.append(("header_buttons", []))
         elif tag == "button" and "tab" in classes:
             self._text_targets.append(("tab_labels", []))
-        elif tag == "button" and "btn" in classes and any(
-            "workbench-header-actions" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
-        ):
+        elif tag == "button" and "btn" in classes and any("workbench-header-actions" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
             self._text_targets.append(("header_action_buttons", []))
-        elif tag == "dt" and any(
-            "report-meta-list" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
-        ):
+        elif tag == "dt" and any("report-meta-list" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
             self._text_targets.append(("meta_terms", []))
         elif tag == "div" and "phase" in classes:
             self._text_targets.append(("phase_labels", []))
@@ -584,9 +623,7 @@ def _parse_page_layout_contract(html: str) -> dict[str, list[dict[str, str]]]:
     return parser.page_children
 
 
-def _find_page_child_with_class(
-    page_children: dict[str, list[dict[str, str]]], page_id: str, class_name: str
-) -> dict[str, str]:
+def _find_page_child_with_class(page_children: dict[str, list[dict[str, str]]], page_id: str, class_name: str) -> dict[str, str]:
     for child in page_children.get(page_id, []):
         if child.get("class") == class_name:
             return child
@@ -595,7 +632,7 @@ def _find_page_child_with_class(
 
 def _run_workbench_report_state_contract(html: str) -> dict[str, object]:
     start = html.index("const runReports = {")
-    end = html.index("const workspaceNav = document.getElementById(\"workspaceNav\");")
+    end = html.index('const workspaceNav = document.getElementById("workspaceNav");')
     snippet = html[start:end]
     script = f"""
 class FakeClassList {{
@@ -1320,10 +1357,7 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
 
     assert _find_page_child_with_class(page_children, "home", "content-grid")["class"] == "content-grid"
     assert _find_page_child_with_class(page_children, "runs", "content-grid")["class"] == "content-grid"
-    assert (
-        _find_page_child_with_class(page_children, "config", "content-grid environment-grid")["class"]
-        == "content-grid environment-grid"
-    )
+    assert _find_page_child_with_class(page_children, "config", "content-grid environment-grid")["class"] == "content-grid environment-grid"
     settings_content = _find_page_child_with_class(page_children, "settings", "content-grid card")
     assert settings_content["class"] == "content-grid card"
     assert "max-width" not in settings_content.get("style", "")
@@ -1332,17 +1366,41 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
     assert workspace_rule["height"] == "calc(100vh - 76px)"
     assert workspace_rule["grid-template-columns"] == "310px minmax(0, 1fr)"
 
-    assert (
-        _find_page_child_with_class(page_children, "device", "content-grid device-workbench")["class"]
-        == "content-grid device-workbench"
-    )
+    assert _find_page_child_with_class(page_children, "device", "content-grid device-workbench")["class"] == "content-grid device-workbench"
     assert device_workbench_rule["grid-template-columns"] == "430px minmax(520px, 1fr)"
     assert device_workbench_rule["min-height"] == "calc(100vh - 108px)"
     assert device_content_grid_rule["max-width"] == "none"
-    assert re.search(
-        r"@media\s*\(max-width:\s*1120px\)\s*\{[\s\S]*?\.device-workbench,\s*[\s\S]*?grid-template-columns:\s*1fr;",
+    responsive_device_selectors, responsive_device_rule = _extract_media_rule_with_selector(
         css,
+        media_condition="max-width: 1120px",
+        selector=".device-workbench",
     )
+    assert responsive_device_selectors == [".device-workbench", ".structured-case"]
+    assert responsive_device_rule["grid-template-columns"] == "1fr"
+
+
+def test_extract_media_rule_with_selector_rejects_unrelated_one_column_rules() -> None:
+    css = """
+    @media (max-width: 1120px) {
+      .device-workbench,
+      .structured-case {
+        min-height: auto;
+      }
+
+      .report-meta-list {
+        grid-template-columns: 1fr;
+      }
+    }
+    """
+
+    with pytest.raises(AssertionError, match=r"missing declaration .*grid-template-columns.*1fr"):
+        _assert_media_rule_declaration(
+            css,
+            media_condition="max-width: 1120px",
+            selector=".device-workbench",
+            property_name="grid-template-columns",
+            expected_value="1fr",
+        )
 
 
 def test_parse_navigation_contract_rejects_nested_primary_nav_buttons() -> None:
@@ -1435,9 +1493,7 @@ def test_fsq_run_report_structure_matches_approved_contract() -> None:
 
 def test_fsq_run_report_css_uses_two_columns_and_stacks_responsively() -> None:
     css = _extract_style_block(_read_fsq_control_plane_product_ux_html())
-    workbench_layout_rule = _extract_css_declarations(
-        _extract_source_viewer_css_rules(_read_fsq_control_plane_product_ux_html())[".workbench-layout"][0]
-    )
+    workbench_layout_rule = _extract_css_declarations(_extract_source_viewer_css_rules(_read_fsq_control_plane_product_ux_html())[".workbench-layout"][0])
 
     assert workbench_layout_rule["grid-template-columns"] == "280px minmax(0, 1fr)"
     assert re.search(
