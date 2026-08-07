@@ -1955,30 +1955,79 @@
 
       .workbench-header {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        gap: 18px;
+        gap: 24px;
         min-height: 88px;
-        padding: 16px 22px;
+        padding: 18px 22px;
         border-bottom: 1px solid var(--cp-border);
         background: var(--cp-panel-strong);
+      }
+
+      .workbench-header-copy {
+        min-width: 0;
+      }
+
+      .workbench-header-copy .eyebrow {
+        margin-top: 0;
+      }
+
+      .report-title {
+        margin: 0;
+        font-size: 30px;
       }
 
       .back-link {
         display: inline-flex;
         align-items: center;
         gap: 7px;
-        margin-bottom: 6px;
+        margin-bottom: 10px;
         border: 0;
         background: transparent;
         color: var(--cp-text-muted);
         padding: 0;
       }
 
-      .workbench-layout {
-        height: calc(100vh - 164px);
+      .workbench-header-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 10px;
+      }
+
+      .report-meta-list {
         display: grid;
-        grid-template-columns: 330px minmax(440px, 1fr) 360px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        margin: 16px 0 0;
+        padding: 0;
+      }
+
+      .report-meta-item {
+        margin: 0;
+        padding: 11px 12px;
+        border: 1px solid var(--cp-border);
+        border-radius: 0.625rem;
+        background: var(--cp-surface);
+      }
+
+      .report-meta-item dt {
+        color: var(--cp-text-muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+
+      .report-meta-item dd {
+        margin: 6px 0 0;
+        font-weight: 700;
+      }
+
+      .workbench-layout {
+        min-height: calc(100vh - 164px);
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr);
         gap: 1px;
         background: var(--cp-border);
       }
@@ -2043,6 +2092,10 @@
         background: var(--cp-accent-soft);
       }
 
+      .step.active.failed {
+        border-color: var(--cp-danger);
+      }
+
       .step-top {
         display: flex;
         align-items: center;
@@ -2059,7 +2112,7 @@
 
       .evidence-stage {
         display: grid;
-        grid-template-rows: auto minmax(280px, 1fr) auto;
+        grid-template-rows: auto auto auto auto auto;
         min-height: 100%;
         padding: 16px;
         gap: 12px;
@@ -2067,9 +2120,24 @@
 
       .stage-head {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         justify-content: space-between;
-        gap: 10px;
+        gap: 16px;
+      }
+
+      .stage-head h2,
+      .report-card h3,
+      .verification-summary h3,
+      .report-evidence-surface h3 {
+        margin: 0;
+      }
+
+      .evidence-status-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
       }
 
       .tabs {
@@ -2094,6 +2162,31 @@
       .tab.active {
         background: var(--cp-surface);
         color: var(--cp-accent);
+      }
+
+      .report-evidence-surface {
+        display: grid;
+        gap: 14px;
+        padding: 16px;
+        border: 1px solid var(--cp-border-strong);
+        border-radius: 0.875rem;
+        background: var(--cp-surface);
+      }
+
+      .report-evidence-surface-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .report-evidence-reason {
+        margin: 0;
+        padding: 12px;
+        border: 1px solid var(--cp-danger);
+        border-radius: 0.625rem;
+        background: var(--cp-surface-soft);
+        color: var(--cp-text);
       }
 
       .browser-preview {
@@ -2220,35 +2313,33 @@
         background: var(--cp-surface);
       }
 
-      .compare-card strong {
+      .compare-label {
         display: block;
         margin-bottom: 8px;
+        color: var(--cp-text-muted);
         font-size: 11px;
+        letter-spacing: 0.7px;
+        text-transform: uppercase;
       }
 
       .compare-card p {
+        margin: 0;
         color: var(--cp-text-muted);
         font-size: 12px;
       }
 
-      .inspector-body {
+      .report-details-grid {
         display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
-        padding: 14px;
       }
 
-      .inspector-block {
+      .report-card,
+      .verification-summary {
         padding: 13px;
         border: 1px solid var(--cp-border);
         border-radius: 0.625rem;
         background: var(--cp-surface);
-      }
-
-      .inspector-block h3 {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
       }
 
       .kv {
@@ -2269,11 +2360,26 @@
         font-family: Consolas, "Courier New", Courier, monospace;
       }
 
-      .result-callout {
-        border-left: 3px solid var(--cp-success);
+      .verification-grid {
+        display: grid;
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      .verification-block strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--cp-text-muted);
+        font-size: 12px;
+      }
+
+      .verification-block p {
+        margin: 0;
+        line-height: 1.5;
       }
 
       .modal-layer {
+
         position: fixed;
         inset: 0;
         z-index: 100;
@@ -2619,13 +2725,23 @@
           grid-template-columns: 1fr 1fr;
         }
 
-        .workbench-layout {
-          height: auto;
-          grid-template-columns: 280px minmax(0, 1fr);
+        .workbench-header {
+          flex-direction: column;
         }
 
-        .workbench-layout .workbench-panel:last-child {
-          grid-column: 1 / -1;
+        .workbench-header-actions {
+          justify-content: flex-start;
+        }
+
+        .report-meta-list,
+        .report-details-grid,
+        .compare {
+          grid-template-columns: 1fr;
+        }
+
+        .workbench-layout {
+          min-height: auto;
+          grid-template-columns: 1fr;
         }
 
         .device-workbench,
@@ -2733,6 +2849,28 @@
 
         .setup-aside {
           display: none;
+        }
+
+        .workbench-header {
+          padding: 16px 14px;
+        }
+
+        .report-title {
+          font-size: 26px;
+        }
+
+        .report-meta-list {
+          grid-template-columns: 1fr;
+        }
+
+        .stage-head,
+        .report-evidence-surface-head {
+          flex-direction: column;
+        }
+
+        .tabs {
+          width: 100%;
+          overflow: auto;
         }
 
         .workbench-layout {
@@ -2870,15 +3008,15 @@
                   <button class="btn small" data-open-workspace>Open workspace</button>
                 </div>
                 <div class="card-body list">
-                  <button class="list-row" data-open-workbench>
+                  <button class="list-row" data-open-workbench data-run-title="Create project flow" data-run-id="run_20260807_135642" data-run-mode="AI explore" data-run-platform="Web" data-run-duration="1m 42s" data-run-status="success" data-run-tone="success">
                     <span><strong>Create project flow</strong><small>AI explore · Web · 4m ago</small></span>
                     <span class="badge success">success</span>
                   </button>
-                  <button class="list-row" data-open-workbench data-failed-run>
+                  <button class="list-row" data-open-workbench data-failed-run data-report-template="failed" data-run-title="Checkout smoke" data-run-id="run_20260807_131914" data-run-mode="Strict replay" data-run-platform="Web" data-run-duration="34s" data-run-status="failed" data-run-tone="failed">
                     <span><strong>Checkout smoke</strong><small>Strict replay · Web · 38m ago</small></span>
                     <span class="badge failed">failed</span>
                   </button>
-                  <button class="list-row" data-open-workbench>
+                  <button class="list-row" data-open-workbench data-run-title="Settings profile" data-run-id="run_20260806_172305" data-run-mode="AI explore" data-run-platform="macOS" data-run-duration="2m 09s" data-run-status="inconclusive" data-run-tone="warning">
                     <span><strong>Settings profile</strong><small>AI explore · macOS · yesterday</small></span>
                     <span class="badge warning">inconclusive</span>
                   </button>
@@ -3058,11 +3196,11 @@
               <table class="table">
                 <thead><tr><th>Run</th><th>Mode</th><th>Platform</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
                 <tbody>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Create project flow</strong><small>run_20260807_135642</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>Web</td><td><span class="badge success">success</span></td><td>1m 42s</td><td>4 min ago</td></tr>
-                  <tr data-open-workbench data-failed-run><td class="primary-cell"><strong>Checkout smoke</strong><small>run_20260807_131914</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Web</td><td><span class="badge failed">failed</span></td><td>34s</td><td>38 min ago</td></tr>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Settings profile</strong><small>run_20260806_172305</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>macOS</td><td><span class="badge warning">inconclusive</span></td><td>2m 09s</td><td>Yesterday</td></tr>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Onboarding navigation</strong><small>run_20260806_145522</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Android</td><td><span class="badge success">success</span></td><td>58s</td><td>Yesterday</td></tr>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Desktop launch</strong><small>run_20260805_112011</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Windows</td><td><span class="badge success">success</span></td><td>27s</td><td>2 days ago</td></tr>
+                  <tr data-open-workbench data-run-title="Create project flow" data-run-id="run_20260807_135642" data-run-mode="AI explore" data-run-platform="Web" data-run-duration="1m 42s" data-run-status="success" data-run-tone="success"><td class="primary-cell"><strong>Create project flow</strong><small>run_20260807_135642</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>Web</td><td><span class="badge success">success</span></td><td>1m 42s</td><td>4 min ago</td></tr>
+                  <tr data-open-workbench data-failed-run data-report-template="failed" data-run-title="Checkout smoke" data-run-id="run_20260807_131914" data-run-mode="Strict replay" data-run-platform="Web" data-run-duration="34s" data-run-status="failed" data-run-tone="failed"><td class="primary-cell"><strong>Checkout smoke</strong><small>run_20260807_131914</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Web</td><td><span class="badge failed">failed</span></td><td>34s</td><td>38 min ago</td></tr>
+                  <tr data-open-workbench data-run-title="Settings profile" data-run-id="run_20260806_172305" data-run-mode="AI explore" data-run-platform="macOS" data-run-duration="2m 09s" data-run-status="inconclusive" data-run-tone="warning"><td class="primary-cell"><strong>Settings profile</strong><small>run_20260806_172305</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>macOS</td><td><span class="badge warning">inconclusive</span></td><td>2m 09s</td><td>Yesterday</td></tr>
+                  <tr data-open-workbench data-run-title="Onboarding navigation" data-run-id="run_20260806_145522" data-run-mode="Strict replay" data-run-platform="Android" data-run-duration="58s" data-run-status="success" data-run-tone="success"><td class="primary-cell"><strong>Onboarding navigation</strong><small>run_20260806_145522</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Android</td><td><span class="badge success">success</span></td><td>58s</td><td>Yesterday</td></tr>
+                  <tr data-open-workbench data-run-title="Desktop launch" data-run-id="run_20260805_112011" data-run-mode="Strict replay" data-run-platform="Windows" data-run-duration="27s" data-run-status="success" data-run-tone="success"><td class="primary-cell"><strong>Desktop launch</strong><small>run_20260805_112011</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Windows</td><td><span class="badge success">success</span></td><td>27s</td><td>2 days ago</td></tr>
                 </tbody>
               </table>
             </div>
@@ -3171,64 +3309,111 @@
 
         <section class="page workbench-page" id="workbench">
           <div class="workbench-header">
-            <div>
-              <button class="back-link" data-view-jump="runs">← Back to runs</button>
-              <div class="status-line"><h2 id="runTitle" style="margin: 0">Create project flow</h2><span class="tag">AI explore</span><span class="tag success" id="runStatus">success</span></div>
-              <p class="muted mono" style="margin-top: 5px">run_20260807_135642 · Web · 1m 42s</p>
+            <div class="workbench-header-copy">
+              <button class="back-link" data-view-jump="runs">← Back to Runs</button>
+              <p class="eyebrow" id="reportContext">RUN REPORT</p>
+              <h1 class="report-title" id="runTitle">Create project flow</h1>
+              <dl class="report-meta-list">
+                <div class="report-meta-item"><dt>Run ID</dt><dd class="mono" id="runId">run_20260807_135642</dd></div>
+                <div class="report-meta-item"><dt>Mode</dt><dd id="runMode">AI explore</dd></div>
+                <div class="report-meta-item"><dt>Platform</dt><dd id="runPlatform">Web</dd></div>
+                <div class="report-meta-item"><dt>Duration</dt><dd id="runDuration">1m 42s</dd></div>
+                <div class="report-meta-item"><dt>Final status</dt><dd><span class="tag success" id="runStatus">success</span></dd></div>
+              </dl>
             </div>
-            <div class="inline-actions"><button class="btn">Open report</button><button class="btn">Retry</button><button class="btn primary" id="reviewGenerated">Review generated Case</button></div>
+            <div class="workbench-header-actions">
+              <button class="btn" id="reportRetry">Retry</button>
+              <button class="btn" id="reportOpenEvidence">Open evidence folder</button>
+              <button class="btn primary" id="reportExport">Export report</button>
+            </div>
           </div>
           <div class="workbench-layout">
             <aside class="workbench-panel">
-              <div class="panel-title"><h2>Timeline</h2><p class="muted">Plan, execute, verify</p></div>
+              <div class="panel-title"><h2>Execution timeline</h2><p class="muted">Planning, execution, and verification evidence.</p></div>
               <div class="timeline">
                 <div class="phase">Planning</div>
-                <button class="step" data-step-name="Pre-plan generated" data-step-detail="FSQ converted the goal into three key actions and one final verification goal."><span class="step-top"><strong>Pre-plan generated</strong><span class="tag success">passed</span></span><small>3 key actions · verification goal</small></button>
+                <button class="step" id="reportStep0" data-step-slot="0"><span class="step-top"><strong id="reportStepName0">Pre-plan generated</strong><span class="tag success" id="reportStepStatus0">passed</span></span><small id="reportStepMeta0">3 key actions · verification goal</small></button>
                 <div class="phase">Execution</div>
-                <button class="step" data-step-name="startBrowser" data-step-detail="Chrome launched through the Playwright harness."><span class="step-top"><strong>startBrowser</strong><span class="tag success">passed</span></span><small>setup · after evidence</small></button>
-                <button class="step" data-step-name="navigateTo projects" data-step-detail="Navigated to the project list and captured the initial UI state."><span class="step-top"><strong>navigateTo projects</strong><span class="tag success">passed</span></span><small>action · replayable</small></button>
-                <button class="step" data-step-name="clickOn New Project" data-step-detail="The New Project action opened the creation form."><span class="step-top"><strong>clickOn New Project</strong><span class="tag success">passed</span></span><small>action · replayable</small></button>
-                <button class="step" data-step-name="typeText project name" data-step-detail="Entered a non-secret project name into the target field."><span class="step-top"><strong>typeText project name</strong><span class="tag success">passed</span></span><small>action · safe parameters</small></button>
-                <button class="step active" data-step-name="assertVisible project row" data-step-detail="The after evidence contains the expected project row."><span class="step-top"><strong>assertVisible project row</strong><span class="tag success">passed</span></span><small>assertion · before/after evidence</small></button>
+                <button class="step" id="reportStep1" data-step-slot="1"><span class="step-top"><strong id="reportStepName1">startBrowser</strong><span class="tag success" id="reportStepStatus1">passed</span></span><small id="reportStepMeta1">setup · after evidence</small></button>
+                <button class="step" id="reportStep2" data-step-slot="2"><span class="step-top"><strong id="reportStepName2">navigateTo projects</strong><span class="tag success" id="reportStepStatus2">passed</span></span><small id="reportStepMeta2">action · replayable</small></button>
+                <button class="step" id="reportStep3" data-step-slot="3"><span class="step-top"><strong id="reportStepName3">clickOn New Project</strong><span class="tag success" id="reportStepStatus3">passed</span></span><small id="reportStepMeta3">action · replayable</small></button>
+                <button class="step" id="reportStep4" data-step-slot="4"><span class="step-top"><strong id="reportStepName4">typeText project name</strong><span class="tag success" id="reportStepStatus4">passed</span></span><small id="reportStepMeta4">action · safe parameters</small></button>
+                <button class="step active" id="reportStep5" data-step-slot="5"><span class="step-top"><strong id="reportStepName5">assertVisible project row</strong><span class="tag success" id="reportStepStatus5">passed</span></span><small id="reportStepMeta5">assertion · before/after evidence</small></button>
                 <div class="phase">Verification</div>
-                <button class="step" data-step-name="Evidence verifier" data-step-detail="The evidence bundle supports the final verification goal."><span class="step-top"><strong>Evidence verifier</strong><span class="tag success">success</span></span><small>goal satisfied · report ready</small></button>
+                <button class="step" id="reportStep6" data-step-slot="6"><span class="step-top"><strong id="reportStepName6">Evidence verifier</strong><span class="tag success" id="reportStepStatus6">success</span></span><small id="reportStepMeta6">goal satisfied · report ready</small></button>
               </div>
             </aside>
             <section class="workbench-panel">
               <div class="evidence-stage">
                 <div class="stage-head">
-                  <div><h2 id="evidenceTitle">assertVisible project row</h2><p class="muted" id="evidenceDetail">The after evidence contains the expected project row.</p></div>
-                  <div class="tabs"><button class="tab active">Screenshot</button><button class="tab">UI Tree</button><button class="tab">Replay</button></div>
+                  <div>
+                    <p class="eyebrow">Selected step</p>
+                    <h2 id="evidenceTitle">assertVisible project row</h2>
+                    <p class="muted" id="evidenceDetail">The after evidence contains the expected project row.</p>
+                    <div class="evidence-status-line"><span class="tag success" id="evidenceStepStatus">passed</span><span class="muted" id="evidenceSurfaceStatus">After evidence available · 4 artifacts</span></div>
+                  </div>
+                  <div class="tabs"><button class="tab active">Screen</button><button class="tab">UI Tree</button><button class="tab">Logs</button></div>
                 </div>
-                <div class="browser-preview">
-                  <div class="browser-bar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><div class="address">https://app.example.test/projects</div></div>
-                  <div class="mock-app">
-                    <div class="mock-sidebar"><span class="mock-line"></span><span class="mock-line"></span><span class="mock-line"></span><span class="mock-line"></span></div>
-                    <div class="mock-main">
-                      <div class="mock-toolbar"><span class="mock-heading"></span><span class="mock-cta"></span></div>
-                      <div class="mock-projects">
-                        <div class="mock-row"><span></span><span></span><span></span></div>
-                        <div class="mock-row selected"><span></span><span></span><span></span></div>
-                        <div class="mock-row"><span></span><span></span><span></span></div>
+                <section class="report-evidence-surface">
+                  <div class="report-evidence-surface-head"><div><h3 id="evidenceSurfaceTitle">Captured evidence</h3><p class="muted" id="evidenceSurfaceNote">The selected row appears in the project list after submission.</p></div><span class="tag success" id="evidenceOutcome">evidence-backed</span></div>
+                  <p class="report-evidence-reason" id="evidenceMissingReason" hidden></p>
+                  <div class="browser-preview">
+                    <div class="browser-bar"><span class="window-dot"></span><span class="window-dot"></span><span class="window-dot"></span><div class="address">https://app.example.test/projects</div></div>
+                    <div class="mock-app">
+                      <div class="mock-sidebar"><span class="mock-line"></span><span class="mock-line"></span><span class="mock-line"></span><span class="mock-line"></span></div>
+                      <div class="mock-main">
+                        <div class="mock-toolbar"><span class="mock-heading"></span><span class="mock-cta"></span></div>
+                        <div class="mock-projects">
+                          <div class="mock-row"><span></span><span></span><span></span></div>
+                          <div class="mock-row selected"><span></span><span></span><span></span></div>
+                          <div class="mock-row"><span></span><span></span><span></span></div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                </section>
                 <div class="compare">
-                  <div class="compare-card"><strong>Before · 13:57:18.204</strong><p>Project list did not contain “Control Plane UX”.</p></div>
-                  <div class="compare-card"><strong>After · 13:57:19.871</strong><p>New matching row is visible and selected.</p></div>
+                  <div class="compare-card"><strong class="compare-label" id="evidenceBeforeLabel">Before</strong><p id="evidenceBeforeText">Project list did not contain “Control Plane UX”.</p></div>
+                  <div class="compare-card"><strong class="compare-label" id="evidenceAfterLabel">After</strong><p id="evidenceAfterText">New matching row is visible and selected.</p></div>
                 </div>
+                <div class="report-details-grid">
+                  <section class="report-card">
+                    <h3>Action details</h3>
+                    <dl class="kv">
+                      <dt>Capability</dt>
+                      <dd id="evidenceCapability">assert_visible</dd>
+                      <dt>Target</dt>
+                      <dd id="evidenceTarget">Control Plane UX</dd>
+                      <dt>Kind</dt>
+                      <dd id="evidenceKind">assertion</dd>
+                      <dt>Duration</dt>
+                      <dd id="evidenceStepDuration">1,667 ms</dd>
+                    </dl>
+                  </section>
+                  <section class="report-card">
+                    <h3>Artifacts <span class="tag" id="evidenceArtifactCount">4 artifacts</span></h3>
+                    <dl class="kv">
+                      <dt>Before</dt>
+                      <dd id="evidenceBeforeArtifact">before-screenshot.png</dd>
+                      <dt>After</dt>
+                      <dd id="evidenceAfterArtifact">after-screenshot.png</dd>
+                      <dt>UI tree</dt>
+                      <dd id="evidenceUiTreeArtifact">after-ui-tree.json</dd>
+                      <dt>Logs</dt>
+                      <dd id="evidenceLogArtifact">playwright.log</dd>
+                    </dl>
+                  </section>
+                </div>
+                <section class="verification-summary">
+                  <h3>Verification summary</h3>
+                  <div class="verification-grid">
+                    <div class="verification-block"><strong>Verification goal</strong><p id="verificationGoal">Confirm that the newly created project appears in the project list.</p></div>
+                    <div class="verification-block"><strong>Key actions</strong><p class="mono" id="verificationKeyActions">startBrowser → navigateTo projects → clickOn New Project → typeText project name → assertVisible project row</p></div>
+                    <div class="verification-block"><strong>Verifier conclusion</strong><p id="verifierConclusion">Verification passed because the after evidence shows the new project row in the selected state.</p></div>
+                  </div>
+                </section>
               </div>
             </section>
-            <aside class="workbench-panel">
-              <div class="panel-title"><h2>Inspector</h2><p class="muted">Facts for selected step</p></div>
-              <div class="inspector-body">
-                <div class="inspector-block result-callout"><h3>Step result <span class="tag success">passed</span></h3><p class="muted">Expected UI state is present in captured evidence.</p></div>
-                <div class="inspector-block"><h3>Action</h3><dl class="kv"><dt>capability</dt><dd>assert_visible</dd><dt>target</dt><dd>Control Plane UX</dd><dt>kind</dt><dd>assertion</dd><dt>duration</dt><dd>1,667 ms</dd></dl></div>
-                <div class="inspector-block"><h3>Evidence <span class="tag">4 artifacts</span></h3><dl class="kv"><dt>before</dt><dd>screenshot.png</dd><dt>after</dt><dd>screenshot.png</dd><dt>UI tree</dt><dd>after.xml</dd><dt>diff</dt><dd>ui-tree.diff</dd></dl></div>
-                <div class="inspector-block"><h3>Run result</h3><p>The verifier found sufficient evidence that the newly created project appears in the project list.</p><div class="inline-actions" style="margin-top: 12px"><span class="tag success">goal satisfied</span><span class="tag">evidence-backed</span></div></div>
-              </div>
-            </aside>
           </div>
         </section>
       </main>
@@ -3414,16 +3599,431 @@
           button.classList.add("active");
         });
       });
+      const runReports = {
+        success: {
+          context: "RUN REPORT",
+          meta: {
+            title: "Create project flow",
+            runId: "run_20260807_135642",
+            mode: "AI explore",
+            platform: "Web",
+            duration: "1m 42s",
+            status: "success",
+            statusTone: "success",
+          },
+          defaultStepIndex: 5,
+          verification: {
+            goal: "Confirm that the newly created project appears in the project list.",
+            keyActions: "startBrowser → navigateTo projects → clickOn New Project → typeText project name → assertVisible project row",
+            conclusion: "Verification passed because the after evidence shows the new project row in the selected state.",
+          },
+          steps: [
+            {
+              name: "Pre-plan generated",
+              status: "passed",
+              tone: "success",
+              meta: "3 key actions · verification goal",
+              detail: "FSQ converted the goal into three key actions and one final verification goal.",
+              surfaceStatus: "Plan output · 2 artifacts",
+              surfaceTitle: "Planning snapshot",
+              surfaceNote: "The run captured a structured plan before any UI interaction.",
+              outcome: "plan ready",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Inputs",
+              beforeText: "Goal, platform, and workspace context were assembled for planning.",
+              afterLabel: "Output",
+              afterText: "Three key actions and one verification goal were produced.",
+              action: { capability: "planner", target: "Create project flow", kind: "planning", duration: "241 ms" },
+              artifacts: { count: "2 artifacts", before: "goal.txt", after: "pre-plan.json", uiTree: "n/a", logs: "planner.log" },
+            },
+            {
+              name: "startBrowser",
+              status: "passed",
+              tone: "success",
+              meta: "setup · after evidence",
+              detail: "Chrome launched through the Playwright harness.",
+              surfaceStatus: "Browser ready · 3 artifacts",
+              surfaceTitle: "Browser launch evidence",
+              surfaceNote: "The browser session started on the Projects route and captured the first stable surface.",
+              outcome: "browser ready",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "No active browser page was open for the run.",
+              afterLabel: "After",
+              afterText: "Chrome launched and loaded the project shell.",
+              action: { capability: "start_browser", target: "Chrome · Local", kind: "setup", duration: "1.2 s" },
+              artifacts: { count: "3 artifacts", before: "n/a", after: "browser-start.png", uiTree: "browser-start.json", logs: "playwright.log" },
+            },
+            {
+              name: "navigateTo projects",
+              status: "passed",
+              tone: "success",
+              meta: "action · replayable",
+              detail: "Navigated to the project list and captured the initial UI state.",
+              surfaceStatus: "Initial evidence · 4 artifacts",
+              surfaceTitle: "Project list capture",
+              surfaceNote: "The Projects page loaded and preserved the baseline list before creation.",
+              outcome: "baseline captured",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "The browser was ready with no project list in view.",
+              afterLabel: "After",
+              afterText: "The Projects page loaded and the baseline list was captured.",
+              action: { capability: "navigate_to", target: "https://app.example.test/projects", kind: "action", duration: "927 ms" },
+              artifacts: { count: "4 artifacts", before: "browser-start.png", after: "projects-list.png", uiTree: "projects-list.json", logs: "playwright.log" },
+            },
+            {
+              name: "clickOn New Project",
+              status: "passed",
+              tone: "success",
+              meta: "action · replayable",
+              detail: "The New Project action opened the creation form.",
+              surfaceStatus: "Dialog visible · 4 artifacts",
+              surfaceTitle: "Creation form evidence",
+              surfaceNote: "The modal form became visible and ready for text entry.",
+              outcome: "form opened",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "The Projects list was visible with the Create button idle.",
+              afterLabel: "After",
+              afterText: "The New Project form opened on top of the list.",
+              action: { capability: "click_on", target: "New Project", kind: "action", duration: "514 ms" },
+              artifacts: { count: "4 artifacts", before: "projects-list.png", after: "create-project-form.png", uiTree: "create-project-form.json", logs: "playwright.log" },
+            },
+            {
+              name: "typeText project name",
+              status: "passed",
+              tone: "success",
+              meta: "action · safe parameters",
+              detail: "Entered a non-secret project name into the target field.",
+              surfaceStatus: "Form updated · 4 artifacts",
+              surfaceTitle: "Typed input evidence",
+              surfaceNote: "The project-name field shows the authored value before submission.",
+              outcome: "input captured",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "The modal form was empty and ready for input.",
+              afterLabel: "After",
+              afterText: "The Project name field contains Control Plane UX.",
+              action: { capability: "type_text", target: "Project name", kind: "action", duration: "378 ms" },
+              artifacts: { count: "4 artifacts", before: "create-project-form.png", after: "typed-project-name.png", uiTree: "typed-project-name.json", logs: "playwright.log" },
+            },
+            {
+              name: "assertVisible project row",
+              status: "passed",
+              tone: "success",
+              meta: "assertion · before/after evidence",
+              detail: "The after evidence contains the expected project row.",
+              surfaceStatus: "After evidence available · 4 artifacts",
+              surfaceTitle: "Captured evidence",
+              surfaceNote: "The selected row appears in the project list after submission.",
+              outcome: "evidence-backed",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "Project list did not contain “Control Plane UX”.",
+              afterLabel: "After",
+              afterText: "New matching row is visible and selected.",
+              action: { capability: "assert_visible", target: "Control Plane UX", kind: "assertion", duration: "1,667 ms" },
+              artifacts: { count: "4 artifacts", before: "before-screenshot.png", after: "after-screenshot.png", uiTree: "after-ui-tree.json", logs: "playwright.log" },
+            },
+            {
+              name: "Evidence verifier",
+              status: "success",
+              tone: "success",
+              meta: "goal satisfied · report ready",
+              detail: "The evidence bundle supports the final verification goal.",
+              surfaceStatus: "Verifier result · 3 artifacts",
+              surfaceTitle: "Verifier evidence",
+              surfaceNote: "The verifier consumed the step evidence and emitted a run-level conclusion.",
+              outcome: "goal satisfied",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Goal",
+              beforeText: "Show that the newly created project appears in the project list.",
+              afterLabel: "Conclusion",
+              afterText: "The verifier confirmed the goal from the evidence bundle.",
+              action: { capability: "verifier", target: "Create project flow goal", kind: "verification", duration: "512 ms" },
+              artifacts: { count: "3 artifacts", before: "verification-goal.txt", after: "verification-report.md", uiTree: "n/a", logs: "verifier.log" },
+            },
+          ],
+        },
+        failed: {
+          context: "RUN REPORT · Failed",
+          meta: {
+            title: "Checkout smoke",
+            runId: "run_20260807_131914",
+            mode: "Strict replay",
+            platform: "Web",
+            duration: "34s",
+            status: "failed",
+            statusTone: "failed",
+          },
+          defaultStepIndex: 5,
+          verification: {
+            goal: "Confirm that checkout shows a confirmation banner and stores the order ID.",
+            keyActions: "startBrowser → navigateTo checkout → typeText card details → clickOn Submit order → assertVisible checkout confirmation",
+            conclusion: "Verification failed because the confirmation banner never became visible and the run ended without after evidence for the final assertion.",
+          },
+          steps: [
+            {
+              name: "Pre-plan generated",
+              status: "passed",
+              tone: "success",
+              meta: "case validation · 1 verification goal",
+              detail: "FSQ validated the strict replay case and extracted the run goal.",
+              surfaceStatus: "Case ready · 2 artifacts",
+              surfaceTitle: "Strict replay plan",
+              surfaceNote: "The case and verification goal were loaded before execution.",
+              outcome: "case ready",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Inputs",
+              beforeText: "Checkout smoke case and run target were available.",
+              afterLabel: "Output",
+              afterText: "Replay commands and the checkout verification goal were prepared.",
+              action: { capability: "case_loader", target: "Checkout smoke", kind: "planning", duration: "118 ms" },
+              artifacts: { count: "2 artifacts", before: "checkout-smoke.codex.yaml", after: "replay-plan.json", uiTree: "n/a", logs: "replay.log" },
+            },
+            {
+              name: "startBrowser",
+              status: "passed",
+              tone: "success",
+              meta: "setup · after evidence",
+              detail: "Chrome launched through the Playwright harness.",
+              surfaceStatus: "Browser ready · 3 artifacts",
+              surfaceTitle: "Browser launch evidence",
+              surfaceNote: "The browser session started on the Checkout route.",
+              outcome: "browser ready",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "No active browser page was open for the run.",
+              afterLabel: "After",
+              afterText: "Chrome launched and loaded the checkout shell.",
+              action: { capability: "start_browser", target: "Chrome · Local", kind: "setup", duration: "1.0 s" },
+              artifacts: { count: "3 artifacts", before: "n/a", after: "browser-start.png", uiTree: "browser-start.json", logs: "playwright.log" },
+            },
+            {
+              name: "navigateTo checkout",
+              status: "passed",
+              tone: "success",
+              meta: "action · replayable",
+              detail: "Navigated to the checkout flow and captured the initial state.",
+              surfaceStatus: "Initial evidence · 4 artifacts",
+              surfaceTitle: "Checkout baseline",
+              surfaceNote: "The checkout route loaded with the order form ready.",
+              outcome: "baseline captured",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "The browser was ready with no checkout fields in focus.",
+              afterLabel: "After",
+              afterText: "The checkout form loaded and baseline evidence was captured.",
+              action: { capability: "navigate_to", target: "https://app.example.test/checkout", kind: "action", duration: "804 ms" },
+              artifacts: { count: "4 artifacts", before: "browser-start.png", after: "checkout-page.png", uiTree: "checkout-page.json", logs: "playwright.log" },
+            },
+            {
+              name: "typeText card details",
+              status: "passed",
+              tone: "success",
+              meta: "action · replayable",
+              detail: "Filled the required card fields without exposing secrets in the report.",
+              surfaceStatus: "Form updated · 4 artifacts",
+              surfaceTitle: "Checkout input evidence",
+              surfaceNote: "The checkout form reflects the replayed card details with secrets masked.",
+              outcome: "input captured",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "Card fields were empty and focused on the first input.",
+              afterLabel: "After",
+              afterText: "The masked checkout fields contain the replayed values.",
+              action: { capability: "type_text", target: "Card details", kind: "action", duration: "1.4 s" },
+              artifacts: { count: "4 artifacts", before: "checkout-page.png", after: "typed-card-details.png", uiTree: "typed-card-details.json", logs: "playwright.log" },
+            },
+            {
+              name: "clickOn Submit order",
+              status: "passed",
+              tone: "success",
+              meta: "action · replayable",
+              detail: "Submitted the checkout form and waited for confirmation evidence.",
+              surfaceStatus: "Submission sent · 4 artifacts",
+              surfaceTitle: "Submission evidence",
+              surfaceNote: "The submit action completed and the browser began waiting for confirmation UI.",
+              outcome: "submission sent",
+              outcomeTone: "success",
+              missingReason: "",
+              beforeLabel: "Before",
+              beforeText: "The checkout form was complete and ready for submission.",
+              afterLabel: "After",
+              afterText: "The order submit action completed and the page began transitioning.",
+              action: { capability: "click_on", target: "Submit order", kind: "action", duration: "612 ms" },
+              artifacts: { count: "4 artifacts", before: "typed-card-details.png", after: "submit-order.png", uiTree: "submit-order.json", logs: "playwright.log" },
+            },
+            {
+              name: "assertVisible checkout confirmation",
+              status: "failed",
+              tone: "failed",
+              meta: "assertion · missing after evidence",
+              detail: "The confirmation banner never became visible before the navigation timeout.",
+              surfaceStatus: "After evidence missing · 3 artifacts",
+              surfaceTitle: "Failed evidence capture",
+              surfaceNote: "The run preserved the last stable before evidence and the timeout log.",
+              outcome: "verification blocked",
+              outcomeTone: "failed",
+              missingReason: "Missing after evidence: the page navigation timed out before FSQ could capture the post-submit assertion state.",
+              beforeLabel: "Before",
+              beforeText: "Checkout submission completed, but the confirmation banner was not yet visible.",
+              afterLabel: "After",
+              afterText: "After capture unavailable because the page navigation timed out before the assertion could record evidence.",
+              action: { capability: "assert_visible", target: "Order confirmation banner", kind: "assertion", duration: "10,000 ms timeout" },
+              artifacts: { count: "3 artifacts", before: "before-screenshot.png", after: "missing · timed out", uiTree: "before-ui-tree.json", logs: "playwright-timeout.log" },
+            },
+            {
+              name: "Evidence verifier",
+              status: "skipped",
+              tone: "warning",
+              meta: "report failed · verification blocked",
+              detail: "The report recorded the failed assertion and preserved the verifier summary.",
+              surfaceStatus: "Verifier summary · failure recorded",
+              surfaceTitle: "Verifier summary",
+              surfaceNote: "The verifier could not prove the goal from the captured evidence.",
+              outcome: "goal not satisfied",
+              outcomeTone: "failed",
+              missingReason: "",
+              beforeLabel: "Goal",
+              beforeText: "Show checkout confirmation and persist the order ID.",
+              afterLabel: "Result",
+              afterText: "The goal could not be proven because confirmation evidence is missing.",
+              action: { capability: "verifier", target: "Checkout completion goal", kind: "verification", duration: "412 ms" },
+              artifacts: { count: "2 artifacts", before: "verification-goal.txt", after: "verification-report.md", uiTree: "n/a", logs: "verifier.log" },
+            },
+          ],
+        },
+      };
+
+      const reportSteps = [...document.querySelectorAll(".step")];
+      let activeRunReportKey = "success";
+      let activeRunStepIndex = runReports.success.defaultStepIndex;
+
+      function setText(id, value) {
+        const element = document.getElementById(id);
+        if (element) {
+          element.textContent = value;
+        }
+      }
+
+      function applyTag(id, tone, text) {
+        const element = document.getElementById(id);
+        if (!element) {
+          return;
+        }
+        element.textContent = text;
+        element.className = tone ? `tag ${tone}` : "tag";
+      }
+
+      function renderReportHeader(report, overrides = {}) {
+        const meta = { ...report.meta, ...overrides };
+        setText("reportContext", report.context);
+        setText("runTitle", meta.title);
+        setText("runId", meta.runId);
+        setText("runMode", meta.mode);
+        setText("runPlatform", meta.platform);
+        setText("runDuration", meta.duration);
+        applyTag("runStatus", meta.statusTone, meta.status);
+      }
+
+      function renderReportTimeline(report) {
+        report.steps.forEach((step, index) => {
+          setText(`reportStepName${index}`, step.name);
+          setText(`reportStepMeta${index}`, step.meta);
+          applyTag(`reportStepStatus${index}`, step.tone, step.status);
+          const button = document.getElementById(`reportStep${index}`);
+          button.className = `step${step.tone === "failed" ? " failed" : ""}${index === activeRunStepIndex ? " active" : ""}`;
+          button.dataset.stepSlot = String(index);
+        });
+      }
+
+      function renderReportEvidence(report, stepIndex) {
+        const step = report.steps[stepIndex];
+        setText("evidenceTitle", step.name);
+        setText("evidenceDetail", step.detail);
+        setText("evidenceSurfaceStatus", step.surfaceStatus);
+        setText("evidenceSurfaceTitle", step.surfaceTitle);
+        setText("evidenceSurfaceNote", step.surfaceNote);
+        applyTag("evidenceStepStatus", step.tone, step.status);
+        applyTag("evidenceOutcome", step.outcomeTone, step.outcome);
+        const missingReason = document.getElementById("evidenceMissingReason");
+        missingReason.hidden = !step.missingReason;
+        missingReason.textContent = step.missingReason;
+        setText("evidenceBeforeLabel", step.beforeLabel);
+        setText("evidenceBeforeText", step.beforeText);
+        setText("evidenceAfterLabel", step.afterLabel);
+        setText("evidenceAfterText", step.afterText);
+        setText("evidenceCapability", step.action.capability);
+        setText("evidenceTarget", step.action.target);
+        setText("evidenceKind", step.action.kind);
+        setText("evidenceStepDuration", step.action.duration);
+        setText("evidenceArtifactCount", step.artifacts.count);
+        setText("evidenceBeforeArtifact", step.artifacts.before);
+        setText("evidenceAfterArtifact", step.artifacts.after);
+        setText("evidenceUiTreeArtifact", step.artifacts.uiTree);
+        setText("evidenceLogArtifact", step.artifacts.logs);
+        setText("verificationGoal", report.verification.goal);
+        setText("verificationKeyActions", report.verification.keyActions);
+        setText("verifierConclusion", report.verification.conclusion);
+      }
+
+      function renderRunReport(reportKey, overrides = {}) {
+        activeRunReportKey = reportKey;
+        activeRunStepIndex = runReports[reportKey].defaultStepIndex;
+        const report = runReports[reportKey];
+        renderReportHeader(report, overrides);
+        renderReportTimeline(report);
+        renderReportEvidence(report, activeRunStepIndex);
+      }
+
+      function openRunReport(target, reportKey) {
+        renderRunReport(reportKey, {
+          title: target.dataset.runTitle || runReports[reportKey].meta.title,
+          runId: target.dataset.runId || runReports[reportKey].meta.runId,
+          mode: target.dataset.runMode || runReports[reportKey].meta.mode,
+          platform: target.dataset.runPlatform || runReports[reportKey].meta.platform,
+          duration: target.dataset.runDuration || runReports[reportKey].meta.duration,
+          status: target.dataset.runStatus || runReports[reportKey].meta.status,
+          statusTone: target.dataset.runTone || runReports[reportKey].meta.statusTone,
+        });
+        showView("workbench");
+      }
+
       document.querySelectorAll("[data-open-workbench]").forEach((target) => {
         target.addEventListener("click", () => {
-          const failed = target.hasAttribute("data-failed-run");
-          document.getElementById("runTitle").textContent = failed ? "Checkout smoke" : "Create project flow";
-          const status = document.getElementById("runStatus");
-          status.textContent = failed ? "failed" : "success";
-          status.className = `tag ${failed ? "failed" : "success"}`;
-          showView("workbench");
+          const reportKey = target.dataset.reportTemplate || (target.hasAttribute("data-failed-run") ? "failed" : "success");
+          openRunReport(target, reportKey);
         });
       });
+
+      reportSteps.forEach((step) => step.addEventListener("click", () => {
+        activeRunStepIndex = Number(step.dataset.stepSlot || "0");
+        renderReportTimeline(runReports[activeRunReportKey]);
+        renderReportEvidence(runReports[activeRunReportKey], activeRunStepIndex);
+      }));
+
+      document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
+        tab.classList.add("active");
+        showToast(`${tab.textContent} evidence selected`);
+      }));
+
+      document.getElementById("reportRetry").addEventListener("click", () => showToast("Prototype: the selected run would be retried with the same source."));
+      document.getElementById("reportOpenEvidence").addEventListener("click", () => showToast("Prototype: the evidence folder would open in the local file browser."));
+      document.getElementById("reportExport").addEventListener("click", () => showToast("Prototype: report export is a Task 3 follow-up."));
 
       const workspaceNav = document.getElementById("workspaceNav");
       const workspaceRecents = document.getElementById("workspaceRecents");
@@ -3512,12 +4112,14 @@
       document.getElementById("startExplore").addEventListener("click", (event) => {
         event.stopPropagation();
         runModal.hidden = true;
+        renderRunReport("success");
         showView("workbench");
         showToast("Prototype run opened with prepared evidence.");
       });
       document.getElementById("startReplay").addEventListener("click", (event) => {
         event.stopPropagation();
         runModal.hidden = true;
+        renderRunReport("success", { mode: "Strict replay" });
         showView("workbench");
         showToast("Strict replay opened with prepared evidence.");
       });
@@ -3569,18 +4171,6 @@
         const source = document.getElementById("collapsedRunSource");
         source.hidden = !source.hidden;
       });
-
-      document.querySelectorAll(".step").forEach((step) => step.addEventListener("click", () => {
-        document.querySelectorAll(".step").forEach((item) => item.classList.remove("active"));
-        step.classList.add("active");
-        document.getElementById("evidenceTitle").textContent = step.dataset.stepName;
-        document.getElementById("evidenceDetail").textContent = step.dataset.stepDetail;
-      }));
-      document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
-        document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-        tab.classList.add("active");
-        showToast(`${tab.textContent} evidence selected`);
-      }));
 
       const caseData = {
         create: ["Create project flow", "cases/generated/create-project-flow.codex.yaml", "AI explore", "8 / 8"],
@@ -3858,7 +4448,6 @@ properties:
         reviewModal.hidden = false;
       }
       document.getElementById("reviewCase").addEventListener("click", openReview);
-      document.getElementById("reviewGenerated").addEventListener("click", openReview);
       document.getElementById("closeReview").addEventListener("click", () => reviewModal.hidden = true);
       document.getElementById("reviewInEditor").addEventListener("click", () => showToast("Prototype: full YAML would open in the configured editor."));
       document.getElementById("saveCase").addEventListener("click", () => {

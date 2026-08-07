@@ -99,6 +99,15 @@ def _extract_runs_section(html: str) -> str:
     return runs_match.group("section")
 
 
+def _extract_workbench_section(html: str) -> str:
+    workbench_match = re.search(
+        r'<section class="page workbench-page" id="workbench">\s*(?P<section>[\s\S]*?)\s*</section>',
+        html,
+    )
+    assert workbench_match is not None
+    return workbench_match.group("section")
+
+
 def _extract_select_option_groups(section_html: str) -> list[list[str]]:
     return [
         re.findall(r"<option>([^<]+)</option>", select_html)
@@ -115,6 +124,12 @@ def _extract_source_viewer_css_rules(html: str) -> dict[str, list[str]]:
         for selector in rule_match.group("selectors").split(","):
             rules.setdefault(selector.strip(), []).append(body)
     return rules
+
+
+def _extract_style_block(html: str) -> str:
+    style_match = re.search(r"<style>\s*(?P<css>[\s\S]*?)</style>", html)
+    assert style_match is not None
+    return style_match.group("css")
 
 
 def _extract_css_declarations(rule_body: str) -> dict[str, str]:
@@ -211,6 +226,13 @@ class FakeElement {{
     this.textContent = "";
     this.className = classNames.join(" ");
   }}
+  set className(value) {{
+    this._className = value;
+    this.classList = new FakeClassList(String(value).split(/\\s+/).filter(Boolean));
+  }}
+  get className() {{
+    return this._className;
+  }}
   addEventListener(type, listener) {{
     if (!this.listeners.has(type)) {{
       this.listeners.set(type, []);
@@ -245,12 +267,60 @@ class FakeDocument {{
       new FakeElement({{ dataset: {{ view: "settings" }}, classNames: ["nav-button"] }}),
     ];
     this.openWorkbenchTargets = [new FakeElement({{ attributes: ["data-open-workbench"] }})];
+    this.steps = Array.from({{ length: 7 }}, (_, index) => new FakeElement({{
+      id: `reportStep${{index}}`,
+      dataset: {{ stepSlot: String(index) }},
+      classNames: ["step"],
+    }}));
+    this.tabs = ["Screen", "UI Tree", "Logs"].map((label, index) => {{
+      const tab = new FakeElement({{ classNames: ["tab", ...(index === 0 ? ["active"] : [])] }});
+      tab.textContent = label;
+      return tab;
+    }});
     this.elements = {{
       deviceTopbarContext: new FakeElement({{ id: "deviceTopbarContext" }}),
       deviceTopbarControls: new FakeElement({{ id: "deviceTopbarControls" }}),
+      reportContext: new FakeElement({{ id: "reportContext" }}),
       runTitle: new FakeElement({{ id: "runTitle" }}),
+      runId: new FakeElement({{ id: "runId" }}),
+      runMode: new FakeElement({{ id: "runMode" }}),
+      runPlatform: new FakeElement({{ id: "runPlatform" }}),
+      runDuration: new FakeElement({{ id: "runDuration" }}),
       runStatus: new FakeElement({{ id: "runStatus" }}),
+      evidenceTitle: new FakeElement({{ id: "evidenceTitle" }}),
+      evidenceDetail: new FakeElement({{ id: "evidenceDetail" }}),
+      evidenceStepStatus: new FakeElement({{ id: "evidenceStepStatus" }}),
+      evidenceSurfaceTitle: new FakeElement({{ id: "evidenceSurfaceTitle" }}),
+      evidenceSurfaceNote: new FakeElement({{ id: "evidenceSurfaceNote" }}),
+      evidenceSurfaceStatus: new FakeElement({{ id: "evidenceSurfaceStatus" }}),
+      evidenceOutcome: new FakeElement({{ id: "evidenceOutcome" }}),
+      evidenceMissingReason: new FakeElement({{ id: "evidenceMissingReason" }}),
+      evidenceBeforeLabel: new FakeElement({{ id: "evidenceBeforeLabel" }}),
+      evidenceBeforeText: new FakeElement({{ id: "evidenceBeforeText" }}),
+      evidenceAfterLabel: new FakeElement({{ id: "evidenceAfterLabel" }}),
+      evidenceAfterText: new FakeElement({{ id: "evidenceAfterText" }}),
+      evidenceCapability: new FakeElement({{ id: "evidenceCapability" }}),
+      evidenceTarget: new FakeElement({{ id: "evidenceTarget" }}),
+      evidenceKind: new FakeElement({{ id: "evidenceKind" }}),
+      evidenceStepDuration: new FakeElement({{ id: "evidenceStepDuration" }}),
+      evidenceArtifactCount: new FakeElement({{ id: "evidenceArtifactCount" }}),
+      evidenceBeforeArtifact: new FakeElement({{ id: "evidenceBeforeArtifact" }}),
+      evidenceAfterArtifact: new FakeElement({{ id: "evidenceAfterArtifact" }}),
+      evidenceUiTreeArtifact: new FakeElement({{ id: "evidenceUiTreeArtifact" }}),
+      evidenceLogArtifact: new FakeElement({{ id: "evidenceLogArtifact" }}),
+      verificationGoal: new FakeElement({{ id: "verificationGoal" }}),
+      verificationKeyActions: new FakeElement({{ id: "verificationKeyActions" }}),
+      verifierConclusion: new FakeElement({{ id: "verifierConclusion" }}),
+      reportRetry: new FakeElement({{ id: "reportRetry" }}),
+      reportOpenEvidence: new FakeElement({{ id: "reportOpenEvidence" }}),
+      reportExport: new FakeElement({{ id: "reportExport" }}),
     }};
+    for (let index = 0; index < 7; index += 1) {{
+      this.elements[`reportStep${{index}}`] = this.steps[index];
+      this.elements[`reportStepName${{index}}`] = new FakeElement({{ id: `reportStepName${{index}}` }});
+      this.elements[`reportStepStatus${{index}}`] = new FakeElement({{ id: `reportStepStatus${{index}}` }});
+      this.elements[`reportStepMeta${{index}}`] = new FakeElement({{ id: `reportStepMeta${{index}}` }});
+    }}
   }}
   querySelectorAll(selector) {{
     if (selector === ".page") {{
@@ -267,6 +337,12 @@ class FakeDocument {{
     }}
     if (selector === "[data-open-workbench]") {{
       return this.openWorkbenchTargets;
+    }}
+    if (selector === ".step") {{
+      return this.steps;
+    }}
+    if (selector === ".tab") {{
+      return this.tabs;
     }}
     throw new Error(`Unsupported selector: ${{selector}}`);
   }}
@@ -305,6 +381,331 @@ console.log(JSON.stringify({{
   runsNavActiveAfterWorkbench: runsNav.classList.contains("active"),
   activeNavViewsAfterWorkbench,
 }}));
+"""
+    return _run_node_json_script(script, skip_reason="Node.js is required for FSQ product UX script verification.")
+
+
+class _WorkbenchContractParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._stack: list[tuple[str, dict[str, str]]] = []
+        self._workbench_depth: int | None = None
+        self._text_targets: list[tuple[str, list[str]]] = []
+        self.panel_count = 0
+        self.header_buttons: list[str] = []
+        self.header_action_buttons: list[str] = []
+        self.meta_terms: list[str] = []
+        self.phase_labels: list[str] = []
+        self.tab_labels: list[str] = []
+        self.section_headings: list[str] = []
+        self.compare_labels: list[str] = []
+        self.timeline_step_count = 0
+        self.inspector_mentions: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name: value or "" for name, value in attrs}
+        self._stack.append((tag, attributes))
+        if tag == "section" and attributes.get("id") == "workbench":
+            self._workbench_depth = len(self._stack)
+            return
+        if self._workbench_depth is None or len(self._stack) < self._workbench_depth:
+            return
+
+        classes = set(attributes.get("class", "").split())
+        if "workbench-panel" in classes:
+            self.panel_count += 1
+        if tag == "button" and "step" in classes:
+            self.timeline_step_count += 1
+        if tag == "button" and "back-link" in classes:
+            self._text_targets.append(("header_buttons", []))
+        elif tag == "button" and "tab" in classes:
+            self._text_targets.append(("tab_labels", []))
+        elif tag == "button" and "btn" in classes and any(
+            "workbench-header-actions" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
+        ):
+            self._text_targets.append(("header_action_buttons", []))
+        elif tag == "dt" and any(
+            "report-meta-list" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
+        ):
+            self._text_targets.append(("meta_terms", []))
+        elif tag == "div" and "phase" in classes:
+            self._text_targets.append(("phase_labels", []))
+        elif tag in {"h2", "h3"}:
+            self._text_targets.append(("section_headings", []))
+        elif tag == "strong" and "compare-label" in classes:
+            self._text_targets.append(("compare_labels", []))
+
+    def handle_data(self, data: str) -> None:
+        if not self._text_targets:
+            return
+        text = data.strip()
+        if text:
+            self._text_targets[-1][1].append(text)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._text_targets and self._stack and self._stack[-1][0] == tag:
+            target_name, chunks = self._text_targets.pop()
+            text = " ".join(chunks).strip()
+            if text:
+                getattr(self, target_name).append(text)
+                if text == "Inspector":
+                    self.inspector_mentions.append(text)
+
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
+        if self._workbench_depth is not None and len(self._stack) < self._workbench_depth:
+            self._workbench_depth = None
+
+
+def _parse_workbench_contract(html: str) -> dict[str, object]:
+    parser = _WorkbenchContractParser()
+    parser.feed(html)
+    return {
+        "panel_count": parser.panel_count,
+        "header_buttons": parser.header_buttons,
+        "header_action_buttons": parser.header_action_buttons,
+        "meta_terms": parser.meta_terms,
+        "phase_labels": parser.phase_labels,
+        "tab_labels": parser.tab_labels,
+        "section_headings": parser.section_headings,
+        "compare_labels": parser.compare_labels,
+        "timeline_step_count": parser.timeline_step_count,
+        "inspector_mentions": parser.inspector_mentions,
+    }
+
+
+def _run_workbench_report_state_contract(html: str) -> dict[str, object]:
+    start = html.index("const runReports = {")
+    end = html.index("const workspaceNav = document.getElementById(\"workspaceNav\");")
+    snippet = html[start:end]
+    script = f"""
+class FakeClassList {{
+  constructor(names = []) {{
+    this.values = new Set(names);
+  }}
+  toggle(name, force) {{
+    if (force === undefined) {{
+      if (this.values.has(name)) {{
+        this.values.delete(name);
+        return false;
+      }}
+      this.values.add(name);
+      return true;
+    }}
+    if (force) {{
+      this.values.add(name);
+      return true;
+    }}
+    this.values.delete(name);
+    return false;
+  }}
+  contains(name) {{
+    return this.values.has(name);
+  }}
+  add(name) {{
+    this.values.add(name);
+  }}
+  remove(name) {{
+    this.values.delete(name);
+  }}
+}}
+
+class FakeElement {{
+  constructor({{ id = "", dataset = {{}}, classNames = [], attributes = [] }} = {{}}) {{
+    this.id = id;
+    this.dataset = {{ ...dataset }};
+    this.classList = new FakeClassList(classNames);
+    this.attributeNames = new Set(attributes);
+    this.listeners = new Map();
+    this.hidden = false;
+    this.textContent = "";
+    this.className = classNames.join(" ");
+  }}
+  set className(value) {{
+    this._className = value;
+    this.classList = new FakeClassList(String(value).split(/\\s+/).filter(Boolean));
+  }}
+  get className() {{
+    return this._className;
+  }}
+  addEventListener(type, listener) {{
+    if (!this.listeners.has(type)) {{
+      this.listeners.set(type, []);
+    }}
+    this.listeners.get(type).push(listener);
+  }}
+  click() {{
+    for (const listener of this.listeners.get("click") || []) {{
+      listener();
+    }}
+  }}
+  hasAttribute(name) {{
+    return this.attributeNames.has(name);
+  }}
+}}
+
+class FakeDocument {{
+  constructor() {{
+    this.pages = [
+      new FakeElement({{ id: "home", classNames: ["page", "active"] }}),
+      new FakeElement({{ id: "workspace", classNames: ["page"] }}),
+      new FakeElement({{ id: "device", classNames: ["page"] }}),
+      new FakeElement({{ id: "runs", classNames: ["page"] }}),
+      new FakeElement({{ id: "workbench", classNames: ["page"] }}),
+    ];
+    this.navButtons = [
+      new FakeElement({{ dataset: {{ view: "home" }}, classNames: ["nav-button", "active"] }}),
+      new FakeElement({{ dataset: {{ view: "workspace" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "device" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "runs" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "config" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "settings" }}, classNames: ["nav-button"] }}),
+    ];
+    this.openWorkbenchTargets = [
+      new FakeElement({{ attributes: ["data-open-workbench"] }}),
+      new FakeElement({{ attributes: ["data-open-workbench", "data-failed-run"] }}),
+    ];
+    this.steps = Array.from({{ length: 7 }}, (_, index) => new FakeElement({{
+      id: `reportStep${{index}}`,
+      dataset: {{ stepSlot: String(index) }},
+      classNames: ["step"],
+    }}));
+    this.tabs = ["Screen", "UI Tree", "Logs"].map((label, index) => {{
+      const tab = new FakeElement({{ classNames: ["tab", ...(index === 0 ? ["active"] : [])] }});
+      tab.textContent = label;
+      return tab;
+    }});
+    this.elements = {{
+      deviceTopbarContext: new FakeElement({{ id: "deviceTopbarContext" }}),
+      deviceTopbarControls: new FakeElement({{ id: "deviceTopbarControls" }}),
+      runTitle: new FakeElement({{ id: "runTitle" }}),
+      reportContext: new FakeElement({{ id: "reportContext" }}),
+      runId: new FakeElement({{ id: "runId" }}),
+      runMode: new FakeElement({{ id: "runMode" }}),
+      runPlatform: new FakeElement({{ id: "runPlatform" }}),
+      runDuration: new FakeElement({{ id: "runDuration" }}),
+      runStatus: new FakeElement({{ id: "runStatus" }}),
+      evidenceTitle: new FakeElement({{ id: "evidenceTitle" }}),
+      evidenceDetail: new FakeElement({{ id: "evidenceDetail" }}),
+      evidenceStepStatus: new FakeElement({{ id: "evidenceStepStatus" }}),
+      evidenceSurfaceTitle: new FakeElement({{ id: "evidenceSurfaceTitle" }}),
+      evidenceSurfaceNote: new FakeElement({{ id: "evidenceSurfaceNote" }}),
+      evidenceSurfaceStatus: new FakeElement({{ id: "evidenceSurfaceStatus" }}),
+      evidenceOutcome: new FakeElement({{ id: "evidenceOutcome" }}),
+      evidenceMissingReason: new FakeElement({{ id: "evidenceMissingReason" }}),
+      evidenceBeforeLabel: new FakeElement({{ id: "evidenceBeforeLabel" }}),
+      evidenceBeforeText: new FakeElement({{ id: "evidenceBeforeText" }}),
+      evidenceAfterLabel: new FakeElement({{ id: "evidenceAfterLabel" }}),
+      evidenceAfterText: new FakeElement({{ id: "evidenceAfterText" }}),
+      evidenceCapability: new FakeElement({{ id: "evidenceCapability" }}),
+      evidenceTarget: new FakeElement({{ id: "evidenceTarget" }}),
+      evidenceKind: new FakeElement({{ id: "evidenceKind" }}),
+      evidenceStepDuration: new FakeElement({{ id: "evidenceStepDuration" }}),
+      evidenceArtifactCount: new FakeElement({{ id: "evidenceArtifactCount" }}),
+      evidenceBeforeArtifact: new FakeElement({{ id: "evidenceBeforeArtifact" }}),
+      evidenceAfterArtifact: new FakeElement({{ id: "evidenceAfterArtifact" }}),
+      evidenceUiTreeArtifact: new FakeElement({{ id: "evidenceUiTreeArtifact" }}),
+      evidenceLogArtifact: new FakeElement({{ id: "evidenceLogArtifact" }}),
+      verificationGoal: new FakeElement({{ id: "verificationGoal" }}),
+      verificationKeyActions: new FakeElement({{ id: "verificationKeyActions" }}),
+      verifierConclusion: new FakeElement({{ id: "verifierConclusion" }}),
+      reportRetry: new FakeElement({{ id: "reportRetry" }}),
+      reportOpenEvidence: new FakeElement({{ id: "reportOpenEvidence" }}),
+      reportExport: new FakeElement({{ id: "reportExport" }}),
+    }};
+    for (let index = 0; index < 7; index += 1) {{
+      this.elements[`reportStep${{index}}`] = this.steps[index];
+      this.elements[`reportStepName${{index}}`] = new FakeElement({{ id: `reportStepName${{index}}` }});
+      this.elements[`reportStepStatus${{index}}`] = new FakeElement({{ id: `reportStepStatus${{index}}` }});
+      this.elements[`reportStepMeta${{index}}`] = new FakeElement({{ id: `reportStepMeta${{index}}` }});
+    }}
+  }}
+  querySelectorAll(selector) {{
+    if (selector === ".page") {{
+      return this.pages;
+    }}
+    if (selector === ".nav-button[data-view]") {{
+      return this.navButtons;
+    }}
+    if (selector === ".device-entry") {{
+      return [];
+    }}
+    if (selector === "[data-view-jump]" || selector === "[data-open-workspace]") {{
+      return [];
+    }}
+    if (selector === "[data-open-workbench]") {{
+      return this.openWorkbenchTargets;
+    }}
+    if (selector === ".step") {{
+      return this.steps;
+    }}
+    if (selector === ".tab") {{
+      return this.tabs;
+    }}
+    throw new Error(`Unsupported selector: ${{selector}}`);
+  }}
+  getElementById(id) {{
+    return this.elements[id] || null;
+  }}
+}}
+
+const document = new FakeDocument();
+const window = {{ scrollTo() {{}}, clearTimeout() {{}}, setTimeout(callback) {{ callback(); return 1; }} }};
+let toastMessages = [];
+function showToast(message) {{
+  toastMessages.push(message);
+}}
+
+const pages = document.querySelectorAll(".page");
+const navButtons = document.querySelectorAll(".nav-button[data-view]");
+
+function showView(view) {{
+  pages.forEach((page) => page.classList.toggle("active", page.id === view));
+  navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === view || (view === "workbench" && button.dataset.view === "runs")));
+  document.getElementById("deviceTopbarContext").hidden = view !== "device";
+  document.getElementById("deviceTopbarControls").hidden = view !== "device";
+  window.scrollTo({{ top: 0, behavior: "smooth" }});
+}}
+
+{snippet}
+
+const successRun = document.openWorkbenchTargets[0];
+const failedRun = document.openWorkbenchTargets[1];
+successRun.click();
+const successState = {{
+  runTitle: document.getElementById("runTitle").textContent,
+  runStatusText: document.getElementById("runStatus").textContent,
+  runStatusClass: document.getElementById("runStatus").className,
+  evidenceTitle: document.getElementById("evidenceTitle").textContent,
+  evidenceStepStatus: document.getElementById("evidenceStepStatus").textContent,
+  missingReasonHidden: document.getElementById("evidenceMissingReason").hidden,
+  activeStepIndexes: document.steps
+    .map((step, index) => step.classList.contains("active") ? index : -1)
+    .filter((index) => index >= 0),
+}};
+
+failedRun.click();
+const failedState = {{
+  runTitle: document.getElementById("runTitle").textContent,
+  runStatusText: document.getElementById("runStatus").textContent,
+  runStatusClass: document.getElementById("runStatus").className,
+  evidenceTitle: document.getElementById("evidenceTitle").textContent,
+  evidenceStepStatus: document.getElementById("evidenceStepStatus").textContent,
+  missingReasonHidden: document.getElementById("evidenceMissingReason").hidden,
+  missingReason: document.getElementById("evidenceMissingReason").textContent,
+  afterText: document.getElementById("evidenceAfterText").textContent,
+  conclusion: document.getElementById("verifierConclusion").textContent,
+  failedStepIndexes: document.steps
+    .map((step, index) => step.classList.contains("failed") ? index : -1)
+    .filter((index) => index >= 0),
+  activeStepIndexes: document.steps
+    .map((step, index) => step.classList.contains("active") ? index : -1)
+    .filter((index) => index >= 0),
+}};
+
+console.log(JSON.stringify({{ successState, failedState, toastMessages }}));
 """
     return _run_node_json_script(script, skip_reason="Node.js is required for FSQ product UX script verification.")
 
@@ -725,3 +1126,64 @@ def test_fsq_runs_history_page_keeps_auditable_copy_and_filters() -> None:
         ["All platforms", "Web", "Android", "Windows", "macOS"],
     ]
     assert re.findall(r"<tr[^>]*data-open-workbench", runs_section)
+
+
+def test_fsq_run_report_structure_matches_approved_contract() -> None:
+    contract = _parse_workbench_contract(_read_fsq_control_plane_product_ux_html())
+
+    assert contract["panel_count"] == 2
+    assert contract["header_buttons"] == ["← Back to Runs"]
+    assert contract["header_action_buttons"] == ["Retry", "Open evidence folder", "Export report"]
+    assert contract["meta_terms"] == ["Run ID", "Mode", "Platform", "Duration", "Final status"]
+    assert contract["phase_labels"] == ["Planning", "Execution", "Verification"]
+    assert contract["tab_labels"] == ["Screen", "UI Tree", "Logs"]
+    assert contract["timeline_step_count"] == 7
+    assert "Inspector" not in contract["section_headings"]
+    assert not contract["inspector_mentions"]
+    assert "Execution timeline" in contract["section_headings"]
+    assert "Action details" in contract["section_headings"]
+    assert any(heading.startswith("Artifacts") for heading in contract["section_headings"])
+    assert "Verification summary" in contract["section_headings"]
+    assert contract["compare_labels"] == ["Before", "After"]
+
+
+def test_fsq_run_report_css_uses_two_columns_and_stacks_responsively() -> None:
+    css = _extract_style_block(_read_fsq_control_plane_product_ux_html())
+    workbench_layout_rule = _extract_css_declarations(
+        _extract_source_viewer_css_rules(_read_fsq_control_plane_product_ux_html())[".workbench-layout"][0]
+    )
+
+    assert workbench_layout_rule["grid-template-columns"] == "280px minmax(0, 1fr)"
+    assert re.search(
+        r"@media\s*\(max-width:\s*1120px\)\s*\{[\s\S]*?\.workbench-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr;",
+        css,
+    )
+    assert re.search(
+        r"@media\s*\(max-width:\s*820px\)\s*\{[\s\S]*?\.workbench-layout\s*\{[\s\S]*?display:\s*block;",
+        css,
+    )
+
+
+def test_fsq_run_report_state_contract_supports_success_and_failed_variants() -> None:
+    payload = _run_workbench_report_state_contract(_read_fsq_control_plane_product_ux_html())
+
+    assert payload["successState"] == {
+        "runTitle": "Create project flow",
+        "runStatusText": "success",
+        "runStatusClass": "tag success",
+        "evidenceTitle": "assertVisible project row",
+        "evidenceStepStatus": "passed",
+        "missingReasonHidden": True,
+        "activeStepIndexes": [5],
+    }
+    assert payload["failedState"]["runTitle"] == "Checkout smoke"
+    assert payload["failedState"]["runStatusText"] == "failed"
+    assert payload["failedState"]["runStatusClass"] == "tag failed"
+    assert payload["failedState"]["evidenceTitle"] == "assertVisible checkout confirmation"
+    assert payload["failedState"]["evidenceStepStatus"] == "failed"
+    assert payload["failedState"]["missingReasonHidden"] is False
+    assert "missing after evidence" in payload["failedState"]["missingReason"].lower()
+    assert "timed out" in payload["failedState"]["afterText"].lower()
+    assert "verification failed" in payload["failedState"]["conclusion"].lower()
+    assert payload["failedState"]["failedStepIndexes"] == [5]
+    assert payload["failedState"]["activeStepIndexes"] == [5]
