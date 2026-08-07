@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -366,6 +366,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
     { name = "click" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "openai" },
     { name = "openai-agents" },
@@ -400,6 +401,7 @@ requires-dist = [
     { name = "aiofiles", specifier = "==25.1.0" },
     { name = "appium-python-client", marker = "extra == 'macos'", specifier = "==2.6.1" },
     { name = "click", specifier = "==8.3.3" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "jinja2", specifier = "==3.1.6" },
     { name = "openai", specifier = "==2.34.0" },
     { name = "openai-agents", specifier = "==0.15.2" },

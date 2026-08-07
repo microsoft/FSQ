@@ -164,6 +164,24 @@ uv run fsq-agent init --platform <platform>
 uv run fsq-agent init --platform <platform> --provider github_copilot
 ```
 
+Diagnose local readiness and receive actionable fixes:
+
+```powershell
+uv run fsq-agent doctor
+uv run fsq-agent doctor --platform android --mode all
+uv run fsq-agent doctor --platform web --mode strict --non-interactive
+uv run fsq-agent doctor --platform windows --format json --non-interactive
+uv run fsq-agent doctor --platform android --color always
+```
+
+In an interactive terminal, `doctor` can ask which platform/mode to inspect and offer narrowly scoped safe repairs. In CI or redirected execution it never prompts. `--repair` applies eligible no-input repairs such as initializing a missing workspace; non-secret platform values are written only when entered interactively. Existing `.env` files are backed up before doctor changes them.
+
+Text-mode Doctor prints each `RUNNING` check immediately and replaces that line with `PASS`, `WARN`, `FAIL`, or `SKIP` when the check completes. Interactive terminals use green/yellow/red/gray/cyan status highlighting and in-place updates; redirected output falls back to plain append-only lines. Use `--color auto|always|never` to control ANSI highlighting. JSON remains a single progress-free, color-free document.
+
+Doctor performs bounded online/local connectivity checks by default but never sends a model inference request, starts provider device-code login, launches the target application, or creates an Appium session. It checks ADB installation/device/package readiness for Android, isolated Chrome startup for Web, static pywinauto target readiness for Windows, and Appium `/status` plus target configuration for macOS. Dependency installation, ADB/Appium service control, provider login, and secret entry remain explicit user actions shown as remediation commands.
+
+Exit codes are `0` for requested modes ready (warnings allowed), `1` for blocking readiness failures, `2` for invalid or unresolved command usage, and `130` for user interruption. JSON output is diagnosis-only and cannot be combined with `--repair`.
+
 Run from a natural-language goal:
 
 ```powershell

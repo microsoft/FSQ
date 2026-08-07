@@ -7,8 +7,13 @@ import os
 import pytest
 
 from fsq_agent.config import (
+    initialize_workspace_safely,
+    inspect_platform_settings,
     load_platform_settings,
     load_settings,
+    read_env_values,
+    upsert_env_values_atomic,
+    validate_doctor_environment_value,
     validate_provider_settings,
     validate_runtime_settings,
     validate_strict_core_settings,
@@ -44,7 +49,13 @@ def _windows_executable(tmp_path: Path, name: str = "app.exe") -> Path:
 @pytest.fixture(autouse=True)
 def _isolate_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    for name in ("FSQ_LLM_PROVIDER", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_MODEL", "AZURE_OPENAI_API_KEY"):
+    for name in (
+        "FSQ_LLM_PROVIDER", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_MODEL", "AZURE_OPENAI_API_KEY",
+        "FSQ_ANDROID_APP_ID", "FSQ_ANDROID_SERIAL", "FSQ_WEB_BROWSER_EXECUTABLE_PATH",
+        "FSQ_WINDOWS_APP_PATH", "FSQ_WINDOWS_BACKEND_KIND", "FSQ_WINDOWS_WINDOW_TITLE_RE",
+        "FSQ_WINDOWS_LAUNCH_ARGS", "FSQ_MACOS_APPIUM_SERVER_URL", "FSQ_MACOS_BUNDLE_ID",
+        "FSQ_MACOS_APP_PATH",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -88,6 +99,73 @@ openai_agents:
     assert settings.agent_context.knowledge.root_dir == tmp_path / "knowledge"
     assert settings.agent_context.knowledge.skills.dir == tmp_path / "knowledge" / "skills"
     assert settings.agent_context.knowledge.pre_plan.dir is None
+
+
+def test_atomic_env_update_preserves_content_and_creates_backup(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("# local\r\nOTHER=keep\r\nFSQ_ANDROID_APP_ID=old\r\n", encoding="utf-8", newline="")
+
+    update = upsert_env_values_atomic(env_path, {"FSQ_ANDROID_APP_ID": "com.example"})
+
+    assert update.backup_path is not None and update.backup_path.is_file()
+    assert read_env_values(env_path)["FSQ_ANDROID_APP_ID"] == "com.example"
+    with env_path.open("r", encoding="utf-8", newline="") as stream:
+        assert "# local\r\nOTHER=keep\r\n" in stream.read()
+
+
+def test_atomic_env_update_refuses_malformed_file_without_backup(tmp_path: Path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("BROKEN\n", encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="expected KEY=VALUE"):
+        upsert_env_values_atomic(env_path, {"FSQ_ANDROID_APP_ID": "com.example"})
+
+    assert env_path.read_text(encoding="utf-8") == "BROKEN\n"
+    assert list(tmp_path.glob(".env.*.bak")) == []
+
+
+def test_initialize_workspace_safely_rejects_nonempty_unmarked_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / ".fsq-agent-workspace"
+    workspace.mkdir()
+    (workspace / "user.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="not marked"):
+        initialize_workspace_safely(workspace)
+
+
+def test_initialize_workspace_safely_rejects_directory_marker(tmp_path: Path) -> None:
+    workspace = tmp_path / ".fsq-agent-workspace"
+    marker = workspace / ".fsq-agent-workspace"
+    marker.mkdir(parents=True)
+
+    with pytest.raises(ConfigurationError, match="marker must be a file"):
+        initialize_workspace_safely(workspace)
+
+
+def test_doctor_windows_launch_args_use_canonical_parser() -> None:
+    validate_doctor_environment_value(
+        "FSQ_WINDOWS_LAUNCH_ARGS",
+        r'--profile="C:\Temp\Edge Profile" --flag',
+    )
+
+    with pytest.raises(ConfigurationError, match="could not be parsed"):
+        validate_doctor_environment_value("FSQ_WINDOWS_LAUNCH_ARGS", '--profile="unterminated')
+
+
+def test_inspect_platform_settings_does_not_create_workspace(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.android.yaml").write_text("harness:\n  platform: android\n", encoding="utf-8")
+    workspace = tmp_path / ".fsq-agent-workspace"
+
+    settings, checks = inspect_platform_settings(
+        "android",
+        workspace,
+        {"FSQ_ANDROID_APP_ID": "com.example"},
+    )
+
+    assert settings is not None
+    assert checks[0].status == "pass"
+    assert not workspace.exists()
 
 
 def test_load_settings_accepts_case_lifecycle_hooks(tmp_path: Path) -> None:
@@ -278,6 +356,16 @@ def test_load_settings_rejects_non_empty_unmarked_workspace(tmp_path: Path) -> N
     config_path.write_text(_base_config(tmp_path), encoding="utf-8")
 
     with pytest.raises(ConfigurationError, match="not marked"):
+        load_settings(config_path)
+
+
+def test_load_settings_rejects_directory_workspace_marker(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / ".fsq-agent-workspace").mkdir(parents=True)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="marker must be a file"):
         load_settings(config_path)
 
 

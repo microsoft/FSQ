@@ -16,6 +16,19 @@ Current `__init__.py` exports via `__all__`:
 
 Platform-neutral task, run, report, knowledge, capability, and execution exports:
 
+- `DoctorRequest`: Pydantic boundary model for platform, diagnostic mode, output format, terminal interaction capability, repair policy, working directory, and bounded probe timeout. JSON format validation rejects repair.
+- `DoctorFix`: Pydantic model for one actionable remediation with description, optional command, optional verification command, optional environment-variable name, optional documentation URL, and optional closed safe-repair action id.
+- `DiagnosticProbeResult`: Provider/platform-neutral sanitized probe fact with stable id, category, status, summary, optional safe metadata, affected readiness targets, prerequisite ids, and fixes.
+- `DoctorCheckResult`: Pydantic model for one normalized doctor check with stable id, category, `pass|warn|fail|skip` status, summary, affected readiness targets, ordered fixes, and sanitized metadata.
+- `DoctorRepairResult`: Pydantic model for one safe-repair attempt containing action id, sanitized target, `applied|declined|skipped|failed` status, optional backup path, and rerun check ids; it never stores repaired values.
+- `DoctorRepairAction`: Closed repair-action discriminator limited to workspace initialization, non-secret environment update, and cached Copilot provider-token refresh.
+- `DoctorReadiness`: Pydantic model for Dynamic LLM, Strict core, and AI assertion readiness using `ready|blocked|not_checked` states and blocking check ids.
+- `DoctorReadinessItem`: Pydantic model for one readiness target's state and blocking check ids, nested by `DoctorReadiness`.
+- `DoctorReport`: Schema-versioned Pydantic aggregate containing selected platform/source, requested mode, final status/exit code including cancellation `130`, ordered checks and repairs, readiness, and summary counts.
+- `DoctorProgressEvent`: Pydantic model for one operator-visible doctor lifecycle event. Event types are `phase_started`, `check_started`, `check_completed`, `repair_started`, `repair_completed`, and `summary_ready`; events carry stable phase/check/repair identity, safe status/summary fields, and optional completed check/repair/report payloads without secrets.
+- `DoctorProgressSink`: Synchronous callable type accepted by doctor/config/provider/core diagnostic boundaries to receive `DoctorProgressEvent` values as work occurs.
+- `EnvironmentFileUpdate`: Pydantic model describing an atomic `.env` update by path, changed key names, optional backup path, and preservation metadata without containing values.
+
 - `Task`: Pydantic model describing a dynamic LLM goal/reference task, optional metadata, optional explicit planning reference kind/text, optional execution key actions, one final `verification_goal`, retry limits, timeout, and knowledge references. Only `description` is required. `planning_reference_kind` may identify first-party planning inputs such as `goal` or `raw_case`; `planning_reference_text` stores the authoritative text the pre-planner should use before falling back to legacy goal/description behavior. Execution key actions are planning context only; final verification checks `verification_goal` against execution evidence.
 - `AGENT_FINAL_OUTPUT_SCHEMA_VERSION`: Constant containing the current supported final-output schema version. The runtime supports only the current schema; compatible schema evolution may add fields, while breaking changes replace the current schema rather than exposing a user-selectable schema configuration.
 - `AgentTaskInput`: Pydantic model describing the structured task envelope rendered into the model input. It includes a schema version, the task, complete key actions for execution planning, the single `verification_goal`, optional runtime policy text, and the final output contract name expected for the run.
@@ -221,6 +234,7 @@ macOS contracts:
 - `_task.py`: Task, plan, step, result, and verification models.
 - `_agent_io.py`: Structured agent task input, final output, plan item, schema version, and normalized tool-call record models.
 - `_events.py`: Live run event model and event sink type alias.
+- `_doctor.py`: Doctor request/check/fix/repair/readiness/report models plus generic sanitized probe, settings-inspection, and environment-update boundary models.
 - `_fsq.py`: FSQ AI Test DSL case metadata, reusable lifecycle hook models, config lifecycle hook settings, and case models.
 - `_tools.py`: Unified capability metadata, replay policy, invocation/result contracts, registry snapshot models, AgentTool definition/call/result models, and temporary backward-compatible diagnostic aliases.
 - `_ai_assertion.py`: Provider-backed platform AI assertion request/result models.
@@ -250,6 +264,8 @@ All custom exceptions inherit from `FsqAgentError`. Exceptions carry concise hum
 ## Current Invariants
 
 - Centralizing types prevents circular imports and inconsistent result schemas.
+- Doctor and probe contracts are serializable, secret-free boundary data. They do not execute checks, perform repairs, prompt users, open network connections, or render terminal output.
+- Progress events are presentation-neutral facts. Producers emit them before and after real work; consumers must not change diagnostic control flow or final report data.
 - New cross-module execution contracts must be added to this module rather than to `fsq_agent.core`, because cross-module data structures live only in `models`.
 - Capability metadata is the authoritative executable contract for recordable CommonTools and PlatformTools. `CapabilityDefinition`, `ReplayPolicy`, step kind, post-action delay overrides, and registry snapshots are the runtime authority instead of separate harness function or static Android action schemas. Live `CapabilityExecutorKind` values are `common` and `driver`; `harness` is not a live executor kind. Decorator declarations and platform catalog validation live in `capabilities`; `models` owns only the serializable contracts they produce. AgentTools use separate dynamic-only definition/call/result models and do not enter strict capability registries.
 - Shared platform parameter contracts and strict replay reference contracts must live in this module when they are consumed by more than one project module. Android parameter models are shared by `fsq` for YAML normalization, by `core` for dispatch validation, and by concrete drivers for typed backend calls. Strict replay references are shared by `fsq` parsing and `cli` strict replay resolution.

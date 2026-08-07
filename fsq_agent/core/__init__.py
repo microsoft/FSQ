@@ -6,6 +6,7 @@ from fsq_agent.core._default_capabilities import CapabilityDefinitionFactory
 from fsq_agent.core._platform_tools import CommonPlatformTools
 from fsq_agent.core._runtime_secrets import RuntimeSecretStore
 from fsq_agent.core.evidence import ArtifactStore, EvidenceRecorder
+from fsq_agent.core.diagnostics import PlatformProbeFactory
 from fsq_agent.core.harness import (
     AndroidDriverInterface,
     AIAssertionEvaluatorProtocol,
@@ -32,6 +33,7 @@ __all__ = [
     "HarnessFactory",
     "HarnessInterface",
     "MacOSDriverInterface",
+    "PlatformProbeFactory",
     "RuntimeSecretStore",
     "StepRunner",
     "StepSequenceRunner",

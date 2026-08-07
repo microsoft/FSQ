@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own shared model provider construction, local provider setup/auth readiness, and provider-backed model call access for fsq-agent. The providers module builds Azure OpenAI and GitHub Copilot OpenAI-compatible clients from validated, resolved settings, owns provider authentication, Copilot request compatibility, and endpoint selection details, exposes OpenAI Agents SDK provider/session construction for the dynamic agent runtime, exposes provider setup/check helpers for the CLI, and exposes direct Responses-style model access for provider-backed AI assertion evaluators.
+Own shared model provider construction, local provider setup/auth readiness, bounded provider diagnosis, and provider-backed model call access for fsq-agent. The providers module builds Azure OpenAI and GitHub Copilot OpenAI-compatible clients from validated, resolved settings, owns provider authentication and cache interpretation, exposes diagnosis without model inference, and exposes direct Responses-style model access for provider-backed AI assertion evaluators.
 
 The module centralizes provider behavior so the main agent loop, internal pre-planner, evidence-based verifier, and platform AI assertion evaluators reuse the same provider configuration, token cache behavior, model selection, and redaction policy.
 
@@ -24,6 +24,7 @@ Current `__init__.py` exports via `__all__`:
 - `refresh_model_provider_session(settings: Settings) -> ModelProviderSession`: Refreshes provider-local runtime credentials at the beginning of a dynamic task without sending a live model request. For GitHub Copilot, it must use only a valid cached GitHub OAuth token to exchange and cache a fresh short-lived Copilot provider token, regardless of whether the previous provider token is still valid, and it must not start device-code authentication. For Azure OpenAI, it validates and constructs local client configuration from fixed environment values.
 - `build_model_provider_session(settings: Settings) -> ModelProviderSession`: Convenience factory for runtime construction. For GitHub Copilot, runtime construction must first read the cached Copilot provider token produced by `prepare_model_provider_session(..., interactive_auth=True)`; when the provider token is missing or expired, it may use a valid cached GitHub OAuth token to silently exchange and cache a fresh provider token, but it must not start device-code authentication.
 - `build_ai_assertion_evaluator(settings: Settings) -> AIAssertionEvaluator`: Convenience factory used by entry-layer code when a platform harness needs provider-backed AI assertion. For GitHub Copilot, it follows the same non-interactive provider-token read/refresh rule as `build_model_provider_session`.
+- `ProviderDiagnosticService`: Stable provider-neutral diagnostic boundary. `probe(settings, timeout_seconds=5.0, progress_sink=None)` emits immediate check progress and returns ordered sanitized `DiagnosticProbeResult` values for local settings, cache shape/expiry, and bounded endpoint reachability without device-code authentication, token refresh, or model inference. `refresh_cached_copilot_provider_token(settings, progress_sink=None)` emits repair progress and is an explicit safe-repair operation that succeeds only from a valid cached GitHub OAuth token in an existing workspace and never starts interactive authentication.
 
 Current usage shape:
 
@@ -48,7 +49,18 @@ Concrete type annotations may use `Any` for OpenAI Agents SDK classes at the bou
 - `_azure_openai.py`: Azure OpenAI client construction from fixed environment-backed endpoint/model/API-key values, endpoint normalization assumptions, and provider metadata.
 - `_github_copilot.py`: GitHub device-code auth with explicit OAuth scopes, non-interactive cached provider-token inspection, GitHub OAuth token cache loading/saving, Copilot provider-token cache loading/saving, non-interactive provider-token refresh from cached GitHub OAuth tokens, Copilot token exchange, plan detection, endpoint selection, request/header/timeout compatibility, and provider metadata.
 - `_ai_assertion.py`: `AIAssertionEvaluator` implementation and model-response parsing into `AIAssertionResult`.
+- `_diagnostics.py`: ProviderDiagnosticService, non-mutating cache inspection, bounded endpoint reachability, sanitization, and explicit Copilot cache-refresh repair.
 - `SPEC.md`: Module design.
+
+## Python Architecture
+
+- Architecture level: 2 Simple Package.
+- Public API: provider/session factories, evaluator, and `ProviderDiagnosticService` exported from `__init__.py`.
+- Internal modules: provider adapters, cache/auth mechanics, diagnostics, and evaluator implementation remain private `_*.py` modules.
+- Domain boundaries: providers owns credentials, endpoint/client behavior, bounded provider probes, and explicit cache refresh; callers own diagnostic aggregation, prompts, and platform behavior.
+- Boundary models: settings come from config; shared diagnostic and AI assertion records come from models.
+- Dependency direction: providers imports config and models only among project modules and must not import doctor, CLI, agent, core, or other entry modules.
+- Rationale: provider selection and diagnostics are focused factory/service behavior; no richer domain or persistence abstraction is justified.
 
 ## Error Handling
 
@@ -57,6 +69,10 @@ Provider setup failures raise `ConfigurationError` from `models` with non-secret
 GitHub Copilot device-code authorization failures should distinguish request failure, polling failure, expired device code, authorization denial, token exchange failure, and unknown plan. Azure OpenAI validation failures should distinguish missing fixed environment variables, invalid base URL shape, and client construction failure.
 
 Non-interactive Copilot readiness checks and runtime construction must not start device-code polling. They may call the Copilot token exchange endpoint only when a valid cached GitHub OAuth token is available and the short-lived provider token is missing or expired. They must fail clearly when neither a valid cached Copilot provider token nor a valid cached GitHub OAuth token exists. Provider setup/readiness helpers must not send Responses API model requests.
+
+Doctor diagnosis is stricter about side effects than runtime construction: `ProviderDiagnosticService.probe` never refreshes caches. It reports an eligible refresh repair when a valid cached GitHub OAuth token can repair a missing/expired provider token. Azure reachability proves URL/DNS/TLS/HTTP accessibility only and does not claim deployment existence, authorization, quota, or inference success.
+
+Provider diagnostics emit start/completion events around cache inspection and endpoint reachability. They must emit `check_started` before network access so text users receive feedback during bounded waits.
 
 Direct evaluator invocation failures should return or raise structured diagnostics that entry-layer code can convert into failed `HarnessActionResult` values. Missing provider credentials for an explicitly authored `assertWithAI` step should produce a configuration failure, not a silent assertion pass or fallback path.
 
@@ -74,3 +90,4 @@ Direct evaluator invocation failures should return or raise structured diagnosti
 - `core` must not import `providers`. Platform harnesses receive an evaluator object structurally and call it through an evaluator protocol owned by `core` or supplied by entry-layer code.
 - AI assertion evaluator output is evidence, not a recovery mechanism. It must not perform locator fallback, mutate testcases, or convert unrelated strict-core failures into passes.
 - Provider diagnostics in events and reports should include provider name, model name, endpoint family, and safe status details, but never secret values.
+- Provider diagnostic metadata may include cache path, expiry state, endpoint family, sanitized URL origin, HTTP status class, and Copilot plan, but never tokens, keys, headers, cookies, credential-bearing URL components, secret lengths, fingerprints, or response bodies.

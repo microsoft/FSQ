@@ -41,9 +41,14 @@ def _ensure_workspace(settings: Settings, base_dir: Path) -> Path:
 
     if workspace_root.exists() and not workspace_root.is_dir():
         raise ConfigurationError("Workspace root must be a directory.", context={"workspace": str(workspace_root)})
-    if workspace_root.exists() and marker_path.exists():
+    if workspace_root.exists() and marker_path.is_file():
         settings.workspace.root_dir = workspace_root
         return workspace_root
+    if marker_path.exists():
+        raise ConfigurationError(
+            "Workspace marker must be a file.",
+            context={"workspace": str(workspace_root), "marker_file": settings.workspace.marker_file},
+        )
     if workspace_root.exists() and any(workspace_root.iterdir()):
         raise ConfigurationError(
             "Workspace directory is not marked as an fsq-agent workspace.",
@@ -59,6 +64,29 @@ def _ensure_workspace(settings: Settings, base_dir: Path) -> Path:
     marker_path.write_text("fsq-agent workspace\n", encoding="utf-8")
     _set_hidden_best_effort(marker_path)
     settings.workspace.root_dir = workspace_root
+    return workspace_root
+
+
+def initialize_workspace_safely(workspace: Path) -> Path:
+    workspace_root = workspace.expanduser().resolve()
+    marker_path = workspace_root / ".fsq-agent-workspace"
+    if workspace_root.exists() and not workspace_root.is_dir():
+        raise ConfigurationError("Workspace root must be a directory.", context={"workspace": str(workspace_root)})
+    if marker_path.is_file():
+        return workspace_root
+    if marker_path.exists():
+        raise ConfigurationError(
+            "Workspace marker must be a file.",
+            context={"workspace": str(workspace_root), "marker_file": marker_path.name},
+        )
+    if workspace_root.exists() and any(workspace_root.iterdir()):
+        raise ConfigurationError(
+            "Workspace directory is not marked as an fsq-agent workspace.",
+            context={"workspace": str(workspace_root), "marker_file": marker_path.name},
+        )
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text("fsq-agent workspace\n", encoding="utf-8")
+    _set_hidden_best_effort(marker_path)
     return workspace_root
 
 

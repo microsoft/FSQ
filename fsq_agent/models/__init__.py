@@ -9,6 +9,20 @@ from fsq_agent.models._agent_io import (
     ToolCallRecord,
 )
 from fsq_agent.models._ai_assertion import AIAssertionRequest, AIAssertionResult
+from fsq_agent.models._doctor import (
+    DiagnosticProbeResult,
+    DoctorCheckResult,
+    DoctorFix,
+    DoctorReadiness,
+    DoctorReadinessItem,
+    DoctorRepairAction,
+    DoctorProgressEvent,
+    DoctorProgressSink,
+    DoctorRepairResult,
+    DoctorReport,
+    DoctorRequest,
+    EnvironmentFileUpdate,
+)
 from fsq_agent.models._exceptions import (
     ConfigurationError,
     FsqAgentError,
@@ -196,6 +210,18 @@ from fsq_agent.models._tools import (
 )
 
 __all__ = [
+    "DiagnosticProbeResult",
+    "DoctorCheckResult",
+    "DoctorFix",
+    "DoctorReadiness",
+    "DoctorReadinessItem",
+    "DoctorRepairAction",
+    "DoctorProgressEvent",
+    "DoctorProgressSink",
+    "DoctorRepairResult",
+    "DoctorReport",
+    "DoctorRequest",
+    "EnvironmentFileUpdate",
     "AGENT_FINAL_OUTPUT_SCHEMA_VERSION",
     "AgentTaskInput",
     "AgentPlanItem",

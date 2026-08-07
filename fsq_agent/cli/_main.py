@@ -20,6 +20,7 @@ from fsq_agent.cli._case_lifecycle import (
 )
 from fsq_agent.cli._core_execution import run_strict_fsq_core_case
 from fsq_agent.cli._formatting import log_result, log_run_event
+from fsq_agent.cli._doctor import run_doctor_command
 from fsq_agent.cli._llm_setup import setup_llm_provider
 from fsq_agent.cli._logging import configure_cli_logging
 from fsq_agent._strict_case_recording import StrictCaseRecording, record_dynamic_run_as_strict_case
@@ -68,6 +69,33 @@ def init(platform: str, provider: str | None) -> None:
     except OSError as exc:
         logger.error("Error: %s", exc)
         raise click.Abort() from exc
+
+
+@main.command()
+@click.option("--platform", type=PLATFORM_CHOICE, default=None)
+@click.option("--mode", type=click.Choice(["dynamic", "strict", "all"]), default=None)
+@click.option("--format", "output_format", type=click.Choice(["text", "json"]), default="text", show_default=True)
+@click.option("--color", type=click.Choice(["auto", "always", "never"]), default="auto", show_default=True)
+@click.option("--non-interactive", is_flag=True, default=False)
+@click.option("--repair", is_flag=True, default=False)
+def doctor(
+    platform: str | None,
+    mode: str | None,
+    output_format: str,
+    color: str,
+    non_interactive: bool,
+    repair: bool,
+) -> None:
+    exit_code = run_doctor_command(
+        platform=platform,
+        mode=mode,
+        output_format=output_format,
+        color=color,
+        non_interactive=non_interactive,
+        repair=repair,
+    )
+    if exit_code:
+        raise click.exceptions.Exit(exit_code)
 
 
 @main.command()

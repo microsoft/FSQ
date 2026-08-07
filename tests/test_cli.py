@@ -9,7 +9,15 @@ from click.testing import CliRunner
 
 from fsq_agent._strict_case_recording import StrictCaseRecording
 from fsq_agent.cli._main import _task_from_goal, _task_from_raw_case_source, main
-from fsq_agent.models import ReportArtifact, Task, TaskResult, VerificationResult
+from fsq_agent.models import (
+    DoctorReadiness,
+    DoctorReadinessItem,
+    DoctorReport,
+    ReportArtifact,
+    Task,
+    TaskResult,
+    VerificationResult,
+)
 
 
 FSQ_CASE = """
@@ -64,6 +72,22 @@ platform: windows
 """
 
 
+def _doctor_ready_report() -> DoctorReport:
+    return DoctorReport(
+        platform="android",
+        platform_source="explicit",
+        requested_mode="all",
+        status="ready",
+        exit_code=0,
+        readiness=DoctorReadiness(
+            dynamic_llm=DoctorReadinessItem(status="ready"),
+            strict_core=DoctorReadinessItem(status="ready"),
+            ai_assertion=DoctorReadinessItem(status="ready"),
+        ),
+        summary={"pass": 0, "warn": 0, "fail": 0, "skip": 0},
+    )
+
+
 def _config(tmp_path: Path, body: str = "", platform: str = "android") -> Path:
     workspace = tmp_path / "workspace"
     cases_dir = tmp_path / "cases"
@@ -101,12 +125,93 @@ def _write_fake_core_report(output_dir: Path, run_id: str, status: str = "passed
 @pytest.fixture(autouse=True)
 def _isolate_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
-    for name in ("FSQ_LLM_PROVIDER", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_MODEL", "AZURE_OPENAI_API_KEY"):
+    for name in (
+        "FSQ_LLM_PROVIDER", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_MODEL", "AZURE_OPENAI_API_KEY",
+        "FSQ_ANDROID_APP_ID", "FSQ_ANDROID_SERIAL", "FSQ_WEB_BROWSER_EXECUTABLE_PATH",
+        "FSQ_WINDOWS_APP_PATH", "FSQ_WINDOWS_BACKEND_KIND", "FSQ_WINDOWS_WINDOW_TITLE_RE",
+        "FSQ_WINDOWS_LAUNCH_ARGS", "FSQ_MACOS_APPIUM_SERVER_URL", "FSQ_MACOS_BUNDLE_ID",
+        "FSQ_MACOS_APP_PATH",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
 def test_only_public_commands_are_registered() -> None:
-    assert set(main.commands) == {"init", "run", "report", "playground"}
+    assert set(main.commands) == {"init", "doctor", "run", "report", "playground"}
+
+
+def test_doctor_command_delegates_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_doctor_command(**kwargs) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("fsq_agent.cli._main.run_doctor_command", fake_run_doctor_command)
+
+    result = CliRunner().invoke(
+        main,
+        ["doctor", "--platform", "web", "--mode", "strict", "--non-interactive"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "platform": "web",
+        "mode": "strict",
+        "output_format": "text",
+        "color": "auto",
+        "non_interactive": True,
+        "repair": False,
+    }
+
+
+def test_doctor_json_repair_error_is_valid_json() -> None:
+    result = CliRunner().invoke(main, ["doctor", "--format", "json", "--repair"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["status"] == "usage_error"
+    assert payload["repairs"] == []
+
+
+def test_doctor_json_ignores_forced_color_without_progress_or_ansi(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "fsq_agent.cli._doctor.DoctorService.run",
+        lambda *_args, **_kwargs: _doctor_ready_report(),
+    )
+    result = CliRunner().invoke(main, ["doctor", "--format", "json", "--color", "always"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "ready"
+    assert "RUNNING" not in result.output
+    assert "\x1b[" not in result.output
+
+
+def test_doctor_keyboard_interrupt_exits_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "fsq_agent.cli._doctor.DoctorService.run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    result = CliRunner().invoke(main, ["doctor", "--platform", "web", "--non-interactive"])
+
+    assert result.exit_code == 130
+
+
+def test_doctor_mode_prompt_keyboard_interrupt_exits_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    class TtyStream:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("fsq_agent.cli._doctor.click.get_text_stream", lambda _name: TtyStream())
+    monkeypatch.setattr(
+        "fsq_agent.cli._doctor.click.prompt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    result = CliRunner().invoke(main, ["doctor", "--platform", "web"])
+
+    assert result.exit_code == 130
 
 
 def test_init_provider_copilot_writes_env_and_prepares_interactive_session(

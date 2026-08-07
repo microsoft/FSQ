@@ -48,6 +48,8 @@ Default local LLM runs use GitHub Copilot provider authentication with Copilot m
 
 The local setup entry is `fsq-agent init --platform android|web|windows|macos [--provider github_copilot|azure_openai]`. It initializes or verifies the current working directory `.fsq-agent-workspace` workspace for the selected platform, and when `--provider` is supplied it may update the current working directory `.env` file and perform provider-local readiness. Copilot setup may run device-code authentication with explicit OAuth scopes sufficient for Copilot token exchange when no valid cached GitHub OAuth token exists, then exchange and cache the short-lived Copilot provider token under the fsq-agent workspace. Initialization and provider setup must not send live model verification requests. When `--provider` is omitted, `init` must not mutate provider settings or start provider authentication. Runtime Copilot provider construction for pre-plan, dynamic execution, verification, and provider-backed AI assertion first reads the cached Copilot provider token produced by `init`; when that short-lived provider token is missing or expired, runtime construction may use a valid cached GitHub OAuth token to silently exchange and cache a fresh provider token, but it must not start device-code authentication. If neither a valid provider token nor a valid GitHub OAuth token exists, runtime construction fails with a setup-required configuration error.
 
+The local diagnostic entry is `fsq-agent doctor [--platform android|web|windows|macos] [--mode dynamic|strict|all] [--format text|json] [--color auto|always|never] [--non-interactive] [--repair]`. It performs bounded environment, workspace, provider, and selected-platform connectivity checks without model inference, target-workflow execution, target application launch, or Appium session creation. Text mode streams check and repair progress as work occurs: interactive terminals update the current `RUNNING` line in place, while non-interactive text streams append plain progress/result lines. Status words remain visible and may use terminal-aware colors; JSON remains one stable diagnosis-only document with no progress text or ANSI escapes. Doctor safe repair is a closed allowlist: missing workspace initialization, marker creation only for an empty workspace, validated non-secret platform `.env` values entered interactively with atomic backup-preserving updates, and Copilot provider-token refresh from an already valid cached GitHub OAuth token. Doctor never installs dependencies, requests secrets, starts provider device-code authentication, rewrites presets, controls ADB/Appium services, or removes non-empty directories.
+
 ## Platform Blocks
 
 Shared platform rules:
@@ -64,6 +66,7 @@ Android platform block:
 - Platform id: `android`.
 - Backend: `uiautomator2`.
 - Local app/device values come from `FSQ_ANDROID_APP_ID` and `FSQ_ANDROID_SERIAL` or strict FSQ case metadata where allowed.
+- Doctor treats successful ADB execution as the Android tooling-readiness boundary. Device discovery retries one bounded time when the first `adb devices` attempt times out or fails while the daemon is starting, preventing a successful daemon startup from being reported as an ADB failure. `adb devices` command/server failure after retry blocks Android readiness, while a successful empty device list is a warning and skips device-dependent uiautomator2/package checks without blocking readiness. Offline, unauthorized, configured-serial mismatch, and ambiguous multiple-device selection remain blocking failures because a target is present/configured but unusable or unresolved.
 - Explicit observation capability: canonical `ui_snapshot` with Android alias `uiTree`. Automatic runner evidence captures `screenshot` plus normalized `ui_snapshot` using compact Android UI hierarchy XML content. Android compact UI snapshots keep the existing `{"xml": ...}` payload shape, may use source-level hierarchy compression when available, remove layout-only/default data, clip long text-like attributes to the first 50 characters, and fall back to raw hierarchy XML if compaction is unavailable or unsafe.
 - Harness skill: `android-harness.md`.
 
@@ -111,18 +114,19 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 |---|---|---|
 | models | fsq_agent/models/SPEC.md | Owns shared domain models, FSQ case and lifecycle hook metadata/settings models, capability metadata/registry contracts, invocation/result contracts, replay reference models, and exceptions. |
 | capabilities | fsq_agent/capabilities/SPEC.md | Owns neutral capability declaration decorators, catalog-backed platform action validation, and metadata discovery helpers used by `core` recordable capabilities. |
-| config | fsq_agent/config/SPEC.md | Loads and validates env/YAML runtime, provider, harness/driver/platform-tool, tracing, execution post-action delay, strict case lifecycle hook settings, strict replay secret, agent context, AgentTool output, CommonTool secret, and workspace configuration. |
-| providers | fsq_agent/providers/SPEC.md | Builds shared Azure OpenAI and GitHub Copilot provider sessions for agent runs, verifier/pre-planner calls, and provider-backed AI assertion evaluators. |
+| config | fsq_agent/config/SPEC.md | Loads and validates env/YAML runtime configuration and owns side-effect-free doctor inspection plus atomic `.env` and constrained workspace mutation primitives. |
+| providers | fsq_agent/providers/SPEC.md | Builds Azure OpenAI/GitHub Copilot sessions and evaluators and owns bounded no-inference provider diagnostics plus explicit cached-token refresh. |
+| doctor | fsq_agent/doctor/SPEC.md | Orchestrates TTY-aware readiness diagnosis, typed text/JSON reports, mode-specific readiness, and the closed safe-repair allowlist across config, providers, and platform probes. |
 | tools | fsq_agent/tools/SPEC.md | Provides dynamic-only AgentTool providers, scoped file helpers, bounded artifact lookup helpers, and the OpenAI Agents SDK AgentTool adapter. |
 | observation | fsq_agent/observation/SPEC.md | Persists run event timelines; screenshots, UI trees, and other observations are represented by platform evidence artifacts or AgentTool artifact refs. |
 | knowledge | fsq_agent/knowledge/SPEC.md | Loads project-specific application knowledge and task-referenced knowledge assets. |
 | fsq | fsq_agent/fsq/SPEC.md | Loads FSQ AI Test DSL YAML cases, validates case lifecycle hook metadata, resolves authored action aliases through the capability registry, validates replay references, and converts parsed command documents into canonical deterministic executable steps. |
 | skills | fsq_agent/skills/SPEC.md | Loads complete configured automation skill instruction bundles and skips or fails broken bundles according to requiredness. |
 | report | fsq_agent/report/SPEC.md | Generates LLM task reports, strict-core evidence reports, reconstructs tool calls from structured capability metadata, and resolves stored reports by run id. |
-| core | fsq_agent/core/SPEC.md | Defines the shared `StepRunner` execution manager, CommonTool/PlatformTool providers, active platform harness and driver interfaces, factory boundaries for capability definitions, drivers, and harnesses, private concrete platform backends, and evidence coordination. |
+| core | fsq_agent/core/SPEC.md | Defines shared execution management, platform harness/driver factories and interfaces, evidence coordination, private backends, and the platform diagnostic probe factory. |
 | agent | fsq_agent/agent/SPEC.md | Orchestrates dynamic goal/reference execution through OpenAI Agents SDK, AgentTool exposure, active-platform capability exposure, verification, replayable event metadata, and report generation. |
 | playground | fsq_agent/playground/SPEC.md | Serves the local browser playground for active-platform runtime status, Android session setup where applicable, dynamic goal/raw-case execution, strict YAML execution, loading existing run results, screenshots, replay video preview, and report lookup. |
-| cli | fsq_agent/cli/SPEC.md | Exposes the public `init`, `run`, `report`, `playground`, optional provider setup during initialization, capability registry bootstrap, strict replay including case lifecycle hook orchestration, dynamic-run recording, and local playground workflows. |
+| cli | fsq_agent/cli/SPEC.md | Exposes the public `init`, `doctor`, `run`, `report`, `playground`, optional provider setup during initialization, capability registry bootstrap, strict replay including case lifecycle hook orchestration, dynamic-run recording, and local playground workflows. |
 
 ## Frontend Build Boundary
 
@@ -144,6 +148,11 @@ flowchart TD
     CLI --> Models[models]
     CLI --> Report[report]
     CLI --> Playground[playground]
+    CLI --> Doctor[doctor]
+    Doctor --> Config
+    Doctor --> Providers
+    Doctor --> Core
+    Doctor --> Models
     Agent --> Core[core]
     Agent --> Config[config]
     Agent --> Providers[providers]
@@ -189,6 +198,6 @@ flowchart TD
 
 - Use the lowest architecture level that keeps the module clear, testable, and changeable.
 - `models`, `capabilities`, `tools`, `fsq`, `report`, `knowledge`, `skills`, `config`, `providers`, and `observation` default to Level 2 Simple Package unless a module SPEC records a stronger need.
-- `core`, `agent`, `cli`, and `playground` use Level 3 Layered Application because they coordinate execution flows, external SDKs, harnesses, providers, persistence, HTTP entry points, and user entry points.
+- `core`, `agent`, `cli`, `doctor`, and `playground` use Level 3 Layered Application because they coordinate execution flows, external SDKs, harnesses, providers, diagnostics, persistence, HTTP entry points, and user entry points.
 - Public APIs must be exported from module `__init__.py` files, and internal implementation modules must remain private across module boundaries. Modules that have adopted the stricter public API boundary must not export concrete implementation-selection classes, helper functions, decorators, or discovery utilities unless their module SPEC records an explicit exception. Public factories should own construction/selection of private implementations when a caller only needs a protocol or service contract.
 - Do not introduce Repository, Unit of Work, Clean Architecture, or DDD patterns unless a confirmed SPEC records the concrete reason.
