@@ -3638,9 +3638,12 @@ properties:
       document.getElementById("yamlPreview").textContent = fsqYamlSource;
       const filePreview = document.getElementById("filePreview");
       const codeCopyDefaultLabel = "Copy";
+      const codeCopyPendingLabel = "Copying…";
       const fsqCopyState = {
         operationId: 0,
         pending: false,
+        resetTimerId: 0,
+        resetToken: 0,
       };
       function escapeSourceHtml(value) {
         return value
@@ -3701,14 +3704,27 @@ properties:
         button.textContent = label;
         button.setAttribute("aria-label", label);
       }
+      function cancelFsqCopyFeedbackReset() {
+        fsqCopyState.resetToken += 1;
+        if (fsqCopyState.resetTimerId) {
+          clearTimeout(fsqCopyState.resetTimerId);
+          fsqCopyState.resetTimerId = 0;
+        }
+      }
       function setTemporaryCodeActionLabel(button, label, restoreLabel = codeCopyDefaultLabel) {
-        clearTimeout(button.codeActionResetTimer);
         setCodeActionLabel(button, label);
-        button.codeActionResetTimer = window.setTimeout(() => {
-          if (!button.isConnected) {
+        cancelFsqCopyFeedbackReset();
+        const resetToken = fsqCopyState.resetToken;
+        fsqCopyState.resetTimerId = window.setTimeout(() => {
+          if (resetToken !== fsqCopyState.resetToken || fsqCopyState.pending) {
             return;
           }
-          setCodeActionLabel(button, restoreLabel);
+          fsqCopyState.resetTimerId = 0;
+          const currentButton = getCurrentFsqCopyButton();
+          if (!currentButton || !currentButton.isConnected) {
+            return;
+          }
+          setCodeActionLabel(currentButton, restoreLabel);
         }, 1200);
       }
       function setCodeActionPending(button, isPending) {
@@ -3758,9 +3774,11 @@ properties:
           setTemporaryCodeActionLabel(button, "Copy failed");
           return;
         }
+        cancelFsqCopyFeedbackReset();
         fsqCopyState.pending = true;
         fsqCopyState.operationId += 1;
         const operationId = fsqCopyState.operationId;
+        setCodeActionLabel(button, codeCopyPendingLabel);
         setCodeActionPending(button, true);
         try {
           await navigator.clipboard.writeText(fsqYamlSource);

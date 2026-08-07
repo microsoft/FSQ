@@ -186,56 +186,86 @@ async function flushMicrotasks() {{
   await Promise.resolve();
   await Promise.resolve();
 }}
+function buttonState(button) {{
+  return {{
+    disabled: button.disabled,
+    pending: button.dataset.codeActionPending || "",
+    label: button.textContent,
+  }};
+}}
+function resolveNextClipboardWrite() {{
+  (clipboardOperations.shift() || {{ resolve() {{}} }}).resolve();
+}}
+function rejectNextClipboardWrite() {{
+  (clipboardOperations.shift() || {{ reject() {{}} }}).reject(new Error("denied"));
+}}
 
 const firstButton = renderCodeView();
 filePreview.click(firstButton);
 const rerenderedButton = renderCodeView();
-const rerenderedPending = {{
-  disabled: rerenderedButton.disabled,
-  pending: rerenderedButton.dataset.codeActionPending || "",
-  label: rerenderedButton.textContent,
-}};
+const rerenderedPending = buttonState(rerenderedButton);
 filePreview.click(rerenderedButton);
 const writeCountBeforeRetry = clipboardWrites.length;
-(clipboardOperations.shift() || {{ resolve() {{}} }}).resolve();
+resolveNextClipboardWrite();
 await flushMicrotasks();
-const successState = {{
-  disabled: rerenderedButton.disabled,
-  pending: rerenderedButton.dataset.codeActionPending || "",
-  label: rerenderedButton.textContent,
-}};
-flushTimers();
-const resetAfterSuccess = rerenderedButton.textContent;
+const successState = buttonState(rerenderedButton);
 filePreview.click(rerenderedButton);
-(clipboardOperations.shift() || {{ reject() {{}} }}).reject(new Error("denied"));
+const pendingAfterSuccessRetry = buttonState(rerenderedButton);
+flushTimers();
+const pendingAfterSuccessRetryTimerFlush = buttonState(rerenderedButton);
+resolveNextClipboardWrite();
 await flushMicrotasks();
-const failureState = {{
-  disabled: rerenderedButton.disabled,
-  pending: rerenderedButton.dataset.codeActionPending || "",
-  label: rerenderedButton.textContent,
-}};
+const retrySuccessState = buttonState(rerenderedButton);
+flushTimers();
+const resetAfterSuccessRetry = rerenderedButton.textContent;
+filePreview.click(rerenderedButton);
+rejectNextClipboardWrite();
+await flushMicrotasks();
+const failureState = buttonState(rerenderedButton);
+filePreview.click(rerenderedButton);
+const pendingAfterFailureRetry = buttonState(rerenderedButton);
+flushTimers();
+const pendingAfterFailureRetryTimerFlush = buttonState(rerenderedButton);
+rejectNextClipboardWrite();
+await flushMicrotasks();
+const retryFailureState = buttonState(rerenderedButton);
 flushTimers();
 console.log(JSON.stringify({{
   clipboardWriteCount: clipboardWrites.length,
   writeCountBeforeRetry,
   firstWrite: clipboardWrites[0] || "",
   secondWrite: clipboardWrites[1] || "",
+  thirdWrite: clipboardWrites[2] || "",
+  fourthWrite: clipboardWrites[3] || "",
   rerenderedPending,
   successState,
-  resetAfterSuccess,
+  pendingAfterSuccessRetry,
+  pendingAfterSuccessRetryTimerFlush,
+  retrySuccessState,
+  resetAfterSuccessRetry,
   failureState,
-  resetAfterFailure: rerenderedButton.textContent,
+  pendingAfterFailureRetry,
+  pendingAfterFailureRetryTimerFlush,
+  retryFailureState,
+  resetAfterFailureRetry: rerenderedButton.textContent,
 }}));
 """
     result = subprocess.run([node, "--input-type=module", "-e", script], check=True, capture_output=True, text=True)  # noqa: S603
     payload = json.loads(result.stdout)
 
-    assert payload["clipboardWriteCount"] == 2
+    assert payload["clipboardWriteCount"] == 4
     assert payload["writeCountBeforeRetry"] == 1
     assert payload["firstWrite"] == payload["secondWrite"]
+    assert payload["secondWrite"] == payload["thirdWrite"] == payload["fourthWrite"]
     assert payload["firstWrite"].startswith("schemaVersion: fsq.ai-test/v1\n")
     assert payload["rerenderedPending"] == {"disabled": True, "pending": "true", "label": "Copy"}
     assert payload["successState"] == {"disabled": False, "pending": "", "label": "Copied"}
-    assert payload["resetAfterSuccess"] == "Copy"
+    assert payload["pendingAfterSuccessRetry"] == {"disabled": True, "pending": "true", "label": "Copying…"}
+    assert payload["pendingAfterSuccessRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…"}
+    assert payload["retrySuccessState"] == {"disabled": False, "pending": "", "label": "Copied"}
+    assert payload["resetAfterSuccessRetry"] == "Copy"
     assert payload["failureState"] == {"disabled": False, "pending": "", "label": "Copy failed"}
-    assert payload["resetAfterFailure"] == "Copy"
+    assert payload["pendingAfterFailureRetry"] == {"disabled": True, "pending": "true", "label": "Copying…"}
+    assert payload["pendingAfterFailureRetryTimerFlush"] == {"disabled": True, "pending": "true", "label": "Copying…"}
+    assert payload["retryFailureState"] == {"disabled": False, "pending": "", "label": "Copy failed"}
+    assert payload["resetAfterFailureRetry"] == "Copy"
