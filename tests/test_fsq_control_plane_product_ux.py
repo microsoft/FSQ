@@ -630,6 +630,401 @@ def _find_page_child_with_class(page_children: dict[str, list[dict[str, str]]], 
     pytest.fail(f'missing "{class_name}" direct child on page "{page_id}"')
 
 
+def _extract_config_section(html: str) -> str:
+    config_match = re.search(r'<section class="page" id="config">\s*(?P<section>[\s\S]*?)\s*</section>', html)
+    assert config_match is not None
+    return config_match.group("section")
+
+
+class _ConfigContractParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._stack: list[tuple[str, dict[str, str]]] = []
+        self._config_depth: int | None = None
+        self._text_targets: list[tuple[str, list[str]]] = []
+        self._current_row: dict[str, object] | None = None
+        self.context = ""
+        self.title = ""
+        self.description = ""
+        self.header_buttons: list[str] = []
+        self.row_keys: list[str] = []
+        self.row_descriptions: list[str] = []
+        self.row_input_types: list[str] = []
+        self.row_input_ids: list[str] = []
+        self.row_error_ids: list[str] = []
+        self.toggle_buttons: list[dict[str, str]] = []
+        self.footer_buttons: list[str] = []
+        self.status_ids: list[str] = []
+        self.section_text: list[str] = []
+        self.panel_count = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name: value or "" for name, value in attrs}
+        self._stack.append((tag, attributes))
+
+        classes = set(attributes.get("class", "").split())
+        if tag == "section" and attributes.get("id") == "config":
+            self._config_depth = len(self._stack)
+            return
+        if self._config_depth is None or len(self._stack) < self._config_depth:
+            return
+
+        if "config-panel" in classes:
+            self.panel_count += 1
+        if tag == "p" and "eyebrow" in classes:
+            self._text_targets.append(("context", []))
+        elif tag == "h1":
+            self._text_targets.append(("title", []))
+        elif tag == "p" and "muted" in classes and any(
+            "page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
+        ):
+            self._text_targets.append(("description", []))
+
+        if "config-row" in classes:
+            self._current_row = {"toggle_button": None}
+
+        if self._current_row is not None:
+            if tag == "strong" and any("config-key" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+                self._text_targets.append(("row_key", []))
+            elif tag == "p" and any("config-key" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+                self._text_targets.append(("row_description", []))
+            elif tag == "input":
+                self._current_row["input_type"] = attributes.get("type", "text")
+                self._current_row["input_id"] = attributes.get("id", "")
+            elif "config-error" in classes:
+                self._current_row["error_id"] = attributes.get("id", "")
+            elif tag == "button" and any(
+                "config-input-wrap" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
+            ):
+                self._current_row["toggle_button"] = {
+                    "aria_label": attributes.get("aria-label", ""),
+                }
+                self._text_targets.append(("toggle_button", []))
+
+        if tag == "button" and any("page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+            self._text_targets.append(("header_buttons", []))
+        elif tag == "button" and any("config-footer" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+            self._text_targets.append(("footer_buttons", []))
+
+        if "config-status" in classes:
+            self.status_ids.append(attributes.get("id", ""))
+
+    def handle_data(self, data: str) -> None:
+        if self._config_depth is None:
+            return
+        text = data.strip()
+        if text:
+            self.section_text.append(text)
+        if not self._text_targets or not text:
+            return
+        self._text_targets[-1][1].append(text)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._text_targets and self._stack and self._stack[-1][0] == tag:
+            target_name, chunks = self._text_targets.pop()
+            text = " ".join(chunks).strip()
+            if text:
+                if target_name == "context":
+                    self.context = text
+                elif target_name == "title":
+                    self.title = text
+                elif target_name == "description":
+                    self.description = text
+                elif target_name == "header_buttons":
+                    self.header_buttons.append(text)
+                elif target_name == "footer_buttons":
+                    self.footer_buttons.append(text)
+                elif target_name == "row_key" and self._current_row is not None:
+                    self._current_row["row_key"] = text
+                elif target_name == "row_description" and self._current_row is not None:
+                    self._current_row["row_description"] = text
+                elif target_name == "toggle_button" and self._current_row is not None:
+                    toggle_button = self._current_row.get("toggle_button")
+                    if isinstance(toggle_button, dict):
+                        toggle_button["text"] = text
+
+        if self._current_row is not None and tag == "div":
+            current_tag, current_attributes = self._stack[-1]
+            if current_tag == "div" and "config-row" in current_attributes.get("class", "").split():
+                self.row_keys.append(str(self._current_row.get("row_key", "")))
+                self.row_descriptions.append(str(self._current_row.get("row_description", "")))
+                self.row_input_types.append(str(self._current_row.get("input_type", "")))
+                self.row_input_ids.append(str(self._current_row.get("input_id", "")))
+                self.row_error_ids.append(str(self._current_row.get("error_id", "")))
+                toggle_button = self._current_row.get("toggle_button")
+                if isinstance(toggle_button, dict):
+                    self.toggle_buttons.append(toggle_button)
+                self._current_row = None
+
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
+        if self._config_depth is not None and len(self._stack) < self._config_depth:
+            self._config_depth = None
+            self._current_row = None
+
+
+def _parse_config_contract(html: str) -> dict[str, object]:
+    parser = _ConfigContractParser()
+    parser.feed(html)
+    return {
+        "context": parser.context,
+        "title": parser.title,
+        "description": parser.description,
+        "header_buttons": parser.header_buttons,
+        "row_keys": parser.row_keys,
+        "row_descriptions": parser.row_descriptions,
+        "row_input_types": parser.row_input_types,
+        "row_input_ids": parser.row_input_ids,
+        "row_error_ids": parser.row_error_ids,
+        "toggle_buttons": parser.toggle_buttons,
+        "footer_buttons": parser.footer_buttons,
+        "status_ids": parser.status_ids,
+        "section_text": " ".join(parser.section_text),
+        "panel_count": parser.panel_count,
+    }
+
+
+def _run_config_form_contract(html: str) -> dict[str, object]:
+    start = html.index('const configForm = document.getElementById("configForm");')
+    end = html.index("const runReports = {")
+    snippet = html[start:end]
+    script = f"""
+class FakeClassList {{
+  constructor(names = []) {{
+    this.values = new Set(names);
+  }}
+  add(...names) {{
+    names.forEach((name) => this.values.add(name));
+  }}
+  remove(...names) {{
+    names.forEach((name) => this.values.delete(name));
+  }}
+  contains(name) {{
+    return this.values.has(name);
+  }}
+  toggle(name, force) {{
+    if (force === undefined) {{
+      if (this.values.has(name)) {{
+        this.values.delete(name);
+        return false;
+      }}
+      this.values.add(name);
+      return true;
+    }}
+    if (force) {{
+      this.values.add(name);
+      return true;
+    }}
+    this.values.delete(name);
+    return false;
+  }}
+  toString() {{
+    return [...this.values].join(" ");
+  }}
+}}
+
+class FakeElement {{
+  constructor({{
+    id = "",
+    classNames = [],
+    text = "",
+    type = "",
+    value = "",
+    dataset = {{}},
+    hidden = false,
+  }} = {{}}) {{
+    this.id = id;
+    this.dataset = {{ ...dataset }};
+    this.classList = new FakeClassList(classNames);
+    this.listeners = new Map();
+    this.attributes = new Map();
+    this.hidden = hidden;
+    this.textContent = text;
+    this.type = type;
+    this.value = value;
+    this.className = classNames.join(" ");
+  }}
+  addEventListener(type, listener) {{
+    if (!this.listeners.has(type)) {{
+      this.listeners.set(type, []);
+    }}
+    this.listeners.get(type).push(listener);
+  }}
+  click() {{
+    const event = {{
+      preventDefault() {{}},
+      currentTarget: this,
+      target: this,
+    }};
+    for (const listener of this.listeners.get("click") || []) {{
+      listener(event);
+    }}
+  }}
+  setAttribute(name, value) {{
+    this.attributes.set(name, String(value));
+    if (name === "aria-label") {{
+      this.ariaLabel = String(value);
+    }}
+    if (name === "aria-invalid") {{
+      this.ariaInvalid = String(value);
+    }}
+  }}
+  getAttribute(name) {{
+    return this.attributes.has(name) ? this.attributes.get(name) : null;
+  }}
+}}
+
+class FakeForm extends FakeElement {{
+  constructor(options = {{}}) {{
+    super(options);
+  }}
+}}
+
+const nodes = {{}};
+nodes.configForm = new FakeForm({{ id: "configForm" }});
+nodes.configBaseUrl = new FakeElement({{ id: "configBaseUrl", type: "url", value: "ftp://example.test" }});
+nodes.configBaseUrlError = new FakeElement({{ id: "configBaseUrlError" }});
+nodes.configApiKey = new FakeElement({{ id: "configApiKey", type: "password", value: "" }});
+nodes.configApiKeyError = new FakeElement({{ id: "configApiKeyError" }});
+nodes.configApiKeyToggle = new FakeElement({{
+  id: "configApiKeyToggle",
+  text: "Show",
+  classNames: ["btn", "small"],
+}});
+nodes.configApiKeyToggle.setAttribute("aria-label", "Show api_key value");
+nodes.configModelName = new FakeElement({{ id: "configModelName", type: "text", value: "" }});
+nodes.configModelNameError = new FakeElement({{ id: "configModelNameError" }});
+nodes.configSaveButton = new FakeElement({{ id: "configSaveButton", text: "Save changes" }});
+nodes.configTestButton = new FakeElement({{ id: "configTestButton", text: "Test connection" }});
+nodes.configStatus = new FakeElement({{ id: "configStatus", classNames: ["config-status"] }});
+
+const document = {{
+  getElementById(id) {{
+    return nodes[id] || null;
+  }},
+}};
+
+const toastMessages = [];
+function showToast(message) {{
+  toastMessages.push(message);
+}}
+
+let now = 0;
+const timers = [];
+function setTimeout(callback, delay) {{
+  const timer = {{
+    id: timers.length + 1,
+    callback,
+    runAt: now + delay,
+  }};
+  timers.push(timer);
+  return timer.id;
+}}
+function clearTimeout(timerId) {{
+  const index = timers.findIndex((timer) => timer.id === timerId);
+  if (index >= 0) {{
+    timers.splice(index, 1);
+  }}
+}}
+function flushTimers() {{
+  timers.sort((a, b) => a.runAt - b.runAt);
+  while (timers.length) {{
+    const timer = timers.shift();
+    now = timer.runAt;
+    timer.callback();
+  }}
+}}
+
+{snippet}
+
+const initialState = {{
+  inputType: configApiKey.type,
+  toggleLabel: configApiKeyToggle.textContent,
+  toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
+}};
+
+configApiKeyToggle.click();
+const visibleState = {{
+  inputType: configApiKey.type,
+  toggleLabel: configApiKeyToggle.textContent,
+  toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
+}};
+configApiKeyToggle.click();
+const hiddenState = {{
+  inputType: configApiKey.type,
+  toggleLabel: configApiKeyToggle.textContent,
+  toggleAriaLabel: configApiKeyToggle.getAttribute("aria-label"),
+}};
+
+configSaveButton.click();
+const invalidSaveState = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+  baseUrlError: configBaseUrlError.textContent,
+  apiKeyError: configApiKeyError.textContent,
+  modelNameError: configModelNameError.textContent,
+  baseUrlInvalid: configBaseUrl.getAttribute("aria-invalid"),
+  apiKeyInvalid: configApiKey.getAttribute("aria-invalid"),
+  modelNameInvalid: configModelName.getAttribute("aria-invalid"),
+  toastMessages: [...toastMessages],
+}};
+
+configBaseUrl.value = "https://models.example.test/openai/v1";
+configApiKey.value = "secret-key";
+configModelName.value = "gpt-5.6";
+configTestButton.click();
+const validTestPending = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+  baseUrlError: configBaseUrlError.textContent,
+  apiKeyError: configApiKeyError.textContent,
+  modelNameError: configModelNameError.textContent,
+}};
+configModelName.value = "";
+for (const listener of configModelName.listeners.get("input") || []) {{
+  listener({{ currentTarget: configModelName, target: configModelName }});
+}}
+const invalidAfterPendingEdit = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+  modelNameError: configModelNameError.textContent,
+  modelNameInvalid: configModelName.getAttribute("aria-invalid"),
+}};
+flushTimers();
+configModelName.value = "gpt-5.6";
+for (const listener of configModelName.listeners.get("input") || []) {{
+  listener({{ currentTarget: configModelName, target: configModelName }});
+}}
+configTestButton.click();
+flushTimers();
+const validTestConnected = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+}};
+
+configSaveButton.click();
+const validSaveState = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+  toastMessages: [...toastMessages],
+}};
+
+console.log(JSON.stringify({{
+  initialState,
+  visibleState,
+  hiddenState,
+  invalidSaveState,
+  validTestPending,
+  invalidAfterPendingEdit,
+  validTestConnected,
+  validSaveState,
+}}));
+"""
+    return _run_node_json_script(script, skip_reason="Node.js is required for FSQ config UX script verification.")
+
+
 def _run_workbench_report_state_contract(html: str) -> dict[str, object]:
     start = html.index("const runReports = {")
     end = html.index('const workspaceNav = document.getElementById("workspaceNav");')
@@ -1357,7 +1752,7 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
 
     assert _find_page_child_with_class(page_children, "home", "content-grid")["class"] == "content-grid"
     assert _find_page_child_with_class(page_children, "runs", "content-grid")["class"] == "content-grid"
-    assert _find_page_child_with_class(page_children, "config", "content-grid environment-grid")["class"] == "content-grid environment-grid"
+    assert _find_page_child_with_class(page_children, "config", "content-grid")["class"] == "content-grid"
     settings_content = _find_page_child_with_class(page_children, "settings", "content-grid card")
     assert settings_content["class"] == "content-grid card"
     assert "max-width" not in settings_content.get("style", "")
@@ -1377,6 +1772,141 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
     )
     assert responsive_device_selectors == [".device-workbench", ".structured-case"]
     assert responsive_device_rule["grid-template-columns"] == "1fr"
+
+
+def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    css = _extract_style_block(html)
+    config_contract = _parse_config_contract(html)
+    config_section = _extract_config_section(html)
+
+    config_panel_rule = _extract_css_declarations(rules[".config-panel"][0])
+    config_row_rule = _extract_css_declarations(rules[".config-row"][0])
+    config_key_rule = _extract_css_declarations(rules[".config-key"][0])
+    config_control_rule = _extract_css_declarations(rules[".config-control"][0])
+    config_input_wrap_rule = _extract_css_declarations(rules[".config-input-wrap"][0])
+    config_error_rule = _extract_css_declarations(rules[".config-error"][0])
+    config_footer_rule = _extract_css_declarations(rules[".config-footer"][0])
+    config_status_rule = _extract_css_declarations(rules[".config-status"][0])
+
+    assert config_contract["context"] == "WORKSPACE / LLM CONFIGURATION"
+    assert config_contract["title"] == "LLM Configuration"
+    assert config_contract["description"] == "Connection values for the active Workspace LLM endpoint."
+    assert config_contract["header_buttons"] == ["Save changes"]
+    assert config_contract["panel_count"] == 1
+    assert config_contract["row_keys"] == ["base_url", "api_key", "model_name"]
+    assert config_contract["row_input_types"] == ["url", "password", "text"]
+    assert config_contract["row_input_ids"] == ["configBaseUrl", "configApiKey", "configModelName"]
+    assert config_contract["row_error_ids"] == [
+        "configBaseUrlError",
+        "configApiKeyError",
+        "configModelNameError",
+    ]
+    assert config_contract["toggle_buttons"] == [
+        {
+            "aria_label": "Show api_key value",
+            "text": "Show",
+        }
+    ]
+    assert config_contract["footer_buttons"] == ["Test connection"]
+    assert config_contract["status_ids"] == ["configStatus"]
+    assert "compatible model service endpoint" in str(config_contract["row_descriptions"][0]).lower()
+    assert "masked by default" in str(config_contract["row_descriptions"][1]).lower()
+    assert "deployment name" in str(config_contract["row_descriptions"][2]).lower()
+
+    for removed_text in [
+        "provider",
+        "account",
+        "reconnect",
+        "run defaults",
+        "default platform",
+        "post-action delay",
+        "max agent turns",
+        "browser executable",
+        "project environment",
+        ".env",
+    ]:
+        assert removed_text not in config_section.lower()
+
+    assert config_panel_rule["width"] == "100%"
+    assert config_panel_rule["display"] == "grid"
+    assert config_row_rule["display"] == "grid"
+    assert config_row_rule["grid-template-columns"] == "minmax(0, 1fr) minmax(280px, 420px)"
+    assert config_key_rule["display"] == "grid"
+    assert config_control_rule["display"] == "grid"
+    assert config_input_wrap_rule["display"] == "grid"
+    assert config_input_wrap_rule["grid-template-columns"] == "minmax(0, 1fr) auto"
+    assert config_error_rule["color"] == "var(--cp-danger)"
+    assert config_footer_rule["display"] == "flex"
+    assert config_status_rule["border"] == "1px solid var(--cp-border)"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 1120px",
+        selector=".config-row",
+        property_name="grid-template-columns",
+        expected_value="1fr",
+    )
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 1120px",
+        selector=".config-input-wrap",
+        property_name="grid-template-columns",
+        expected_value="1fr",
+    )
+
+
+def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None:
+    payload = _run_config_form_contract(_read_fsq_control_plane_product_ux_html())
+
+    assert payload["initialState"] == {
+        "inputType": "password",
+        "toggleLabel": "Show",
+        "toggleAriaLabel": "Show api_key value",
+    }
+    assert payload["visibleState"] == {
+        "inputType": "text",
+        "toggleLabel": "Hide",
+        "toggleAriaLabel": "Hide api_key value",
+    }
+    assert payload["hiddenState"] == {
+        "inputType": "password",
+        "toggleLabel": "Show",
+        "toggleAriaLabel": "Show api_key value",
+    }
+    assert payload["invalidSaveState"] == {
+        "statusText": "Please correct the highlighted LLM configuration values before continuing.",
+        "statusClassName": "config-status invalid",
+        "baseUrlError": "Enter a valid HTTP or HTTPS URL.",
+        "apiKeyError": "Enter an API key.",
+        "modelNameError": "Enter a model or deployment name.",
+        "baseUrlInvalid": "true",
+        "apiKeyInvalid": "true",
+        "modelNameInvalid": "true",
+        "toastMessages": [],
+    }
+    assert payload["validTestPending"] == {
+        "statusText": "Prototype: testing connection…",
+        "statusClassName": "config-status pending",
+        "baseUrlError": "",
+        "apiKeyError": "",
+        "modelNameError": "",
+    }
+    assert payload["invalidAfterPendingEdit"] == {
+        "statusText": "Please correct the highlighted LLM configuration values before continuing.",
+        "statusClassName": "config-status invalid",
+        "modelNameError": "Enter a model or deployment name.",
+        "modelNameInvalid": "true",
+    }
+    assert payload["validTestConnected"] == {
+        "statusText": "Prototype: connected. No network request was sent.",
+        "statusClassName": "config-status success",
+    }
+    assert payload["validSaveState"] == {
+        "statusText": "Prototype: LLM configuration saved locally for this mockup.",
+        "statusClassName": "config-status success",
+        "toastMessages": ["Prototype: LLM configuration saved locally for this mockup."],
+    }
 
 
 def test_extract_media_rule_with_selector_rejects_unrelated_one_column_rules() -> None:

@@ -1191,6 +1191,101 @@
         overflow-wrap: anywhere;
       }
 
+      .config-panel {
+        width: 100%;
+        display: grid;
+        overflow: hidden;
+      }
+
+      .config-panel form {
+        display: grid;
+      }
+
+      .config-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+        align-items: start;
+        gap: 18px;
+        padding: 20px 22px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .config-key {
+        display: grid;
+        gap: 7px;
+      }
+
+      .config-key strong {
+        font-family: Consolas, "Courier New", Courier, monospace;
+        font-size: 13px;
+      }
+
+      .config-key p {
+        margin: 0;
+        color: var(--cp-text-muted);
+        line-height: 1.5;
+      }
+
+      .config-control {
+        display: grid;
+        gap: 8px;
+      }
+
+      .config-input-wrap {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .config-error {
+        min-height: 17px;
+        margin: 0;
+        color: var(--cp-danger);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .config-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 18px 22px;
+        background: var(--cp-bg-elevated);
+      }
+
+      .config-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 6px 10px;
+        border: 1px solid var(--cp-border);
+        border-radius: 999px;
+        background: var(--cp-surface);
+        color: var(--cp-text-muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .config-status.invalid {
+        border-color: var(--cp-danger);
+        background: var(--cp-surface-soft);
+        color: var(--cp-danger);
+      }
+
+      .config-status.pending {
+        border-color: var(--cp-accent);
+        background: var(--cp-accent-soft);
+        color: var(--cp-accent);
+      }
+
+      .config-status.success {
+        border-color: var(--cp-success);
+        background: var(--cp-sheen);
+        color: var(--cp-success);
+      }
+
       .environment-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2716,6 +2811,16 @@
       }
 
       @media (max-width: 1120px) {
+        .config-row,
+        .config-input-wrap {
+          grid-template-columns: 1fr;
+        }
+
+        .config-footer {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
         .environment-grid {
           grid-template-columns: 1fr;
         }
@@ -3148,13 +3253,55 @@
 
         <section class="page" id="config">
           <div class="page-head">
-            <div><p class="eyebrow">WORKSPACE / CONFIG</p><h1>Workspace configuration</h1><p class="muted">Provider, platform defaults, runtime parameters, and project-local environment values for Control Plane Demo.</p></div>
-            <button class="btn primary">Save changes</button>
+            <div><p class="eyebrow">WORKSPACE / LLM CONFIGURATION</p><h1>LLM Configuration</h1><p class="muted">Connection values for the active Workspace LLM endpoint.</p></div>
+            <button class="btn primary" id="configSaveButton">Save changes</button>
           </div>
-          <div class="content-grid environment-grid">
-            <section class="card"><div class="card-head"><div><h2>LLM Provider</h2><p class="muted">Used by dynamic exploration and AI assertions</p></div><span class="tag success">ready</span></div><div class="card-body settings-list"><label class="field">Provider<select class="input"><option>GitHub Copilot</option><option>Azure OpenAI</option></select></label><label class="field">Account<input class="input" value="qunmi · Enterprise" disabled /></label><button class="btn small">Reconnect provider</button></div></section>
-            <section class="card"><div class="card-head"><div><h2>Run defaults</h2><p class="muted">Applied to new runs in this workspace</p></div></div><div class="card-body settings-list"><label class="field">Default platform<select class="input"><option>Web</option><option>Android</option><option>Windows</option><option>macOS</option></select></label><label class="field">Post-action delay<input class="input" value="0.5 seconds" /></label><label class="field">Max agent turns<input class="input" value="50" /></label></div></section>
-            <section class="card"><div class="card-head"><div><h2>Project environment</h2><p class="muted">Local values saved in .env</p></div><span class="tag success">gitignored</span></div><div class="card-body settings-list"><label class="field">Browser executable<input class="input mono" value="/Applications/Google Chrome.app" /></label><label class="field">Base URL<input class="input mono" value="https://app.example.test" /></label><button class="btn small">Open .env</button></div></section>
+          <div class="content-grid">
+            <section class="card config-panel">
+              <form id="configForm" novalidate>
+                <div class="config-row">
+                  <div class="config-key">
+                    <strong>base_url</strong>
+                    <p>Compatible model service endpoint. Enter a valid HTTP or HTTPS URL.</p>
+                  </div>
+                  <div class="config-control">
+                    <div class="config-input-wrap">
+                      <input class="input mono" id="configBaseUrl" type="url" value="https://models.example.test/openai/v1" aria-describedby="configBaseUrlError" aria-invalid="false" required />
+                    </div>
+                    <p class="config-error" id="configBaseUrlError" aria-live="polite"></p>
+                  </div>
+                </div>
+                <div class="config-row">
+                  <div class="config-key">
+                    <strong>api_key</strong>
+                    <p>Required credential for the active Workspace endpoint. Existing values stay masked by default.</p>
+                  </div>
+                  <div class="config-control">
+                    <div class="config-input-wrap">
+                      <input class="input mono" id="configApiKey" type="password" value="••••••••••••••" aria-describedby="configApiKeyError" aria-invalid="false" required />
+                      <button class="btn small" type="button" id="configApiKeyToggle" aria-label="Show api_key value">Show</button>
+                    </div>
+                    <p class="config-error" id="configApiKeyError" aria-live="polite"></p>
+                  </div>
+                </div>
+                <div class="config-row">
+                  <div class="config-key">
+                    <strong>model_name</strong>
+                    <p>Required model or deployment name used by the compatible endpoint.</p>
+                  </div>
+                  <div class="config-control">
+                    <div class="config-input-wrap">
+                      <input class="input mono" id="configModelName" type="text" value="gpt-5.6" aria-describedby="configModelNameError" aria-invalid="false" required />
+                    </div>
+                    <p class="config-error" id="configModelNameError" aria-live="polite"></p>
+                  </div>
+                </div>
+                <div class="config-footer">
+                  <button class="btn small" type="button" id="configTestButton">Test connection</button>
+                  <div class="config-status" id="configStatus" role="status" aria-live="polite">Prototype only. Validation runs locally.</div>
+                </div>
+              </form>
+            </section>
           </div>
         </section>
 
@@ -3598,6 +3745,121 @@
           button.classList.add("active");
         });
       });
+      const configForm = document.getElementById("configForm");
+      const configBaseUrl = document.getElementById("configBaseUrl");
+      const configBaseUrlError = document.getElementById("configBaseUrlError");
+      const configApiKey = document.getElementById("configApiKey");
+      const configApiKeyError = document.getElementById("configApiKeyError");
+      const configApiKeyToggle = document.getElementById("configApiKeyToggle");
+      const configModelName = document.getElementById("configModelName");
+      const configModelNameError = document.getElementById("configModelNameError");
+      const configSaveButton = document.getElementById("configSaveButton");
+      const configTestButton = document.getElementById("configTestButton");
+      const configStatus = document.getElementById("configStatus");
+      let configStatusTimer;
+
+      function setConfigStatus(message, tone = "") {
+        if (!configStatus) return;
+        configStatus.className = tone ? `config-status ${tone}` : "config-status";
+        configStatus.textContent = message;
+      }
+
+      function setConfigFieldState(input, errorElement, errorMessage) {
+        if (!input || !errorElement) return;
+        const invalid = Boolean(errorMessage);
+        input.setAttribute("aria-invalid", invalid ? "true" : "false");
+        errorElement.textContent = errorMessage;
+      }
+
+      function isValidConfigBaseUrl(value) {
+        try {
+          const parsed = new URL(value);
+          return parsed.protocol === "http:" || parsed.protocol === "https:";
+        } catch {
+          return false;
+        }
+      }
+
+      function validateConfigForm() {
+        if (!configBaseUrl || !configApiKey || !configModelName) return false;
+
+        const baseUrlValue = configBaseUrl.value.trim();
+        const apiKeyValue = configApiKey.value.trim();
+        const modelNameValue = configModelName.value.trim();
+        const baseUrlError = isValidConfigBaseUrl(baseUrlValue) ? "" : "Enter a valid HTTP or HTTPS URL.";
+        const apiKeyError = apiKeyValue ? "" : "Enter an API key.";
+        const modelNameError = modelNameValue ? "" : "Enter a model or deployment name.";
+
+        setConfigFieldState(configBaseUrl, configBaseUrlError, baseUrlError);
+        setConfigFieldState(configApiKey, configApiKeyError, apiKeyError);
+        setConfigFieldState(configModelName, configModelNameError, modelNameError);
+
+        return !baseUrlError && !apiKeyError && !modelNameError;
+      }
+
+      function handleConfigInputChange() {
+        clearTimeout(configStatusTimer);
+        if (validateConfigForm()) {
+          setConfigStatus("Prototype only. Validation runs locally.");
+          return;
+        }
+        setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
+      }
+
+      function updateConfigApiKeyToggle() {
+        if (!configApiKey || !configApiKeyToggle) return;
+        const showing = configApiKey.type === "text";
+        configApiKeyToggle.textContent = showing ? "Hide" : "Show";
+        configApiKeyToggle.setAttribute("aria-label", `${showing ? "Hide" : "Show"} api_key value`);
+      }
+
+      if (
+        configForm &&
+        configBaseUrl &&
+        configBaseUrlError &&
+        configApiKey &&
+        configApiKeyError &&
+        configApiKeyToggle &&
+        configModelName &&
+        configModelNameError &&
+        configSaveButton &&
+        configTestButton &&
+        configStatus
+      ) {
+        [configBaseUrl, configApiKey, configModelName].forEach((input) => {
+          input.addEventListener("input", handleConfigInputChange);
+        });
+        configForm.addEventListener("submit", (event) => event.preventDefault());
+        updateConfigApiKeyToggle();
+
+        configApiKeyToggle.addEventListener("click", () => {
+          configApiKey.type = configApiKey.type === "password" ? "text" : "password";
+          updateConfigApiKeyToggle();
+        });
+
+        configSaveButton.addEventListener("click", () => {
+          clearTimeout(configStatusTimer);
+          if (!validateConfigForm()) {
+            setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
+            return;
+          }
+          const message = "Prototype: LLM configuration saved locally for this mockup.";
+          setConfigStatus(message, "success");
+          showToast(message);
+        });
+
+        configTestButton.addEventListener("click", () => {
+          clearTimeout(configStatusTimer);
+          if (!validateConfigForm()) {
+            setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
+            return;
+          }
+          setConfigStatus("Prototype: testing connection…", "pending");
+          configStatusTimer = setTimeout(() => {
+            setConfigStatus("Prototype: connected. No network request was sent.", "success");
+          }, 720);
+        });
+      }
       const runReports = {
         success: {
           context: "RUN REPORT",
