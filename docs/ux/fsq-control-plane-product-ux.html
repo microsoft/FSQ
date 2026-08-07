@@ -3254,31 +3254,31 @@
         <section class="page" id="config">
           <div class="page-head">
             <div><p class="eyebrow">WORKSPACE / LLM CONFIGURATION</p><h1>LLM Configuration</h1><p class="muted">Connection values for the active Workspace LLM endpoint.</p></div>
-            <button class="btn primary" id="configSaveButton">Save changes</button>
+            <button class="btn primary" id="configSaveButton" type="submit" form="configForm">Save changes</button>
           </div>
           <div class="content-grid">
             <section class="card config-panel">
               <form id="configForm" novalidate>
                 <div class="config-row">
                   <div class="config-key">
-                    <strong>base_url</strong>
-                    <p>Compatible model service endpoint. Enter a valid HTTP or HTTPS URL.</p>
+                    <label for="configBaseUrl"><strong>base_url</strong></label>
+                    <p id="configBaseUrlDescription">Compatible model service endpoint. Enter a valid HTTP or HTTPS URL.</p>
                   </div>
                   <div class="config-control">
                     <div class="config-input-wrap">
-                      <input class="input mono" id="configBaseUrl" type="url" value="https://models.example.test/openai/v1" aria-describedby="configBaseUrlError" aria-invalid="false" required />
+                      <input class="input mono" id="configBaseUrl" type="url" value="https://models.example.test/openai/v1" aria-describedby="configBaseUrlDescription configBaseUrlError" aria-invalid="false" required />
                     </div>
                     <p class="config-error" id="configBaseUrlError" aria-live="polite"></p>
                   </div>
                 </div>
                 <div class="config-row">
                   <div class="config-key">
-                    <strong>api_key</strong>
-                    <p>Required credential for the active Workspace endpoint. Existing values stay masked by default.</p>
+                    <label for="configApiKey"><strong>api_key</strong></label>
+                    <p id="configApiKeyDescription">Required credential for the active Workspace endpoint. Existing values stay masked by default.</p>
                   </div>
                   <div class="config-control">
                     <div class="config-input-wrap">
-                      <input class="input mono" id="configApiKey" type="password" value="••••••••••••••" aria-describedby="configApiKeyError" aria-invalid="false" required />
+                      <input class="input mono" id="configApiKey" type="password" value="••••••••••••••" aria-describedby="configApiKeyDescription configApiKeyError" aria-invalid="false" required />
                       <button class="btn small" type="button" id="configApiKeyToggle" aria-label="Show api_key value">Show</button>
                     </div>
                     <p class="config-error" id="configApiKeyError" aria-live="polite"></p>
@@ -3286,12 +3286,12 @@
                 </div>
                 <div class="config-row">
                   <div class="config-key">
-                    <strong>model_name</strong>
-                    <p>Required model or deployment name used by the compatible endpoint.</p>
+                    <label for="configModelName"><strong>model_name</strong></label>
+                    <p id="configModelNameDescription">Required model or deployment name used by the compatible endpoint.</p>
                   </div>
                   <div class="config-control">
                     <div class="config-input-wrap">
-                      <input class="input mono" id="configModelName" type="text" value="gpt-5.6" aria-describedby="configModelNameError" aria-invalid="false" required />
+                      <input class="input mono" id="configModelName" type="text" value="gpt-5.6" aria-describedby="configModelNameDescription configModelNameError" aria-invalid="false" required />
                     </div>
                     <p class="config-error" id="configModelNameError" aria-live="polite"></p>
                   </div>
@@ -3813,6 +3813,18 @@
         configApiKeyToggle.setAttribute("aria-label", `${showing ? "Hide" : "Show"} api_key value`);
       }
 
+      function handleConfigSaveSubmit(event) {
+        event.preventDefault();
+        clearTimeout(configStatusTimer);
+        if (!validateConfigForm()) {
+          setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
+          return;
+        }
+        const message = "Prototype: LLM configuration saved locally for this mockup.";
+        setConfigStatus(message, "success");
+        showToast(message);
+      }
+
       if (
         configForm &&
         configBaseUrl &&
@@ -3829,23 +3841,12 @@
         [configBaseUrl, configApiKey, configModelName].forEach((input) => {
           input.addEventListener("input", handleConfigInputChange);
         });
-        configForm.addEventListener("submit", (event) => event.preventDefault());
+        configForm.addEventListener("submit", handleConfigSaveSubmit);
         updateConfigApiKeyToggle();
 
         configApiKeyToggle.addEventListener("click", () => {
           configApiKey.type = configApiKey.type === "password" ? "text" : "password";
           updateConfigApiKeyToggle();
-        });
-
-        configSaveButton.addEventListener("click", () => {
-          clearTimeout(configStatusTimer);
-          if (!validateConfigForm()) {
-            setConfigStatus("Please correct the highlighted LLM configuration values before continuing.", "invalid");
-            return;
-          }
-          const message = "Prototype: LLM configuration saved locally for this mockup.";
-          setConfigStatus(message, "success");
-          showToast(message);
         });
 
         configTestButton.addEventListener("click", () => {

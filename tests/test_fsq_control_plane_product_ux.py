@@ -651,12 +651,17 @@ class _ConfigContractParser(HTMLParser):
         self.row_descriptions: list[str] = []
         self.row_input_types: list[str] = []
         self.row_input_ids: list[str] = []
+        self.row_label_fors: list[str] = []
+        self.row_label_texts: list[str] = []
         self.row_error_ids: list[str] = []
         self.toggle_buttons: list[dict[str, str]] = []
         self.footer_buttons: list[str] = []
+        self.footer_button_types: list[str] = []
         self.status_ids: list[str] = []
         self.section_text: list[str] = []
         self.panel_count = 0
+        self.header_button_types: list[str] = []
+        self.header_button_form_ids: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name: value or "" for name, value in attrs}
@@ -675,9 +680,7 @@ class _ConfigContractParser(HTMLParser):
             self._text_targets.append(("context", []))
         elif tag == "h1":
             self._text_targets.append(("title", []))
-        elif tag == "p" and "muted" in classes and any(
-            "page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
-        ):
+        elif tag == "p" and "muted" in classes and any("page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
             self._text_targets.append(("description", []))
 
         if "config-row" in classes:
@@ -686,6 +689,9 @@ class _ConfigContractParser(HTMLParser):
         if self._current_row is not None:
             if tag == "strong" and any("config-key" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
                 self._text_targets.append(("row_key", []))
+            elif tag == "label" and any("config-key" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+                self._current_row["label_for"] = attributes.get("for", "")
+                self._text_targets.append(("row_label", []))
             elif tag == "p" and any("config-key" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
                 self._text_targets.append(("row_description", []))
             elif tag == "input":
@@ -693,17 +699,18 @@ class _ConfigContractParser(HTMLParser):
                 self._current_row["input_id"] = attributes.get("id", "")
             elif "config-error" in classes:
                 self._current_row["error_id"] = attributes.get("id", "")
-            elif tag == "button" and any(
-                "config-input-wrap" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]
-            ):
+            elif tag == "button" and any("config-input-wrap" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
                 self._current_row["toggle_button"] = {
                     "aria_label": attributes.get("aria-label", ""),
                 }
                 self._text_targets.append(("toggle_button", []))
 
         if tag == "button" and any("page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+            self.header_button_types.append(attributes.get("type", ""))
+            self.header_button_form_ids.append(attributes.get("form", ""))
             self._text_targets.append(("header_buttons", []))
         elif tag == "button" and any("config-footer" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+            self.footer_button_types.append(attributes.get("type", ""))
             self._text_targets.append(("footer_buttons", []))
 
         if "config-status" in classes:
@@ -717,7 +724,8 @@ class _ConfigContractParser(HTMLParser):
             self.section_text.append(text)
         if not self._text_targets or not text:
             return
-        self._text_targets[-1][1].append(text)
+        for _, chunks in self._text_targets:
+            chunks.append(text)
 
     def handle_endtag(self, tag: str) -> None:
         if self._text_targets and self._stack and self._stack[-1][0] == tag:
@@ -738,6 +746,8 @@ class _ConfigContractParser(HTMLParser):
                     self._current_row["row_key"] = text
                 elif target_name == "row_description" and self._current_row is not None:
                     self._current_row["row_description"] = text
+                elif target_name == "row_label" and self._current_row is not None:
+                    self._current_row["label_text"] = text
                 elif target_name == "toggle_button" and self._current_row is not None:
                     toggle_button = self._current_row.get("toggle_button")
                     if isinstance(toggle_button, dict):
@@ -750,6 +760,8 @@ class _ConfigContractParser(HTMLParser):
                 self.row_descriptions.append(str(self._current_row.get("row_description", "")))
                 self.row_input_types.append(str(self._current_row.get("input_type", "")))
                 self.row_input_ids.append(str(self._current_row.get("input_id", "")))
+                self.row_label_fors.append(str(self._current_row.get("label_for", "")))
+                self.row_label_texts.append(str(self._current_row.get("label_text", "")))
                 self.row_error_ids.append(str(self._current_row.get("error_id", "")))
                 toggle_button = self._current_row.get("toggle_button")
                 if isinstance(toggle_button, dict):
@@ -777,12 +789,17 @@ def _parse_config_contract(html: str) -> dict[str, object]:
         "row_descriptions": parser.row_descriptions,
         "row_input_types": parser.row_input_types,
         "row_input_ids": parser.row_input_ids,
+        "row_label_fors": parser.row_label_fors,
+        "row_label_texts": parser.row_label_texts,
         "row_error_ids": parser.row_error_ids,
         "toggle_buttons": parser.toggle_buttons,
         "footer_buttons": parser.footer_buttons,
+        "footer_button_types": parser.footer_button_types,
         "status_ids": parser.status_ids,
         "section_text": " ".join(parser.section_text),
         "panel_count": parser.panel_count,
+        "header_button_types": parser.header_button_types,
+        "header_button_form_ids": parser.header_button_form_ids,
     }
 
 
@@ -834,6 +851,7 @@ class FakeElement {{
     value = "",
     dataset = {{}},
     hidden = false,
+    formOwner = null,
   }} = {{}}) {{
     this.id = id;
     this.dataset = {{ ...dataset }};
@@ -845,6 +863,7 @@ class FakeElement {{
     this.type = type;
     this.value = value;
     this.className = classNames.join(" ");
+    this.formOwner = formOwner;
   }}
   addEventListener(type, listener) {{
     if (!this.listeners.has(type)) {{
@@ -854,12 +873,18 @@ class FakeElement {{
   }}
   click() {{
     const event = {{
-      preventDefault() {{}},
+      defaultPrevented: false,
+      preventDefault() {{
+        this.defaultPrevented = true;
+      }},
       currentTarget: this,
       target: this,
     }};
     for (const listener of this.listeners.get("click") || []) {{
       listener(event);
+    }}
+    if (this.type === "submit" && this.formOwner && !event.defaultPrevented) {{
+      this.formOwner.requestSubmit(this);
     }}
   }}
   setAttribute(name, value) {{
@@ -879,6 +904,24 @@ class FakeElement {{
 class FakeForm extends FakeElement {{
   constructor(options = {{}}) {{
     super(options);
+    this.submitCount = 0;
+    this.lastSubmitterId = null;
+  }}
+  requestSubmit(submitter = null) {{
+    const event = {{
+      defaultPrevented: false,
+      preventDefault() {{
+        this.defaultPrevented = true;
+      }},
+      currentTarget: this,
+      submitter,
+      target: this,
+    }};
+    for (const listener of this.listeners.get("submit") || []) {{
+      listener(event);
+    }}
+    this.submitCount += 1;
+    this.lastSubmitterId = submitter ? submitter.id : null;
   }}
 }}
 
@@ -896,8 +939,8 @@ nodes.configApiKeyToggle = new FakeElement({{
 nodes.configApiKeyToggle.setAttribute("aria-label", "Show api_key value");
 nodes.configModelName = new FakeElement({{ id: "configModelName", type: "text", value: "" }});
 nodes.configModelNameError = new FakeElement({{ id: "configModelNameError" }});
-nodes.configSaveButton = new FakeElement({{ id: "configSaveButton", text: "Save changes" }});
-nodes.configTestButton = new FakeElement({{ id: "configTestButton", text: "Test connection" }});
+nodes.configSaveButton = new FakeElement({{ id: "configSaveButton", text: "Save changes", type: "submit", formOwner: nodes.configForm }});
+nodes.configTestButton = new FakeElement({{ id: "configTestButton", text: "Test connection", type: "button" }});
 nodes.configStatus = new FakeElement({{ id: "configStatus", classNames: ["config-status"] }});
 
 const document = {{
@@ -968,6 +1011,8 @@ const invalidSaveState = {{
   baseUrlInvalid: configBaseUrl.getAttribute("aria-invalid"),
   apiKeyInvalid: configApiKey.getAttribute("aria-invalid"),
   modelNameInvalid: configModelName.getAttribute("aria-invalid"),
+  submitCount: configForm.submitCount,
+  submitterId: configForm.lastSubmitterId,
   toastMessages: [...toastMessages],
 }};
 
@@ -981,6 +1026,7 @@ const validTestPending = {{
   baseUrlError: configBaseUrlError.textContent,
   apiKeyError: configApiKeyError.textContent,
   modelNameError: configModelNameError.textContent,
+  submitCount: configForm.submitCount,
 }};
 configModelName.value = "";
 for (const listener of configModelName.listeners.get("input") || []) {{
@@ -1008,6 +1054,17 @@ configSaveButton.click();
 const validSaveState = {{
   statusText: configStatus.textContent,
   statusClassName: configStatus.className,
+  submitCount: configForm.submitCount,
+  submitterId: configForm.lastSubmitterId,
+  toastMessages: [...toastMessages],
+}};
+
+configForm.requestSubmit();
+const enterSaveState = {{
+  statusText: configStatus.textContent,
+  statusClassName: configStatus.className,
+  submitCount: configForm.submitCount,
+  submitterId: configForm.lastSubmitterId,
   toastMessages: [...toastMessages],
 }};
 
@@ -1020,6 +1077,7 @@ console.log(JSON.stringify({{
   invalidAfterPendingEdit,
   validTestConnected,
   validSaveState,
+  enterSaveState,
 }}));
 """
     return _run_node_json_script(script, skip_reason="Node.js is required for FSQ config UX script verification.")
@@ -1798,11 +1856,15 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     assert config_contract["row_keys"] == ["base_url", "api_key", "model_name"]
     assert config_contract["row_input_types"] == ["url", "password", "text"]
     assert config_contract["row_input_ids"] == ["configBaseUrl", "configApiKey", "configModelName"]
+    assert config_contract["row_label_fors"] == ["configBaseUrl", "configApiKey", "configModelName"]
+    assert config_contract["row_label_texts"] == ["base_url", "api_key", "model_name"]
     assert config_contract["row_error_ids"] == [
         "configBaseUrlError",
         "configApiKeyError",
         "configModelNameError",
     ]
+    assert config_contract["header_button_types"] == ["submit"]
+    assert config_contract["header_button_form_ids"] == ["configForm"]
     assert config_contract["toggle_buttons"] == [
         {
             "aria_label": "Show api_key value",
@@ -1810,6 +1872,7 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
         }
     ]
     assert config_contract["footer_buttons"] == ["Test connection"]
+    assert config_contract["footer_button_types"] == ["button"]
     assert config_contract["status_ids"] == ["configStatus"]
     assert "compatible model service endpoint" in str(config_contract["row_descriptions"][0]).lower()
     assert "masked by default" in str(config_contract["row_descriptions"][1]).lower()
@@ -1883,6 +1946,8 @@ def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None
         "baseUrlInvalid": "true",
         "apiKeyInvalid": "true",
         "modelNameInvalid": "true",
+        "submitCount": 1,
+        "submitterId": "configSaveButton",
         "toastMessages": [],
     }
     assert payload["validTestPending"] == {
@@ -1891,6 +1956,7 @@ def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None
         "baseUrlError": "",
         "apiKeyError": "",
         "modelNameError": "",
+        "submitCount": 1,
     }
     assert payload["invalidAfterPendingEdit"] == {
         "statusText": "Please correct the highlighted LLM configuration values before continuing.",
@@ -1905,7 +1971,19 @@ def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None
     assert payload["validSaveState"] == {
         "statusText": "Prototype: LLM configuration saved locally for this mockup.",
         "statusClassName": "config-status success",
+        "submitCount": 2,
+        "submitterId": "configSaveButton",
         "toastMessages": ["Prototype: LLM configuration saved locally for this mockup."],
+    }
+    assert payload["enterSaveState"] == {
+        "statusText": "Prototype: LLM configuration saved locally for this mockup.",
+        "statusClassName": "config-status success",
+        "submitCount": 3,
+        "submitterId": None,
+        "toastMessages": [
+            "Prototype: LLM configuration saved locally for this mockup.",
+            "Prototype: LLM configuration saved locally for this mockup.",
+        ],
     }
 
 
