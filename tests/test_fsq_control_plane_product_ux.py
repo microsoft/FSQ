@@ -651,6 +651,7 @@ class _ConfigContractParser(HTMLParser):
         self.row_descriptions: list[str] = []
         self.row_input_types: list[str] = []
         self.row_input_ids: list[str] = []
+        self.row_input_names: list[str] = []
         self.row_label_fors: list[str] = []
         self.row_label_texts: list[str] = []
         self.row_error_ids: list[str] = []
@@ -697,6 +698,7 @@ class _ConfigContractParser(HTMLParser):
             elif tag == "input":
                 self._current_row["input_type"] = attributes.get("type", "text")
                 self._current_row["input_id"] = attributes.get("id", "")
+                self._current_row["input_name"] = attributes.get("name", "")
             elif "config-error" in classes:
                 self._current_row["error_id"] = attributes.get("id", "")
             elif tag == "button" and any("config-input-wrap" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
@@ -760,6 +762,7 @@ class _ConfigContractParser(HTMLParser):
                 self.row_descriptions.append(str(self._current_row.get("row_description", "")))
                 self.row_input_types.append(str(self._current_row.get("input_type", "")))
                 self.row_input_ids.append(str(self._current_row.get("input_id", "")))
+                self.row_input_names.append(str(self._current_row.get("input_name", "")))
                 self.row_label_fors.append(str(self._current_row.get("label_for", "")))
                 self.row_label_texts.append(str(self._current_row.get("label_text", "")))
                 self.row_error_ids.append(str(self._current_row.get("error_id", "")))
@@ -789,6 +792,7 @@ def _parse_config_contract(html: str) -> dict[str, object]:
         "row_descriptions": parser.row_descriptions,
         "row_input_types": parser.row_input_types,
         "row_input_ids": parser.row_input_ids,
+        "row_input_names": parser.row_input_names,
         "row_label_fors": parser.row_label_fors,
         "row_label_texts": parser.row_label_texts,
         "row_error_ids": parser.row_error_ids,
@@ -804,6 +808,8 @@ def _parse_config_contract(html: str) -> dict[str, object]:
 
 
 def _run_config_form_contract(html: str) -> dict[str, object]:
+    config_contract = _parse_config_contract(html)
+    row_input_names = json.dumps(config_contract["row_input_names"])
     start = html.index('const configForm = document.getElementById("configForm");')
     end = html.index("const runReports = {")
     snippet = html[start:end]
@@ -848,6 +854,7 @@ class FakeElement {{
     classNames = [],
     text = "",
     type = "",
+    name = "",
     value = "",
     dataset = {{}},
     hidden = false,
@@ -864,6 +871,7 @@ class FakeElement {{
     this.value = value;
     this.className = classNames.join(" ");
     this.formOwner = formOwner;
+    this.name = name;
   }}
   addEventListener(type, listener) {{
     if (!this.listeners.has(type)) {{
@@ -904,6 +912,7 @@ class FakeElement {{
 class FakeForm extends FakeElement {{
   constructor(options = {{}}) {{
     super(options);
+    this.elements = [];
     this.submitCount = 0;
     this.lastSubmitterId = null;
   }}
@@ -925,11 +934,27 @@ class FakeForm extends FakeElement {{
   }}
 }}
 
+class FakeFormData {{
+  constructor(form) {{
+    this._entries = [];
+    for (const control of form?.elements || []) {{
+      if (!control?.name || control.type === "button" || control.type === "submit") {{
+        continue;
+      }}
+      this._entries.push([control.name, control.value]);
+    }}
+  }}
+  entries() {{
+    return this._entries[Symbol.iterator]();
+  }}
+}}
+
 const nodes = {{}};
 nodes.configForm = new FakeForm({{ id: "configForm" }});
-nodes.configBaseUrl = new FakeElement({{ id: "configBaseUrl", type: "url", value: "ftp://example.test" }});
+const [configBaseUrlName, configApiKeyName, configModelNameName] = {row_input_names};
+nodes.configBaseUrl = new FakeElement({{ id: "configBaseUrl", type: "url", name: configBaseUrlName, value: "ftp://example.test", formOwner: nodes.configForm }});
 nodes.configBaseUrlError = new FakeElement({{ id: "configBaseUrlError" }});
-nodes.configApiKey = new FakeElement({{ id: "configApiKey", type: "password", value: "" }});
+nodes.configApiKey = new FakeElement({{ id: "configApiKey", type: "password", name: configApiKeyName, value: "", formOwner: nodes.configForm }});
 nodes.configApiKeyError = new FakeElement({{ id: "configApiKeyError" }});
 nodes.configApiKeyToggle = new FakeElement({{
   id: "configApiKeyToggle",
@@ -937,11 +962,18 @@ nodes.configApiKeyToggle = new FakeElement({{
   classNames: ["btn", "small"],
 }});
 nodes.configApiKeyToggle.setAttribute("aria-label", "Show api_key value");
-nodes.configModelName = new FakeElement({{ id: "configModelName", type: "text", value: "" }});
+nodes.configModelName = new FakeElement({{ id: "configModelName", type: "text", name: configModelNameName, value: "", formOwner: nodes.configForm }});
 nodes.configModelNameError = new FakeElement({{ id: "configModelNameError" }});
 nodes.configSaveButton = new FakeElement({{ id: "configSaveButton", text: "Save changes", type: "submit", formOwner: nodes.configForm }});
 nodes.configTestButton = new FakeElement({{ id: "configTestButton", text: "Test connection", type: "button" }});
 nodes.configStatus = new FakeElement({{ id: "configStatus", classNames: ["config-status"] }});
+nodes.configForm.elements = [
+  nodes.configBaseUrl,
+  nodes.configApiKey,
+  nodes.configModelName,
+  nodes.configSaveButton,
+  nodes.configTestButton,
+];
 
 const document = {{
   getElementById(id) {{
@@ -1068,6 +1100,9 @@ const enterSaveState = {{
   toastMessages: [...toastMessages],
 }};
 
+const serializedEntries = [...new FakeFormData(configForm).entries()];
+const serializedConfig = Object.fromEntries(serializedEntries);
+
 console.log(JSON.stringify({{
   initialState,
   visibleState,
@@ -1078,6 +1113,8 @@ console.log(JSON.stringify({{
   validTestConnected,
   validSaveState,
   enterSaveState,
+  serializedEntries,
+  serializedConfig,
 }}));
 """
     return _run_node_json_script(script, skip_reason="Node.js is required for FSQ config UX script verification.")
@@ -1856,6 +1893,7 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     assert config_contract["row_keys"] == ["base_url", "api_key", "model_name"]
     assert config_contract["row_input_types"] == ["url", "password", "text"]
     assert config_contract["row_input_ids"] == ["configBaseUrl", "configApiKey", "configModelName"]
+    assert config_contract["row_input_names"] == ["base_url", "api_key", "model_name"]
     assert config_contract["row_label_fors"] == ["configBaseUrl", "configApiKey", "configModelName"]
     assert config_contract["row_label_texts"] == ["base_url", "api_key", "model_name"]
     assert config_contract["row_error_ids"] == [
@@ -1984,6 +2022,16 @@ def test_fsq_config_form_behavior_validates_toggle_and_status_feedback() -> None
             "Prototype: LLM configuration saved locally for this mockup.",
             "Prototype: LLM configuration saved locally for this mockup.",
         ],
+    }
+    assert payload["serializedEntries"] == [
+        ["base_url", "https://models.example.test/openai/v1"],
+        ["api_key", "secret-key"],
+        ["model_name", "gpt-5.6"],
+    ]
+    assert payload["serializedConfig"] == {
+        "base_url": "https://models.example.test/openai/v1",
+        "api_key": "secret-key",
+        "model_name": "gpt-5.6",
     }
 
 
