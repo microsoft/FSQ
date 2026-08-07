@@ -3638,6 +3638,10 @@ properties:
       document.getElementById("yamlPreview").textContent = fsqYamlSource;
       const filePreview = document.getElementById("filePreview");
       const codeCopyDefaultLabel = "Copy";
+      const fsqCopyState = {
+        operationId: 0,
+        pending: false,
+      };
       function escapeSourceHtml(value) {
         return value
           .replaceAll("&", "&amp;")
@@ -3690,7 +3694,8 @@ properties:
           }
           return `<li class="${classes.join(" ")}" data-source-range="${range}"><span class="source-line-number" aria-hidden="true" data-line-number="${index + 1}"></span><span class="source-line-code">${renderYamlLine(line)}</span></li>`;
         });
-        return `<section class="source-viewer" id="fsqSourceViewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button" data-code-action="wrap" aria-label="Wrap lines" aria-pressed="false">Wrap lines</button><button type="button" data-code-action="copy" aria-label="${codeCopyDefaultLabel}">${codeCopyDefaultLabel}</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
+        const copyPendingAttributes = fsqCopyState.pending ? ' data-code-action-pending="true" disabled' : "";
+        return `<section class="source-viewer" id="fsqSourceViewer" aria-label="Read-only YAML source"><div class="source-toolbar"><div class="source-language"><span class="tag">YAML</span><span>${lines.length} lines</span></div><div class="source-actions"><button type="button" data-code-action="wrap" aria-label="Wrap lines" aria-pressed="false">Wrap lines</button><button type="button" data-code-action="copy"${copyPendingAttributes} aria-label="${codeCopyDefaultLabel}">${codeCopyDefaultLabel}</button></div></div><div class="source-scroll" role="region" aria-label="FSQ YAML source"><ol class="source-lines">${rows.join("")}</ol></div></section>`;
       }
       function setCodeActionLabel(button, label) {
         button.textContent = label;
@@ -3714,6 +3719,21 @@ properties:
         }
         delete button.dataset.codeActionPending;
       }
+      function getCurrentFsqCopyButton() {
+        return document.getElementById("fsqSourceViewer")?.querySelector('[data-code-action="copy"]') || null;
+      }
+      function finalizeFsqCopyAction(operationId, label) {
+        if (operationId !== fsqCopyState.operationId) {
+          return;
+        }
+        fsqCopyState.pending = false;
+        const currentButton = getCurrentFsqCopyButton();
+        if (!currentButton || !currentButton.isConnected) {
+          return;
+        }
+        setCodeActionPending(currentButton, false);
+        setTemporaryCodeActionLabel(currentButton, label);
+      }
       async function handleFsqSourceAction(button) {
         if (button.dataset.codeAction === "wrap") {
           const viewer = document.getElementById("fsqSourceViewer");
@@ -3730,22 +3750,23 @@ properties:
         if (button.dataset.codeActionPending === "true") {
           return;
         }
+        if (fsqCopyState.pending) {
+          setCodeActionPending(button, true);
+          return;
+        }
         if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
           setTemporaryCodeActionLabel(button, "Copy failed");
           return;
         }
+        fsqCopyState.pending = true;
+        fsqCopyState.operationId += 1;
+        const operationId = fsqCopyState.operationId;
         setCodeActionPending(button, true);
         try {
           await navigator.clipboard.writeText(fsqYamlSource);
-          if (button.isConnected) {
-            setTemporaryCodeActionLabel(button, "Copied");
-          }
+          finalizeFsqCopyAction(operationId, "Copied");
         } catch (error) {
-          if (button.isConnected) {
-            setTemporaryCodeActionLabel(button, "Copy failed");
-          }
-        } finally {
-          setCodeActionPending(button, false);
+          finalizeFsqCopyAction(operationId, "Copy failed");
         }
       }
       filePreview.addEventListener("click", (event) => {
