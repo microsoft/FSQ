@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -15,24 +16,81 @@ def _read_fsq_control_plane_product_ux_html() -> str:
     return html_path.read_text(encoding="utf-8")
 
 
-def _extract_primary_nav_contract(html: str) -> tuple[list[tuple[str, str]], str]:
-    nav_match = re.search(
-        r'<nav class="rail-nav" aria-label="Primary navigation">\s*(?P<nav>[\s\S]*?)\s*</nav>',
-        html,
-    )
-    assert nav_match is not None
-    nav_html = nav_match.group("nav")
-    nav_items = re.findall(
-        r'<button class="nav-button(?: active)?"[^>]*data-view="(?P<view>[^"]+)"[^>]*>[\s\S]*?<span>(?P<label>[^<]+)</span>',
-        nav_html,
-    )
-    return nav_items, nav_html
+class _NavigationContractParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._stack: list[tuple[str, dict[str, str]]] = []
+        self._primary_nav_depth: int | None = None
+        self._footer_depth: int | None = None
+        self.primary_nav_found = False
+        self.footer_found = False
+        self.primary_items: list[tuple[str, str]] = []
+        self.primary_children: list[tuple[str, str]] = []
+        self.footer_views: list[str] = []
+        self.errors: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name: value or "" for name, value in attrs}
+        in_primary_nav = self._primary_nav_depth is not None and len(self._stack) >= self._primary_nav_depth
+        in_footer = self._footer_depth is not None and len(self._stack) >= self._footer_depth
+        parent_tag, parent_attributes = self._stack[-1] if self._stack else ("", {})
+
+        if tag == "button" and any(ancestor_tag == "button" for ancestor_tag, _ in self._stack) and (in_primary_nav or in_footer):
+            self.errors.append("nested button detected in navigation contract")
+
+        view = attributes.get("data-view")
+        if view:
+            if in_primary_nav:
+                if parent_tag == "nav":
+                    self.primary_items.append((view, attributes.get("aria-label", "")))
+                    self.primary_children.append(("button", view))
+                else:
+                    self.errors.append(f'primary navigation button "{view}" must be a direct nav child')
+            elif in_footer:
+                if parent_tag == "div" and "rail-footer" in parent_attributes.get("class", "").split():
+                    self.footer_views.append(view)
+                else:
+                    self.errors.append(f'footer navigation button "{view}" must be a direct footer child')
+
+        if (
+            tag == "div"
+            and in_primary_nav
+            and parent_tag == "nav"
+            and attributes.get("id") == "workspaceRecents"
+        ):
+            self.primary_children.append(("div", "workspaceRecents"))
+
+        self._stack.append((tag, attributes))
+        if tag == "nav" and attributes.get("aria-label") == "Primary navigation":
+            self.primary_nav_found = True
+            self._primary_nav_depth = len(self._stack)
+        elif tag == "div" and "rail-footer" in attributes.get("class", "").split():
+            self.footer_found = True
+            self._footer_depth = len(self._stack)
+
+    def handle_endtag(self, tag: str) -> None:
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
+        if self._primary_nav_depth is not None and len(self._stack) < self._primary_nav_depth:
+            self._primary_nav_depth = None
+        if self._footer_depth is not None and len(self._stack) < self._footer_depth:
+            self._footer_depth = None
 
 
-def _extract_footer_nav_views(html: str) -> list[str]:
-    footer_match = re.search(r'<div class="rail-footer">\s*(?P<footer>[\s\S]*?)\s*</div>', html)
-    assert footer_match is not None
-    return re.findall(r'data-view="([^"]+)"', footer_match.group("footer"))
+def _parse_navigation_contract(html: str) -> dict[str, list[tuple[str, str]] | list[str]]:
+    parser = _NavigationContractParser()
+    parser.feed(html)
+
+    assert parser.primary_nav_found, "missing primary navigation"
+    assert parser.footer_found, "missing rail footer"
+    assert not parser.errors, "; ".join(parser.errors)
+    return {
+        "primary_items": parser.primary_items,
+        "primary_children": parser.primary_children,
+        "footer_views": parser.footer_views,
+    }
 
 
 def _extract_runs_section(html: str) -> str:
@@ -96,6 +154,159 @@ def _assert_source_command_ranges_stay_neutral(rules: dict[str, list[str]]) -> N
             if background_declarations:
                 offending_rules[selector] = background_declarations
     assert not offending_rules, f"command-range CSS must not set persistent backgrounds: {offending_rules}"
+
+
+def _run_node_json_script(script: str, *, skip_reason: str) -> dict[str, object]:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip(skip_reason)
+    result = subprocess.run([node, "--input-type=module", "-e", script], check=True, capture_output=True, text=True)  # noqa: S603
+    return json.loads(result.stdout)
+
+
+def _run_navigation_state_contract(html: str) -> dict[str, object]:
+    start = html.index('const pages = [...document.querySelectorAll(".page")];')
+    end = html.index('const workspaceNav = document.getElementById("workspaceNav");')
+    snippet = html[start:end]
+    script = f"""
+class FakeClassList {{
+  constructor(names = []) {{
+    this.values = new Set(names);
+  }}
+  toggle(name, force) {{
+    if (force === undefined) {{
+      if (this.values.has(name)) {{
+        this.values.delete(name);
+        return false;
+      }}
+      this.values.add(name);
+      return true;
+    }}
+    if (force) {{
+      this.values.add(name);
+      return true;
+    }}
+    this.values.delete(name);
+    return false;
+  }}
+  contains(name) {{
+    return this.values.has(name);
+  }}
+  add(name) {{
+    this.values.add(name);
+  }}
+  remove(name) {{
+    this.values.delete(name);
+  }}
+}}
+
+class FakeElement {{
+  constructor({{ id = "", dataset = {{}}, classNames = [], attributes = [] }} = {{}}) {{
+    this.id = id;
+    this.dataset = {{ ...dataset }};
+    this.classList = new FakeClassList(classNames);
+    this.attributeNames = new Set(attributes);
+    this.listeners = new Map();
+    this.hidden = false;
+    this.textContent = "";
+    this.className = classNames.join(" ");
+  }}
+  addEventListener(type, listener) {{
+    if (!this.listeners.has(type)) {{
+      this.listeners.set(type, []);
+    }}
+    this.listeners.get(type).push(listener);
+  }}
+  click() {{
+    for (const listener of this.listeners.get("click") || []) {{
+      listener();
+    }}
+  }}
+  hasAttribute(name) {{
+    return this.attributeNames.has(name);
+  }}
+}}
+
+class FakeDocument {{
+  constructor() {{
+    this.pages = [
+      new FakeElement({{ id: "home", classNames: ["page", "active"] }}),
+      new FakeElement({{ id: "workspace", classNames: ["page"] }}),
+      new FakeElement({{ id: "device", classNames: ["page"] }}),
+      new FakeElement({{ id: "runs", classNames: ["page"] }}),
+      new FakeElement({{ id: "workbench", classNames: ["page"] }}),
+    ];
+    this.navButtons = [
+      new FakeElement({{ dataset: {{ view: "home" }}, classNames: ["nav-button", "active"] }}),
+      new FakeElement({{ dataset: {{ view: "workspace" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "device" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "runs" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "config" }}, classNames: ["nav-button"] }}),
+      new FakeElement({{ dataset: {{ view: "settings" }}, classNames: ["nav-button"] }}),
+    ];
+    this.openWorkbenchTargets = [new FakeElement({{ attributes: ["data-open-workbench"] }})];
+    this.elements = {{
+      deviceTopbarContext: new FakeElement({{ id: "deviceTopbarContext" }}),
+      deviceTopbarControls: new FakeElement({{ id: "deviceTopbarControls" }}),
+      runTitle: new FakeElement({{ id: "runTitle" }}),
+      runStatus: new FakeElement({{ id: "runStatus" }}),
+    }};
+  }}
+  querySelectorAll(selector) {{
+    if (selector === ".page") {{
+      return this.pages;
+    }}
+    if (selector === ".nav-button[data-view]") {{
+      return this.navButtons;
+    }}
+    if (selector === ".device-entry") {{
+      return [];
+    }}
+    if (selector === "[data-view-jump]" || selector === "[data-open-workspace]") {{
+      return [];
+    }}
+    if (selector === "[data-open-workbench]") {{
+      return this.openWorkbenchTargets;
+    }}
+    throw new Error(`Unsupported selector: ${{selector}}`);
+  }}
+  getElementById(id) {{
+    return this.elements[id] || null;
+  }}
+}}
+
+const document = new FakeDocument();
+const window = {{ scrollTo() {{}} }};
+
+{snippet}
+
+const runsPage = document.pages.find((page) => page.id === "runs");
+const workbenchPage = document.pages.find((page) => page.id === "workbench");
+const runsNav = document.navButtons.find((button) => button.dataset.view === "runs");
+const openWorkbench = document.openWorkbenchTargets[0];
+
+runsNav.click();
+const runsPageActiveAfterRunsClick = runsPage.classList.contains("active");
+const runsNavActiveAfterRunsClick = runsNav.classList.contains("active");
+const activeNavViewsAfterRunsClick = document.navButtons
+  .filter((button) => button.classList.contains("active"))
+  .map((button) => button.dataset.view);
+
+openWorkbench.click();
+const activeNavViewsAfterWorkbench = document.navButtons
+  .filter((button) => button.classList.contains("active"))
+  .map((button) => button.dataset.view);
+
+console.log(JSON.stringify({{
+  runsPageActiveAfterRunsClick,
+  runsNavActiveAfterRunsClick,
+  activeNavViewsAfterRunsClick,
+  workbenchPageActive: workbenchPage.classList.contains("active"),
+  runsNavActiveAfterWorkbench: runsNav.classList.contains("active"),
+  activeNavViewsAfterWorkbench,
+}}));
+"""
+    return _run_node_json_script(script, skip_reason="Node.js is required for FSQ product UX script verification.")
 
 
 def test_extract_source_viewer_css_rules_preserves_all_rule_bodies_per_selector() -> None:
@@ -450,19 +661,55 @@ console.log(JSON.stringify({{
 
 def test_fsq_control_plane_promotes_runs_into_primary_navigation() -> None:
     html = _read_fsq_control_plane_product_ux_html()
-    primary_items, primary_nav_html = _extract_primary_nav_contract(html)
+    nav_contract = _parse_navigation_contract(html)
 
-    assert primary_items == [
+    assert nav_contract["primary_items"] == [
         ("home", "Overview"),
         ("workspace", "Workspace"),
         ("device", "Devices"),
         ("runs", "Runs"),
     ]
-    assert _extract_footer_nav_views(html) == ["config", "settings"]
-    assert re.search(
-        r'data-view="workspace"[\s\S]*?<div class="workspace-recents" id="workspaceRecents">[\s\S]*?data-view="device"[\s\S]*?data-view="runs"',
-        primary_nav_html,
-    )
+    assert nav_contract["primary_children"] == [
+        ("button", "home"),
+        ("button", "workspace"),
+        ("div", "workspaceRecents"),
+        ("button", "device"),
+        ("button", "runs"),
+    ]
+    assert nav_contract["footer_views"] == ["config", "settings"]
+
+
+def test_parse_navigation_contract_rejects_nested_primary_nav_buttons() -> None:
+    html = """
+    <nav class="rail-nav" aria-label="Primary navigation">
+      <button class="nav-button" data-view="home" aria-label="Overview">
+        <span>Overview</span>
+        <button class="nav-button" data-view="workspace" aria-label="Workspace">
+          <span>Workspace</span>
+        </button>
+      </button>
+    </nav>
+    <div class="rail-footer">
+      <button class="nav-button" data-view="config" aria-label="Config"><span>Config</span></button>
+      <button class="nav-button" data-view="settings" aria-label="Settings"><span>Settings</span></button>
+    </div>
+    """
+
+    with pytest.raises(AssertionError, match="nested button"):
+        _parse_navigation_contract(html)
+
+
+def test_fsq_runs_navigation_state_contract_survives_workbench_navigation() -> None:
+    payload = _run_navigation_state_contract(_read_fsq_control_plane_product_ux_html())
+
+    assert payload == {
+        "runsPageActiveAfterRunsClick": True,
+        "runsNavActiveAfterRunsClick": True,
+        "activeNavViewsAfterRunsClick": ["runs"],
+        "workbenchPageActive": True,
+        "runsNavActiveAfterWorkbench": True,
+        "activeNavViewsAfterWorkbench": ["runs"],
+    }
 
 
 def test_fsq_runs_history_page_keeps_auditable_copy_and_filters() -> None:
