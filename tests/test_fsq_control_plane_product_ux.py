@@ -1128,6 +1128,30 @@ def test_fsq_runs_history_page_keeps_auditable_copy_and_filters() -> None:
     assert re.findall(r"<tr[^>]*data-open-workbench", runs_section)
 
 
+def test_fsq_workbench_entries_keep_pre_task2_routing_markup() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    entry_tags = re.findall(r"<(?:button|tr)[^>]*data-open-workbench[^>]*>", html)
+
+    assert entry_tags
+    assert len([tag for tag in entry_tags if "data-failed-run" in tag]) == 2
+    assert all("data-run-" not in tag for tag in entry_tags)
+    assert all("data-report-template" not in tag for tag in entry_tags)
+
+
+def test_fsq_workbench_entries_keep_pre_task2_handler_shape() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+
+    assert "function openRunReport" not in html
+    assert re.search(
+        r'document\.querySelectorAll\("\[data-open-workbench\]"\)\.forEach\(\(target\) => \{\s*'
+        r'target\.addEventListener\("click", \(\) => \{\s*'
+        r'const failed = target\.hasAttribute\("data-failed-run"\);\s*'
+        r'renderRunReport\(failed \? "failed" : "success"\);\s*'
+        r'showView\("workbench"\);',
+        html,
+    )
+
+
 def test_fsq_run_report_structure_matches_approved_contract() -> None:
     contract = _parse_workbench_contract(_read_fsq_control_plane_product_ux_html())
 
