@@ -688,6 +688,39 @@
         gap: 16px;
       }
 
+      #home {
+        padding: 16px;
+      }
+
+      .overview-start-panel {
+        width: 100%;
+        overflow: hidden;
+      }
+
+      .overview-start-panel .card-head {
+        align-items: flex-start;
+      }
+
+      .overview-start-copy {
+        min-width: 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .overview-start-copy h2 {
+        margin-bottom: 0;
+      }
+
+      .overview-start-copy .muted {
+        max-width: 720px;
+        font-size: 15px;
+      }
+
+      .overview-start-panel .card-body {
+        display: grid;
+        gap: 18px;
+      }
+
       .launch-card {
         width: 100%;
         min-width: 0;
@@ -2833,6 +2866,7 @@
           flex-direction: column;
         }
 
+        .overview-start-panel .card-head,
         .workbench-header-actions {
           justify-content: flex-start;
         }
@@ -2914,6 +2948,10 @@
 
         .page-head {
           align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .overview-start-panel .card-head {
           flex-direction: column;
         }
 
@@ -3067,35 +3105,38 @@
         </header>
 
         <section class="page active" id="home">
-          <div class="page-head">
-            <div>
-              <p class="eyebrow">FSQ CONTROL PLANE / OVERVIEW</p>
-              <h1>Learn FSQ by running it.</h1>
-              <p class="muted">Start with the core loop, follow a guided tutorial, or launch a task on one of your connected devices.</p>
-            </div>
-            <button class="btn" id="learnFsq">How FSQ works</button>
-          </div>
           <div class="content-grid">
-            <div class="launch-grid">
-              <button class="launch-card" data-open-run data-mode="explore">
-                <span class="number">01 / DYNAMIC LOOP</span>
-                <h2>Explore with AI</h2>
-                <p>Describe a user-visible goal. FSQ plans, operates your app, captures every step, verifies the result, and drafts a replayable case.</p>
-                <span class="launch-footer">
-                  <span class="tag accent">Uses configured LLM</span>
-                  <span class="arrow">→</span>
-                </span>
-              </button>
-              <button class="launch-card" data-open-run data-mode="replay">
-                <span class="number">02 / STRICT LOOP</span>
-                <h2>Replay a Case</h2>
-                <p>Select a reviewed YAML case. FSQ executes authored commands exactly and produces fresh evidence for regression testing.</p>
-                <span class="launch-footer">
-                  <span class="tag">No planning LLM</span>
-                  <span class="arrow">→</span>
-                </span>
-              </button>
-            </div>
+            <section class="card overview-start-panel">
+              <div class="card-head">
+                <div class="overview-start-copy">
+                  <h2>Start a run</h2>
+                  <p class="muted">Start with the core loop, follow a guided tutorial, or launch a task on one of your connected devices.</p>
+                </div>
+                <button class="btn" id="learnFsq">How FSQ works</button>
+              </div>
+              <div class="card-body">
+                <div class="launch-grid">
+                  <button class="launch-card" data-open-run data-mode="explore">
+                    <span class="number">01 / DYNAMIC LOOP</span>
+                    <h2>Explore with AI</h2>
+                    <p>Describe a user-visible goal. FSQ plans, operates your app, captures every step, verifies the result, and drafts a replayable case.</p>
+                    <span class="launch-footer">
+                      <span class="tag accent">Uses configured LLM</span>
+                      <span class="arrow">→</span>
+                    </span>
+                  </button>
+                  <button class="launch-card" data-open-run data-mode="replay">
+                    <span class="number">02 / STRICT LOOP</span>
+                    <h2>Replay a Case</h2>
+                    <p>Select a reviewed YAML case. FSQ executes authored commands exactly and produces fresh evidence for regression testing.</p>
+                    <span class="launch-footer">
+                      <span class="tag">No planning LLM</span>
+                      <span class="arrow">→</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </section>
 
             <div class="card loop-strip" id="loopStrip">
               <div class="loop-step"><span class="mono">01</span><strong>Explore</strong><small>Turn a human goal into key actions.</small></div>

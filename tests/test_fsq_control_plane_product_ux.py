@@ -94,6 +94,12 @@ def _extract_runs_section(html: str) -> str:
     return runs_match.group("section")
 
 
+def _extract_home_section(html: str) -> str:
+    home_match = re.search(r'<section class="page active" id="home">\s*(?P<section>[\s\S]*?)\s*</section>', html)
+    assert home_match is not None
+    return home_match.group("section")
+
+
 def _extract_workbench_section(html: str) -> str:
     workbench_match = re.search(
         r'<section class="page workbench-page" id="workbench">\s*(?P<section>[\s\S]*?)\s*</section>',
@@ -1948,6 +1954,29 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
     assert responsive_device_rule["grid-template-columns"] == "1fr"
 
 
+def test_fsq_overview_page_uses_start_run_workbench_contract() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    page_children = _parse_page_layout_contract(html)
+    home_section = _extract_home_section(html)
+
+    home_rule = _extract_css_declarations(rules["#home"][0])
+
+    assert home_rule["padding"] == "16px"
+    assert [child.get("class") for child in page_children["home"]] == ["content-grid"]
+    assert '<div class="page-head">' not in home_section
+    assert '<p class="eyebrow">' not in home_section
+    assert "<h1>" not in home_section
+    assert re.search(r'<div class="content-grid">\s*<section class="card overview-start-panel">', home_section)
+    assert re.search(r'<section class="card overview-start-panel">[\s\S]*?<h2>Start a run</h2>', home_section)
+    assert "Start with the core loop" in home_section
+    assert 'class="btn" id="learnFsq">How FSQ works</button>' in home_section
+    assert re.search(r'<section class="card overview-start-panel">[\s\S]*?<div class="launch-grid">', home_section)
+    assert "<h2>Explore with AI</h2>" in home_section
+    assert "<h2>Replay a Case</h2>" in home_section
+    assert "Core loop" not in home_section
+
+
 def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     html = _read_fsq_control_plane_product_ux_html()
     rules = _extract_source_viewer_css_rules(html)
@@ -2034,6 +2063,29 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
         css,
         media_condition="max-width: 1120px",
         selector=".config-input-wrap",
+        property_name="grid-template-columns",
+        expected_value="1fr",
+    )
+
+
+def test_fsq_overview_start_run_panel_css_preserves_card_and_launch_stack_behavior() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    css = _extract_style_block(html)
+
+    overview_panel_rule = _extract_css_declarations(rules[".overview-start-panel"][0])
+    overview_panel_header_rule = _extract_css_declarations(rules[".overview-start-panel .card-head"][0])
+    overview_panel_body_rule = _extract_css_declarations(rules[".overview-start-panel .card-body"][0])
+
+    assert overview_panel_rule["width"] == "100%"
+    assert overview_panel_rule["overflow"] == "hidden"
+    assert overview_panel_header_rule["align-items"] == "flex-start"
+    assert overview_panel_body_rule["display"] == "grid"
+    assert overview_panel_body_rule["gap"] == "18px"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".launch-grid",
         property_name="grid-template-columns",
         expected_value="1fr",
     )
