@@ -700,6 +700,10 @@
         padding: 16px;
       }
 
+      #runs {
+        padding: 16px;
+      }
+
       .overview-start-panel {
         width: 100%;
         overflow: hidden;
@@ -911,8 +915,6 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        margin-bottom: 14px;
-        padding: 12px;
       }
 
       .search {
@@ -939,10 +941,6 @@
         border: 1px solid var(--cp-border);
         border-radius: 0.625rem;
         background: var(--cp-surface);
-      }
-
-      .table-card {
-        overflow: hidden;
       }
 
       .table {
@@ -1296,6 +1294,64 @@
         gap: 18px;
         align-content: start;
         min-height: 0;
+      }
+
+      .runs-panel {
+        width: 100%;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: calc(100vh - 108px);
+        overflow: hidden;
+      }
+
+      .runs-panel .card-head {
+        align-items: flex-start;
+      }
+
+      .runs-panel-header-copy {
+        min-width: 0;
+        display: grid;
+        gap: 8px;
+      }
+
+      .runs-panel-header-copy h1 {
+        margin-bottom: 0;
+        font-size: 18px;
+        letter-spacing: -0.3px;
+        line-height: 1.2;
+      }
+
+      .runs-panel-body {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        padding: 0;
+        min-height: 0;
+      }
+
+      .runs-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--cp-border);
+      }
+
+      .runs-toolbar .search {
+        min-width: 0;
+        flex: 1 1 280px;
+        max-width: 480px;
+      }
+
+      .runs-toolbar .filters {
+        min-width: 0;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+
+      .runs-table-wrap {
+        min-height: 0;
+        overflow: auto;
       }
 
       .settings-section {
@@ -3038,6 +3094,10 @@
           padding: 18px 14px calc(88px + env(safe-area-inset-bottom, 0px));
         }
 
+        #runs {
+          padding: 18px 14px calc(88px + env(safe-area-inset-bottom, 0px));
+        }
+
         .page-head {
           align-items: flex-start;
           flex-direction: column;
@@ -3055,8 +3115,32 @@
           flex-direction: column;
         }
 
+        .runs-panel .card-head {
+          flex-direction: column;
+        }
+
         .config-panel .card-head .btn {
           width: 100%;
+        }
+
+        .runs-panel .card-head .btn {
+          width: 100%;
+        }
+
+        .runs-toolbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .runs-toolbar .search {
+          max-width: none;
+        }
+
+        .runs-toolbar .filters {
+          width: 100%;
+          overflow: auto;
+          flex-wrap: nowrap;
+          padding-bottom: 2px;
         }
 
         .page-head > div {
@@ -3128,7 +3212,7 @@
           border-bottom: 1px solid var(--cp-border);
         }
 
-        .table-card {
+        .runs-table-wrap {
           overflow-x: auto;
         }
 
@@ -3478,35 +3562,38 @@
         </section>
 
         <section class="page" id="runs">
-          <div class="page-head">
-            <div>
-              <p class="eyebrow">WORKSPACE / RUNS</p>
-              <h1>Run history</h1>
-              <p class="muted">Each run preserves auditable execution and evidence records showing what FSQ attempted, what the harness observed, and why each result was decided.</p>
-            </div>
-            <button class="btn primary" data-open-run>New run</button>
-          </div>
           <div class="content-grid">
-            <div class="card filter-bar">
-              <label class="search"><span>⌕</span><input placeholder="Search runs by goal, case, or run ID" /></label>
-              <div class="filters">
-                <select class="select"><option>All modes</option><option>AI explore</option><option>Strict replay</option></select>
-                <select class="select"><option>All statuses</option><option>Success</option><option>Failed</option><option>Inconclusive</option></select>
-                <select class="select"><option>All platforms</option><option>Web</option><option>Android</option><option>Windows</option><option>macOS</option></select>
+            <section class="card runs-panel">
+              <div class="card-head">
+                <div class="runs-panel-header-copy">
+                  <h1>Run history</h1>
+                  <p class="muted">Each run preserves auditable execution and evidence records showing what FSQ attempted, what the harness observed, and why each result was decided.</p>
+                </div>
+                <button class="btn primary" data-open-run>New run</button>
               </div>
-            </div>
-            <div class="card table-card">
-              <table class="table">
-                <thead><tr><th>Run</th><th>Mode</th><th>Platform</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
-                <tbody>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Create project flow</strong><small>run_20260807_135642</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>Web</td><td><span class="badge success">success</span></td><td>1m 42s</td><td>4 min ago</td></tr>
-                  <tr data-open-workbench data-failed-run><td class="primary-cell"><strong>Checkout smoke</strong><small>run_20260807_131914</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Web</td><td><span class="badge failed">failed</span></td><td>34s</td><td>38 min ago</td></tr>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Settings profile</strong><small>run_20260806_172305</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>macOS</td><td><span class="badge warning">inconclusive</span></td><td>2m 09s</td><td>Yesterday</td></tr>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Onboarding navigation</strong><small>run_20260806_145522</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Android</td><td><span class="badge success">success</span></td><td>58s</td><td>Yesterday</td></tr>
-                  <tr data-open-workbench><td class="primary-cell"><strong>Desktop launch</strong><small>run_20260805_112011</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Windows</td><td><span class="badge success">success</span></td><td>27s</td><td>2 days ago</td></tr>
-                </tbody>
-              </table>
-            </div>
+              <div class="card-body runs-panel-body">
+                <div class="runs-toolbar">
+                  <label class="search"><span>⌕</span><input placeholder="Search runs by goal, case, or run ID" /></label>
+                  <div class="filters">
+                    <select class="select"><option>All modes</option><option>AI explore</option><option>Strict replay</option></select>
+                    <select class="select"><option>All statuses</option><option>Success</option><option>Failed</option><option>Inconclusive</option></select>
+                    <select class="select"><option>All platforms</option><option>Web</option><option>Android</option><option>Windows</option><option>macOS</option></select>
+                  </div>
+                </div>
+                <div class="runs-table-wrap">
+                  <table class="table">
+                    <thead><tr><th>Run</th><th>Mode</th><th>Platform</th><th>Status</th><th>Duration</th><th>Started</th></tr></thead>
+                    <tbody>
+                      <tr data-open-workbench><td class="primary-cell"><strong>Create project flow</strong><small>run_20260807_135642</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>Web</td><td><span class="badge success">success</span></td><td>1m 42s</td><td>4 min ago</td></tr>
+                      <tr data-open-workbench data-failed-run><td class="primary-cell"><strong>Checkout smoke</strong><small>run_20260807_131914</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Web</td><td><span class="badge failed">failed</span></td><td>34s</td><td>38 min ago</td></tr>
+                      <tr data-open-workbench><td class="primary-cell"><strong>Settings profile</strong><small>run_20260806_172305</small></td><td><span class="mode-mark"><span class="icon-box">✦</span>AI explore</span></td><td>macOS</td><td><span class="badge warning">inconclusive</span></td><td>2m 09s</td><td>Yesterday</td></tr>
+                      <tr data-open-workbench><td class="primary-cell"><strong>Onboarding navigation</strong><small>run_20260806_145522</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Android</td><td><span class="badge success">success</span></td><td>58s</td><td>Yesterday</td></tr>
+                      <tr data-open-workbench><td class="primary-cell"><strong>Desktop launch</strong><small>run_20260805_112011</small></td><td><span class="mode-mark"><span class="icon-box">↻</span>Strict replay</span></td><td>Windows</td><td><span class="badge success">success</span></td><td>27s</td><td>2 days ago</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
 

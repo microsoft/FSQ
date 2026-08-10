@@ -89,9 +89,7 @@ def _parse_navigation_contract(html: str) -> dict[str, list[tuple[str, str]] | l
 
 
 def _extract_runs_section(html: str) -> str:
-    runs_match = re.search(r'<section class="page" id="runs">\s*(?P<section>[\s\S]*?)\s*</section>', html)
-    assert runs_match is not None
-    return runs_match.group("section")
+    return _extract_page_markup(html, "runs")
 
 
 def _extract_home_section(html: str) -> str:
@@ -2270,6 +2268,28 @@ def test_extract_settings_section_preserves_markup_after_nested_section_close() 
     assert re.search(r'</section>\s*<div class="after-nested">Still included</div>\s*</div>\s*</section>$', settings_section)
 
 
+def test_extract_runs_section_preserves_markup_after_nested_section_close() -> None:
+    html = """
+    <main>
+      <section class="page" id="runs">
+        <div class="content-grid">
+          <section class="card runs-panel">
+            <div class="runs-toolbar"></div>
+          </section>
+          <div class="after-nested">Still included</div>
+        </div>
+      </section>
+    </main>
+    """
+
+    runs_section = _extract_runs_section(html)
+
+    assert runs_section.startswith('<section class="page" id="runs">')
+    assert '<section class="card runs-panel">' in runs_section
+    assert '<div class="after-nested">Still included</div>' in runs_section
+    assert re.search(r'</section>\s*<div class="after-nested">Still included</div>\s*</div>\s*</section>$', runs_section)
+
+
 def test_fsq_settings_workbench_panel_css_preserves_viewport_fill_and_mobile_padding() -> None:
     html = _read_fsq_control_plane_product_ux_html()
     rules = _extract_source_viewer_css_rules(html)
@@ -2462,12 +2482,22 @@ def test_fsq_runs_navigation_state_contract_survives_workbench_navigation() -> N
     }
 
 
-def test_fsq_runs_history_page_keeps_auditable_copy_and_filters() -> None:
-    runs_section = _extract_runs_section(_read_fsq_control_plane_product_ux_html())
+def test_fsq_runs_history_page_uses_single_workbench_panel_with_attached_toolbar() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    runs_section = _extract_runs_section(html)
+    page_children = _parse_page_layout_contract(html)
 
-    assert '<p class="eyebrow">WORKSPACE / RUNS</p>' in runs_section
-    assert "<h1>Run history</h1>" in runs_section
+    assert [child.get("class") for child in page_children["runs"]] == ["content-grid"]
+    assert '<div class="page-head">' not in runs_section
+    assert '<p class="eyebrow">' not in runs_section
+    assert runs_section.count("<h1>") == 1
+    assert re.search(
+        r'<section class="card runs-panel">\s*<div class="card-head">[\s\S]*?<div class="runs-panel-header-copy">\s*<h1>Run history</h1>[\s\S]*?<button class="btn primary" data-open-run>New run</button>[\s\S]*?</div>\s*<div class="card-body runs-panel-body">\s*<div class="runs-toolbar">[\s\S]*?placeholder="Search runs by goal, case, or run ID"[\s\S]*?</div>\s*<div class="runs-table-wrap">\s*<table class="table">',
+        runs_section,
+    )
     assert "auditable execution and evidence records" in runs_section
+    assert 'class="card filter-bar"' not in runs_section
+    assert 'class="card table-card"' not in runs_section
     assert 'placeholder="Search runs by goal, case, or run ID"' in runs_section
     assert _extract_select_option_groups(runs_section) == [
         ["All modes", "AI explore", "Strict replay"],
@@ -2475,6 +2505,85 @@ def test_fsq_runs_history_page_keeps_auditable_copy_and_filters() -> None:
         ["All platforms", "Web", "Android", "Windows", "macOS"],
     ]
     assert re.findall(r"<tr[^>]*data-open-workbench", runs_section)
+
+
+def test_fsq_runs_workbench_panel_css_preserves_viewport_fill_and_mobile_safe_padding() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    css = _extract_style_block(html)
+
+    runs_rule = _extract_css_declarations(rules["#runs"][0])
+    runs_panel_rule = _extract_css_declarations(rules[".runs-panel"][0])
+    runs_header_rule = _extract_css_declarations(rules[".runs-panel .card-head"][0])
+    runs_header_copy_rule = _extract_css_declarations(rules[".runs-panel-header-copy"][0])
+    runs_heading_rule = _extract_css_declarations(rules[".runs-panel-header-copy h1"][0])
+    runs_body_rule = _extract_css_declarations(rules[".runs-panel-body"][0])
+    runs_toolbar_rule = _extract_css_declarations(rules[".runs-toolbar"][0])
+    runs_filters_rule = _extract_css_declarations(rules[".runs-toolbar .filters"][0])
+    runs_search_rule = _extract_css_declarations(rules[".runs-toolbar .search"][0])
+    runs_table_wrap_rule = _extract_css_declarations(rules[".runs-table-wrap"][0])
+
+    assert runs_rule["padding"] == "16px"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector="#runs",
+        property_name="padding",
+        expected_value="18px 14px calc(88px + env(safe-area-inset-bottom, 0px))",
+    )
+    assert runs_panel_rule["width"] == "100%"
+    assert runs_panel_rule["display"] == "grid"
+    assert runs_panel_rule["grid-template-rows"] == "auto 1fr"
+    assert runs_panel_rule["min-height"] == "calc(100vh - 108px)"
+    assert runs_panel_rule["overflow"] == "hidden"
+    assert runs_header_rule["align-items"] == "flex-start"
+    assert runs_header_copy_rule["display"] == "grid"
+    assert runs_header_copy_rule["gap"] == "8px"
+    assert runs_heading_rule["font-size"] == "18px"
+    assert runs_heading_rule["line-height"] == "1.2"
+    assert runs_body_rule["display"] == "grid"
+    assert runs_body_rule["grid-template-rows"] == "auto 1fr"
+    assert runs_body_rule["padding"] == "0"
+    assert runs_toolbar_rule["display"] == "flex"
+    assert runs_toolbar_rule["border-bottom"] == "1px solid var(--cp-border)"
+    assert runs_filters_rule["flex-wrap"] == "wrap"
+    assert runs_search_rule["max-width"] == "480px"
+    assert runs_table_wrap_rule["overflow"] == "auto"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".runs-panel .card-head",
+        property_name="flex-direction",
+        expected_value="column",
+    )
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".runs-panel .card-head .btn",
+        property_name="width",
+        expected_value="100%",
+    )
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".runs-toolbar",
+        property_name="flex-direction",
+        expected_value="column",
+    )
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".runs-toolbar .filters",
+        property_name="overflow",
+        expected_value="auto",
+    )
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".runs-toolbar .filters",
+        property_name="flex-wrap",
+        expected_value="nowrap",
+    )
 
 
 def test_fsq_workbench_entries_keep_pre_task2_routing_markup() -> None:
