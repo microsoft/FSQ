@@ -2179,9 +2179,10 @@ def test_fsq_settings_page_uses_edge_to_edge_workbench_contract() -> None:
         settings_section,
     )
     assert re.search(
-        r'<div class="card-body settings-panel-body">[\s\S]*?<p class="settings-section-label">General</p>[\s\S]*?<div class="settings-list">[\s\S]*?<div class="settings-row"><span><strong>Theme</strong><small>Use light, dark, or follow the operating system\.</small></span><select class="select">',
+        r'<div class="card-body settings-panel-body">[\s\S]*?<section class="settings-section">\s*<h2 class="settings-section-label">General</h2>[\s\S]*?<div class="settings-list">[\s\S]*?<div class="settings-row"><span><strong>Theme</strong><small>Use light, dark, or follow the operating system\.</small></span><select class="select">',
         settings_section,
     )
+    assert '<p class="settings-section-label">General</p>' not in settings_section
     assert settings_section.count('class="settings-row"') == 4
 
 

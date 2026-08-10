@@ -1298,6 +1298,11 @@
         min-height: 0;
       }
 
+      .settings-section {
+        display: grid;
+        gap: 18px;
+      }
+
       .settings-section-label {
         margin: 0;
         color: var(--cp-text-muted);
@@ -3458,13 +3463,15 @@
                 </div>
               </div>
               <div class="card-body settings-panel-body">
-                <p class="settings-section-label">General</p>
-                <div class="settings-list">
-                  <div class="settings-row"><span><strong>Theme</strong><small>Use light, dark, or follow the operating system.</small></span><select class="select"><option>System</option><option>Light</option><option>Dark</option></select></div>
-                  <div class="settings-row"><span><strong>Open files with</strong><small>Editor used for complex YAML and project source files.</small></span><select class="select"><option>Visual Studio Code</option><option>System default</option></select></div>
-                  <div class="settings-row"><span><strong>Diagnostic logging</strong><small>Keep local Control Plane and runtime logs for troubleshooting.</small></span><button class="btn small">Enabled</button></div>
-                  <div class="settings-row"><span><strong>Updates</strong><small>Check for new FSQ releases when Control Plane starts.</small></span><button class="btn small">Check now</button></div>
-                </div>
+                <section class="settings-section">
+                  <h2 class="settings-section-label">General</h2>
+                  <div class="settings-list">
+                    <div class="settings-row"><span><strong>Theme</strong><small>Use light, dark, or follow the operating system.</small></span><select class="select"><option>System</option><option>Light</option><option>Dark</option></select></div>
+                    <div class="settings-row"><span><strong>Open files with</strong><small>Editor used for complex YAML and project source files.</small></span><select class="select"><option>Visual Studio Code</option><option>System default</option></select></div>
+                    <div class="settings-row"><span><strong>Diagnostic logging</strong><small>Keep local Control Plane and runtime logs for troubleshooting.</small></span><button class="btn small">Enabled</button></div>
+                    <div class="settings-row"><span><strong>Updates</strong><small>Check for new FSQ releases when Control Plane starts.</small></span><button class="btn small">Check now</button></div>
+                  </div>
+                </section>
               </div>
             </section>
           </div>
