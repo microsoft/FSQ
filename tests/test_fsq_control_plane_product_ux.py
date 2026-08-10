@@ -1957,19 +1957,29 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
 def test_fsq_overview_page_uses_start_run_workbench_contract() -> None:
     html = _read_fsq_control_plane_product_ux_html()
     rules = _extract_source_viewer_css_rules(html)
+    css = _extract_style_block(html)
     page_children = _parse_page_layout_contract(html)
     home_section = _extract_home_section(html)
 
     home_rule = _extract_css_declarations(rules["#home"][0])
 
     assert home_rule["padding"] == "16px"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector="#home",
+        property_name="padding",
+        expected_value="18px 14px 88px",
+    )
     assert [child.get("class") for child in page_children["home"]] == ["content-grid"]
     assert '<div class="page-head">' not in home_section
     assert '<p class="eyebrow">' not in home_section
-    assert "<h1>" not in home_section
+    assert home_section.count("<h1>") == 1
     assert re.search(r'<div class="content-grid">\s*<section class="card overview-start-panel">', home_section)
-    assert re.search(r'<section class="card overview-start-panel">[\s\S]*?<h2>Start a run</h2>', home_section)
-    assert "Start with the core loop" in home_section
+    assert re.search(
+        r'<section class="card overview-start-panel">[\s\S]*?<div class="card-head">[\s\S]*?<div class="overview-start-copy">[\s\S]*?<h1>Start a run</h1>\s*<p class="muted">Start with the core loop',
+        home_section,
+    )
     assert 'class="btn" id="learnFsq">How FSQ works</button>' in home_section
     assert re.search(r'<section class="card overview-start-panel">[\s\S]*?<div class="launch-grid">', home_section)
     assert "<h2>Explore with AI</h2>" in home_section
