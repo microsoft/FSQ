@@ -691,7 +691,10 @@ class _ConfigContractParser(HTMLParser):
             self._text_targets.append(("context", []))
         elif tag == "h1":
             self._text_targets.append(("title", []))
-        elif tag == "p" and "muted" in classes and any("page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+        elif tag == "p" and "muted" in classes and any(
+            ("page-head" in ancestor_attrs.get("class", "").split()) or ("card-head" in ancestor_attrs.get("class", "").split())
+            for _, ancestor_attrs in self._stack[:-1]
+        ):
             self._text_targets.append(("description", []))
 
         if "config-row" in classes:
@@ -720,7 +723,10 @@ class _ConfigContractParser(HTMLParser):
                 }
                 self._text_targets.append(("toggle_button", []))
 
-        if tag == "button" and any("page-head" in ancestor_attrs.get("class", "").split() for _, ancestor_attrs in self._stack[:-1]):
+        if tag == "button" and any(
+            ("page-head" in ancestor_attrs.get("class", "").split()) or ("card-head" in ancestor_attrs.get("class", "").split())
+            for _, ancestor_attrs in self._stack[:-1]
+        ):
             self.header_button_types.append(attributes.get("type", ""))
             self.header_button_form_ids.append(attributes.get("form", ""))
             self._text_targets.append(("header_buttons", []))
@@ -1993,8 +1999,11 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     css = _extract_style_block(html)
     config_contract = _parse_config_contract(html)
     config_section = _extract_config_section(html)
+    page_children = _parse_page_layout_contract(html)
 
+    config_rule = _extract_css_declarations(rules["#config"][0])
     config_panel_rule = _extract_css_declarations(rules[".config-panel"][0])
+    config_form_rule = _extract_css_declarations(rules[".config-panel form"][0])
     config_row_rule = _extract_css_declarations(rules[".config-row"][0])
     config_key_rule = _extract_css_declarations(rules[".config-key"][0])
     config_control_rule = _extract_css_declarations(rules[".config-control"][0])
@@ -2003,7 +2012,24 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
     config_footer_rule = _extract_css_declarations(rules[".config-footer"][0])
     config_status_rule = _extract_css_declarations(rules[".config-status"][0])
 
-    assert config_contract["context"] == "WORKSPACE / LLM CONFIGURATION"
+    assert config_rule["padding"] == "16px"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector="#config",
+        property_name="padding",
+        expected_value="18px 14px 88px",
+    )
+    assert [child.get("class") for child in page_children["config"]] == ["content-grid"]
+    assert '<div class="page-head">' not in config_section
+    assert '<p class="eyebrow">' not in config_section
+    assert config_section.count("<h1>") == 1
+    assert re.search(
+        r'<section class="card config-panel">\s*<div class="card-head">[\s\S]*?<h1>LLM Configuration</h1>[\s\S]*?<p class="muted">Connection values for the active Workspace LLM endpoint\.</p>[\s\S]*?id="configSaveButton"[\s\S]*?</div>\s*<form id="configForm"',
+        config_section,
+    )
+
+    assert config_contract["context"] == ""
     assert config_contract["title"] == "LLM Configuration"
     assert config_contract["description"] == "Connection values for the active Workspace LLM endpoint."
     assert config_contract["header_buttons"] == ["Save changes"]
@@ -2053,6 +2079,8 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
 
     assert config_panel_rule["width"] == "100%"
     assert config_panel_rule["display"] == "grid"
+    assert config_panel_rule["min-height"] == "calc(100vh - 108px)"
+    assert config_form_rule["display"] == "flex"
     assert config_row_rule["display"] == "grid"
     assert config_row_rule["grid-template-columns"] == "minmax(0, 1fr) minmax(280px, 420px)"
     assert config_key_rule["display"] == "grid"
@@ -2075,6 +2103,36 @@ def test_fsq_config_page_uses_three_llm_connection_keys_only() -> None:
         selector=".config-input-wrap",
         property_name="grid-template-columns",
         expected_value="1fr",
+    )
+
+
+def test_fsq_config_workbench_panel_css_stacks_header_at_mobile_breakpoint() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    css = _extract_style_block(html)
+
+    config_header_rule = _extract_css_declarations(rules[".config-panel .card-head"][0])
+    config_header_copy_rule = _extract_css_declarations(rules[".config-panel-header-copy"][0])
+    config_heading_rule = _extract_css_declarations(rules[".config-panel-header-copy h1"][0])
+
+    assert config_header_rule["align-items"] == "flex-start"
+    assert config_header_copy_rule["display"] == "grid"
+    assert config_header_copy_rule["gap"] == "8px"
+    assert config_heading_rule["font-size"] == "18px"
+    assert config_heading_rule["line-height"] == "1.2"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".config-panel .card-head",
+        property_name="flex-direction",
+        expected_value="column",
+    )
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".config-panel .card-head .btn",
+        property_name="width",
+        expected_value="100%",
     )
 
 

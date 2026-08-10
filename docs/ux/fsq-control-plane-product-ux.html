@@ -692,6 +692,10 @@
         padding: 16px;
       }
 
+      #config {
+        padding: 16px;
+      }
+
       .overview-start-panel {
         width: 100%;
         overflow: hidden;
@@ -1230,11 +1234,32 @@
       .config-panel {
         width: 100%;
         display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: calc(100vh - 108px);
         overflow: hidden;
       }
 
-      .config-panel form {
+      .config-panel .card-head {
+        align-items: flex-start;
+      }
+
+      .config-panel-header-copy {
+        min-width: 0;
         display: grid;
+        gap: 8px;
+      }
+
+      .config-panel-header-copy h1 {
+        margin-bottom: 0;
+        font-size: 18px;
+        letter-spacing: -0.3px;
+        line-height: 1.2;
+      }
+
+      .config-panel form {
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
       }
 
       .config-row {
@@ -1286,6 +1311,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        margin-top: auto;
         gap: 12px;
         padding: 18px 22px;
         background: var(--cp-bg-elevated);
@@ -2953,6 +2979,10 @@
           padding: 18px 14px 88px;
         }
 
+        #config {
+          padding: 18px 14px 88px;
+        }
+
         .page-head {
           align-items: flex-start;
           flex-direction: column;
@@ -2960,6 +2990,14 @@
 
         .overview-start-panel .card-head {
           flex-direction: column;
+        }
+
+        .config-panel .card-head {
+          flex-direction: column;
+        }
+
+        .config-panel .card-head .btn {
+          width: 100%;
         }
 
         .page-head > div {
@@ -3300,12 +3338,15 @@
         </section>
 
         <section class="page" id="config">
-          <div class="page-head">
-            <div><p class="eyebrow">WORKSPACE / LLM CONFIGURATION</p><h1>LLM Configuration</h1><p class="muted">Connection values for the active Workspace LLM endpoint.</p></div>
-            <button class="btn primary" id="configSaveButton" type="submit" form="configForm">Save changes</button>
-          </div>
           <div class="content-grid">
             <section class="card config-panel">
+              <div class="card-head">
+                <div class="config-panel-header-copy">
+                  <h1>LLM Configuration</h1>
+                  <p class="muted">Connection values for the active Workspace LLM endpoint.</p>
+                </div>
+                <button class="btn primary" id="configSaveButton" type="submit" form="configForm">Save changes</button>
+              </div>
               <form id="configForm" novalidate>
                 <div class="config-row">
                   <div class="config-key">
