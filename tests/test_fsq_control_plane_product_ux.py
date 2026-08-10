@@ -642,10 +642,69 @@ def _extract_config_section(html: str) -> str:
     return config_match.group("section")
 
 
+class _PageSectionMarkupParser(HTMLParser):
+    def __init__(self, page_id: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._page_id = page_id
+        self._stack: list[tuple[str, dict[str, str]]] = []
+        self._page_depth: int | None = None
+        self._markup_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {name: value or "" for name, value in attrs}
+        self._stack.append((tag, attributes))
+
+        if self._page_depth is not None:
+            self._markup_parts.append(self.get_starttag_text())
+            return
+
+        if tag == "section" and attributes.get("id") == self._page_id and "page" in attributes.get("class", "").split():
+            self._page_depth = len(self._stack)
+            self._markup_parts.append(self.get_starttag_text())
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._page_depth is not None:
+            self._markup_parts.append(self.get_starttag_text())
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._page_depth is not None:
+            self._markup_parts.append(f"</{tag}>")
+
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                del self._stack[index:]
+                break
+
+        if self._page_depth is not None and len(self._stack) < self._page_depth:
+            self._page_depth = None
+
+    def handle_data(self, data: str) -> None:
+        if self._page_depth is not None:
+            self._markup_parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self._page_depth is not None:
+            self._markup_parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if self._page_depth is not None:
+            self._markup_parts.append(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        if self._page_depth is not None:
+            self._markup_parts.append(f"<!--{data}-->")
+
+
+def _extract_page_markup(html: str, page_id: str) -> str:
+    parser = _PageSectionMarkupParser(page_id)
+    parser.feed(html)
+    page_markup = "".join(parser._markup_parts).strip()
+    assert page_markup, f'missing page markup for "{page_id}"'
+    return page_markup
+
+
 def _extract_settings_section(html: str) -> str:
-    settings_match = re.search(r'<section class="page" id="settings">\s*(?P<section>[\s\S]*?)\s*</section>', html)
-    assert settings_match is not None
-    return settings_match.group("section")
+    return _extract_page_markup(html, "settings")
 
 
 class _ConfigContractParser(HTMLParser):
@@ -2171,6 +2230,7 @@ def test_fsq_settings_page_uses_edge_to_edge_workbench_contract() -> None:
     settings_section = _extract_settings_section(html)
 
     assert [child.get("class") for child in page_children["settings"]] == ["content-grid"]
+    assert settings_section.startswith('<section class="page" id="settings">')
     assert '<div class="page-head">' not in settings_section
     assert '<p class="eyebrow">' not in settings_section
     assert re.search(r'<div class="content-grid">\s*<section class="card settings-panel">', settings_section)
@@ -2183,7 +2243,31 @@ def test_fsq_settings_page_uses_edge_to_edge_workbench_contract() -> None:
         settings_section,
     )
     assert '<p class="settings-section-label">General</p>' not in settings_section
+    assert re.search(r'<section class="settings-section">\s*<h2 class="settings-section-label">General</h2>', settings_section)
+    assert re.search(r'</section>\s*</div>\s*</section>\s*</div>\s*</section>$', settings_section)
     assert settings_section.count('class="settings-row"') == 4
+
+
+def test_extract_settings_section_preserves_markup_after_nested_section_close() -> None:
+    html = """
+    <main>
+      <section class="page" id="settings">
+        <div class="content-grid">
+          <section class="settings-section">
+            <h2 class="settings-section-label">General</h2>
+          </section>
+          <div class="after-nested">Still included</div>
+        </div>
+      </section>
+    </main>
+    """
+
+    settings_section = _extract_settings_section(html)
+
+    assert settings_section.startswith('<section class="page" id="settings">')
+    assert '<h2 class="settings-section-label">General</h2>' in settings_section
+    assert '<div class="after-nested">Still included</div>' in settings_section
+    assert re.search(r'</section>\s*<div class="after-nested">Still included</div>\s*</div>\s*</section>$', settings_section)
 
 
 def test_fsq_settings_workbench_panel_css_preserves_viewport_fill_and_mobile_padding() -> None:
