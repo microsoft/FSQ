@@ -642,6 +642,12 @@ def _extract_config_section(html: str) -> str:
     return config_match.group("section")
 
 
+def _extract_settings_section(html: str) -> str:
+    settings_match = re.search(r'<section class="page" id="settings">\s*(?P<section>[\s\S]*?)\s*</section>', html)
+    assert settings_match is not None
+    return settings_match.group("section")
+
+
 class _ConfigContractParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -1939,8 +1945,8 @@ def test_fsq_shared_content_grid_fills_shell_width_without_changing_workspace_or
     assert _find_page_child_with_class(page_children, "home", "content-grid")["class"] == "content-grid"
     assert _find_page_child_with_class(page_children, "runs", "content-grid")["class"] == "content-grid"
     assert _find_page_child_with_class(page_children, "config", "content-grid")["class"] == "content-grid"
-    settings_content = _find_page_child_with_class(page_children, "settings", "content-grid card")
-    assert settings_content["class"] == "content-grid card"
+    settings_content = _find_page_child_with_class(page_children, "settings", "content-grid")
+    assert settings_content["class"] == "content-grid"
     assert "max-width" not in settings_content.get("style", "")
 
     assert _find_page_child_with_class(page_children, "workspace", "github-workspace")["class"] == "github-workspace"
@@ -2156,6 +2162,67 @@ def test_fsq_overview_start_run_panel_css_preserves_card_and_launch_stack_behavi
         selector=".launch-grid",
         property_name="grid-template-columns",
         expected_value="1fr",
+    )
+
+
+def test_fsq_settings_page_uses_edge_to_edge_workbench_contract() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    page_children = _parse_page_layout_contract(html)
+    settings_section = _extract_settings_section(html)
+
+    assert [child.get("class") for child in page_children["settings"]] == ["content-grid"]
+    assert '<div class="page-head">' not in settings_section
+    assert '<p class="eyebrow">' not in settings_section
+    assert re.search(r'<div class="content-grid">\s*<section class="card settings-panel">', settings_section)
+    assert re.search(
+        r'<section class="card settings-panel">\s*<div class="card-head">[\s\S]*?<div class="settings-panel-header-copy">[\s\S]*?<h1>Application settings</h1>\s*<p class="muted">Global preferences for the local Control Plane\. These settings are not tied to a workspace\.</p>[\s\S]*?</div>\s*</div>',
+        settings_section,
+    )
+    assert re.search(
+        r'<div class="card-body settings-panel-body">[\s\S]*?<p class="settings-section-label">General</p>[\s\S]*?<div class="settings-list">[\s\S]*?<div class="settings-row"><span><strong>Theme</strong><small>Use light, dark, or follow the operating system\.</small></span><select class="select">',
+        settings_section,
+    )
+    assert settings_section.count('class="settings-row"') == 4
+
+
+def test_fsq_settings_workbench_panel_css_preserves_viewport_fill_and_mobile_padding() -> None:
+    html = _read_fsq_control_plane_product_ux_html()
+    rules = _extract_source_viewer_css_rules(html)
+    css = _extract_style_block(html)
+
+    settings_rule = _extract_css_declarations(rules["#settings"][0])
+    settings_panel_rule = _extract_css_declarations(rules[".settings-panel"][0])
+    settings_header_rule = _extract_css_declarations(rules[".settings-panel .card-head"][0])
+    settings_header_copy_rule = _extract_css_declarations(rules[".settings-panel-header-copy"][0])
+    settings_heading_rule = _extract_css_declarations(rules[".settings-panel-header-copy h1"][0])
+    settings_body_rule = _extract_css_declarations(rules[".settings-panel-body"][0])
+
+    assert settings_rule["padding"] == "16px"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector="#settings",
+        property_name="padding",
+        expected_value="18px 14px calc(88px + env(safe-area-inset-bottom, 0px))",
+    )
+    assert settings_panel_rule["width"] == "100%"
+    assert settings_panel_rule["display"] == "grid"
+    assert settings_panel_rule["grid-template-rows"] == "auto 1fr"
+    assert settings_panel_rule["min-height"] == "calc(100vh - 108px)"
+    assert settings_panel_rule["overflow"] == "hidden"
+    assert settings_header_rule["align-items"] == "flex-start"
+    assert settings_header_copy_rule["display"] == "grid"
+    assert settings_header_copy_rule["gap"] == "8px"
+    assert settings_heading_rule["font-size"] == "18px"
+    assert settings_heading_rule["line-height"] == "1.2"
+    assert settings_body_rule["display"] == "grid"
+    assert settings_body_rule["align-content"] == "start"
+    _assert_media_rule_declaration(
+        css,
+        media_condition="max-width: 820px",
+        selector=".settings-panel .card-head",
+        property_name="flex-direction",
+        expected_value="column",
     )
 
 
