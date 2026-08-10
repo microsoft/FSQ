@@ -2536,6 +2536,13 @@ def test_fsq_runs_workbench_panel_css_preserves_viewport_fill_and_mobile_safe_pa
     assert runs_panel_rule["grid-template-rows"] == "auto 1fr"
     assert runs_panel_rule["min-height"] == "calc(100vh - 108px)"
     assert runs_panel_rule["overflow"] == "hidden"
+    _, runs_panel_mobile_rule = _extract_media_rule_with_selector(
+        css,
+        media_condition="max-width: 820px",
+        selector=".runs-panel",
+    )
+    assert runs_panel_mobile_rule["min-height"] == "calc(100dvh - 76px - 18px - 88px - env(safe-area-inset-bottom, 0px))"
+    assert runs_panel_mobile_rule["min-height"] != runs_panel_rule["min-height"]
     assert runs_header_rule["align-items"] == "flex-start"
     assert runs_header_copy_rule["display"] == "grid"
     assert runs_header_copy_rule["gap"] == "8px"
