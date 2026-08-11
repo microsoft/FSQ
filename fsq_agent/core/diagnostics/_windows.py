@@ -78,7 +78,6 @@ class WindowsPlatformProbe:
                 category="Windows",
                 status="warn",
                 summary="Application launch and control-tree automation are not tested by doctor.",
-                affected_targets=_targets(),
                 fixes=[DoctorFix(description="Run a small real Windows case to verify the application's accessibility surface.")],
             )
         )
@@ -92,12 +91,8 @@ class WindowsPlatformProbe:
         emit_completed(self.progress_sink, result)
 
 
-def _targets() -> list[str]:
-    return ["dynamic", "strict", "ai_assertion"]
-
-
 def _pass(check_id: str, summary: str) -> DiagnosticProbeResult:
-    return DiagnosticProbeResult(id=check_id, category="Windows", status="pass", summary=summary, affected_targets=_targets())
+    return DiagnosticProbeResult(id=check_id, category="Windows", status="pass", summary=summary)
 
 
 def _fail(check_id: str, summary: str, description: str, command: str | None = None, env: str | None = None) -> DiagnosticProbeResult:
@@ -106,6 +101,5 @@ def _fail(check_id: str, summary: str, description: str, command: str | None = N
         category="Windows",
         status="fail",
         summary=summary,
-        affected_targets=_targets(),
         fixes=[DoctorFix(description=description, command=command, environment_variable=env)],
     )

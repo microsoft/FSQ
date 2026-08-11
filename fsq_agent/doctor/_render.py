@@ -3,9 +3,16 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-
 from fsq_agent.models import DoctorReport
+from fsq_agent.doctor._presentation import check_title
+
+
+_SUMMARY_LABELS = {
+    "ready": "PASS",
+    "blocked": "FAIL",
+    "usage_error": "ERROR",
+    "cancelled": "CANCELLED",
+}
 
 
 def render_doctor_json(report: DoctorReport) -> str:
@@ -17,40 +24,41 @@ def render_doctor_text(report: DoctorReport) -> str:
         "FSQ Doctor",
         "",
         f"Platform: {report.platform or 'unresolved'} ({report.platform_source})",
-        f"Mode: {report.requested_mode}",
         "",
     ]
-    grouped: dict[str, list] = defaultdict(list)
+    repairs_by_target = {}
+    for repair in report.repairs:
+        repairs_by_target.setdefault(repair.target, []).append(repair)
+    matched_targets: set[str] = set()
     for check in report.checks:
-        grouped[check.category].append(check)
-    for category, checks in grouped.items():
-        lines.append(category)
-        for check in checks:
-            lines.append(f"  {check.status.upper():4}  {check.summary}")
-            if check.status in {"warn", "fail"}:
-                if check.affected_targets:
-                    lines.append(f"        Impact: {', '.join(check.affected_targets)}")
-                for fix in check.fixes:
-                    lines.append(f"        Fix: {fix.description}")
-                    if fix.command:
-                        lines.append(f"        Run: {fix.command}")
-                    if fix.verification_command:
-                        lines.append(f"        Verify: {fix.verification_command}")
-        lines.append("")
-    if report.repairs:
-        lines.append("Repairs")
-        for repair in report.repairs:
-            lines.append(f"  {repair.status.upper():8} {repair.action_id}: {repair.target}")
+        lines.append(f"[{check_title(check.id)}]")
+        lines.append(f"  Check: {check.summary}")
+        for repair in repairs_by_target.get(check.id, []):
+            matched_targets.add(check.id)
+            lines.append(f"  Repair: {repair.status.upper()}")
             if repair.backup_path:
-                lines.append(f"           Backup: {repair.backup_path}")
+                lines.append(f"  Backup: {repair.backup_path}")
+        lines.append(f"  Result: {check.status.upper()}")
+        if check.status in {"warn", "fail"}:
+            for fix in check.fixes:
+                lines.append(f"  Fix: {fix.description}")
+                if fix.command:
+                    lines.append(f"  Run: {fix.command}")
+                if fix.verification_command:
+                    lines.append(f"  Verify: {fix.verification_command}")
         lines.append("")
-    lines.append("Readiness")
-    lines.append(f"  {report.readiness.dynamic_llm.status.upper():11} Dynamic LLM")
-    lines.append(f"  {report.readiness.strict_core.status.upper():11} Strict core")
-    lines.append(f"  {report.readiness.ai_assertion.status.upper():11} AI assertion")
-    lines.append("")
+    for target, repairs in repairs_by_target.items():
+        if target in matched_targets:
+            continue
+        lines.append(f"[Repair: {target}]")
+        for repair in repairs:
+            lines.append(f"  Repair: {repair.status.upper()}")
+            if repair.backup_path:
+                lines.append(f"  Backup: {repair.backup_path}")
+        lines.append("")
+    lines.append(f"Summary: {_SUMMARY_LABELS[report.status]}")
     lines.append(
-        "Summary: "
+        "Checks: "
         f"{report.summary.get('pass', 0)} passed, "
         f"{report.summary.get('warn', 0)} warnings, "
         f"{report.summary.get('fail', 0)} failed, "

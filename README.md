@@ -168,19 +168,19 @@ Diagnose local readiness and receive actionable fixes:
 
 ```powershell
 uv run fsq-agent doctor
-uv run fsq-agent doctor --platform android --mode all
-uv run fsq-agent doctor --platform web --mode strict --non-interactive
+uv run fsq-agent doctor --platform android
+uv run fsq-agent doctor --platform web --non-interactive
 uv run fsq-agent doctor --platform windows --format json --non-interactive
 uv run fsq-agent doctor --platform android --color always
 ```
 
-In an interactive terminal, `doctor` can ask which platform/mode to inspect and offer narrowly scoped safe repairs. In CI or redirected execution it never prompts. `--repair` applies eligible no-input repairs such as initializing a missing workspace; non-secret platform values are written only when entered interactively. Existing `.env` files are backed up before doctor changes them.
+Every valid `doctor` run performs the complete environment, workspace, provider, and selected-platform diagnosis and returns one overall result. In an interactive terminal, an eligible problem appears as `ACTION REQUIRED`; Doctor immediately asks whether to apply the narrowly scoped safe repair, verifies an accepted repair before continuing, and shows `PASS` only after verification succeeds. Declined, skipped, failed, or unresolved repairs keep their final `WARN` or `FAIL` severity. In CI, redirected execution, or `--non-interactive`, Doctor never prompts or displays `ACTION REQUIRED`. `--repair` immediately applies and verifies eligible no-input repairs such as initializing a missing workspace, while input-required repairs are skipped. Non-secret platform values are written only when entered interactively. Existing `.env` files are backed up before Doctor changes them.
 
-Text-mode Doctor prints each `RUNNING` check immediately and replaces that line with `PASS`, `WARN`, `FAIL`, or `SKIP` when the check completes. Interactive terminals use green/yellow/red/gray/cyan status highlighting and in-place updates; redirected output falls back to plain append-only lines. Use `--color auto|always|never` to control ANSI highlighting. JSON remains a single progress-free, color-free document.
+Text-mode Doctor gives every concrete check its own bracketed section derived from the stable check id. Detection, action, repair, verification, result, and manual guidance stay under the same title, for example `[Appium status]`; duplicate phase headings are omitted. Interactive terminals replace transient `RUNNING` and action content in place, while redirected output keeps the same section hierarchy as append-only text. The final two lines show `Summary: PASS|FAIL|ERROR|CANCELLED` and aggregate check counts. Use `--color auto|always|never` to control status highlighting. JSON remains a single progress-free, color-free document and does not contain display titles.
 
 Doctor performs bounded online/local connectivity checks by default but never sends a model inference request, starts provider device-code login, launches the target application, or creates an Appium session. It checks ADB installation/device/package readiness for Android, isolated Chrome startup for Web, static pywinauto target readiness for Windows, and Appium `/status` plus target configuration for macOS. Dependency installation, ADB/Appium service control, provider login, and secret entry remain explicit user actions shown as remediation commands.
 
-Exit codes are `0` for requested modes ready (warnings allowed), `1` for blocking readiness failures, `2` for invalid or unresolved command usage, and `130` for user interruption. JSON output is diagnosis-only and cannot be combined with `--repair`.
+Exit codes are `0` when no final check failed (warnings allowed), `1` when any final check failed, `2` for invalid or unresolved command usage, and `130` for user interruption. JSON output is diagnosis-only and cannot be combined with `--repair`.
 
 Run from a natural-language goal:
 

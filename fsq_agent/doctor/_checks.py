@@ -10,27 +10,11 @@ from urllib.parse import urlsplit, urlunsplit
 from fsq_agent.models import (
     DiagnosticProbeResult,
     DoctorCheckResult,
-    DoctorReadiness,
-    DoctorReadinessItem,
 )
 
 
 def normalize_probes(probes: list[DiagnosticProbeResult]) -> list[DoctorCheckResult]:
     return [DoctorCheckResult.model_validate(probe.model_dump()) for probe in probes]
-
-
-def compute_readiness(mode: str, checks: list[DoctorCheckResult]) -> DoctorReadiness:
-    def item(target: str, checked: bool) -> DoctorReadinessItem:
-        if not checked:
-            return DoctorReadinessItem(status="not_checked")
-        blocking = [check.id for check in checks if check.status == "fail" and target in check.affected_targets]
-        return DoctorReadinessItem(status="blocked" if blocking else "ready", blocking_check_ids=blocking)
-
-    return DoctorReadiness(
-        dynamic_llm=item("dynamic", mode in {"dynamic", "all"}),
-        strict_core=item("strict", mode in {"strict", "all"}),
-        ai_assertion=item("ai_assertion", mode == "all"),
-    )
 
 
 def sanitize_checks(checks: list[DoctorCheckResult]) -> list[DoctorCheckResult]:

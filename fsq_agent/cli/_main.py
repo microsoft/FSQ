@@ -73,14 +73,12 @@ def init(platform: str, provider: str | None) -> None:
 
 @main.command()
 @click.option("--platform", type=PLATFORM_CHOICE, default=None)
-@click.option("--mode", type=click.Choice(["dynamic", "strict", "all"]), default=None)
 @click.option("--format", "output_format", type=click.Choice(["text", "json"]), default="text", show_default=True)
 @click.option("--color", type=click.Choice(["auto", "always", "never"]), default="auto", show_default=True)
 @click.option("--non-interactive", is_flag=True, default=False)
 @click.option("--repair", is_flag=True, default=False)
 def doctor(
     platform: str | None,
-    mode: str | None,
     output_format: str,
     color: str,
     non_interactive: bool,
@@ -88,7 +86,6 @@ def doctor(
 ) -> None:
     exit_code = run_doctor_command(
         platform=platform,
-        mode=mode,
         output_format=output_format,
         color=color,
         non_interactive=non_interactive,

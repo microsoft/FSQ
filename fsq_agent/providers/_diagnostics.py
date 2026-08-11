@@ -60,6 +60,7 @@ class ProviderDiagnosticService:
             DoctorProgressEvent(
                 event_type="repair_started",
                 phase="Provider",
+                check_id="provider.github_copilot.credentials",
                 repair_action="provider.refresh_copilot_token",
                 summary="Refreshing the cached Copilot provider token...",
             ),
@@ -95,7 +96,7 @@ class ProviderDiagnosticService:
                 DoctorFix(
                     description="Configure GitHub Copilot authentication.",
                     command=f"fsq-agent init --platform {settings.harness.platform} --provider github_copilot",
-                    verification_command=f"fsq-agent doctor --platform {settings.harness.platform} --mode dynamic --non-interactive",
+                    verification_command=f"fsq-agent doctor --platform {settings.harness.platform} --non-interactive",
                 )
             ]
             checks = [
@@ -104,7 +105,6 @@ class ProviderDiagnosticService:
                     category="Provider",
                     status="fail",
                     summary="GitHub Copilot cached credentials are not ready.",
-                    affected_targets=["dynamic", "ai_assertion"],
                     fixes=fixes,
                     metadata={"provider_token": "missing_or_expired", "oauth_token": "ready" if oauth_valid else "missing_or_expired"},
                 )
@@ -118,7 +118,6 @@ class ProviderDiagnosticService:
                 category="Provider",
                 status="pass",
                 summary="GitHub Copilot cached credentials are ready.",
-                affected_targets=["dynamic", "ai_assertion"],
                 metadata={"plan": plan},
             )
         _completed(sink, credential)
@@ -152,7 +151,6 @@ class ProviderDiagnosticService:
                     category="Provider",
                     status="fail",
                     summary="Azure OpenAI local configuration is incomplete or invalid.",
-                    affected_targets=["dynamic", "ai_assertion"],
                     fixes=[
                         DoctorFix(
                             description="Configure Azure OpenAI values through init.",
@@ -172,7 +170,6 @@ class ProviderDiagnosticService:
                 category="Provider",
                 status="pass",
                 summary="Azure OpenAI endpoint, model, and API key are configured.",
-                affected_targets=["dynamic", "ai_assertion"],
                 metadata={"api_key": "set", "inference_authorization": "not_tested"},
             )
         )
@@ -238,7 +235,6 @@ def _reachability(
             category="Provider",
             status="fail",
             summary=f"Provider endpoint is not reachable ({type(exc).__name__}).",
-            affected_targets=["dynamic", "ai_assertion"],
             fixes=[DoctorFix(description="Check DNS, proxy, firewall, TLS, and the configured provider endpoint.")],
             metadata={"endpoint": sanitized},
         )
@@ -247,7 +243,6 @@ def _reachability(
         category="Provider",
         status="pass",
         summary="Provider endpoint is reachable without an inference request.",
-        affected_targets=["dynamic", "ai_assertion"],
         metadata={"endpoint": sanitized, "http_status_class": f"{status_class}xx"},
     )
 
@@ -297,7 +292,6 @@ def _provider_fail(check_id: str, summary: str, settings: Settings) -> Diagnosti
         category="Provider",
         status="fail",
         summary=summary,
-        affected_targets=["dynamic", "ai_assertion"],
         fixes=[
             DoctorFix(
                 description="Initialize provider authentication.",

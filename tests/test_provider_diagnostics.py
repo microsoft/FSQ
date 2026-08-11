@@ -58,6 +58,26 @@ def test_azure_probe_never_exposes_api_key(tmp_path, monkeypatch) -> None:
     assert "https://example.openai.azure.com/openai/v1/" in output
 
 
+def test_copilot_refresh_emits_targeted_repair_started(tmp_path, monkeypatch) -> None:
+    settings = Settings(harness=HarnessSettings(platform="web"))
+    settings.workspace.root_dir = tmp_path
+    events: list[DoctorProgressEvent] = []
+
+    class Session:
+        def close_sync(self):
+            return None
+
+    monkeypatch.setattr("fsq_agent.providers._diagnostics.refresh_model_provider_session", lambda _settings: Session())
+
+    ProviderDiagnosticService().refresh_cached_copilot_provider_token(
+        settings,
+        progress_sink=events.append,
+    )
+
+    assert events[0].event_type == "repair_started"
+    assert events[0].check_id == "provider.github_copilot.credentials"
+
+
 def test_provider_emits_endpoint_started_before_network_access(tmp_path, monkeypatch) -> None:
     settings = Settings(openai_agents=OpenAIAgentsSettings(provider="azure_openai"))
     settings.openai_agents.model = "deployment"

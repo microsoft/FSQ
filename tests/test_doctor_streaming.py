@@ -5,16 +5,17 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
-from fsq_agent.doctor import DoctorProgressTextRenderer, DoctorService
+from fsq_agent.doctor import DoctorProgressTextRenderer, DoctorService, render_doctor_text
 from fsq_agent.models import (
     DiagnosticProbeResult,
     DoctorCheckResult,
+    DoctorFix,
     DoctorProgressEvent,
-    DoctorReadiness,
-    DoctorReadinessItem,
+    DoctorRepairResult,
     DoctorReport,
     DoctorRequest,
 )
@@ -26,23 +27,19 @@ def _check(status: str = "pass") -> DoctorCheckResult:
         category="Android",
         status=status,
         summary="Android device discovery completed.",
-        affected_targets=["strict"],
     )
 
 
-def _report() -> DoctorReport:
+def _report(
+    status: Literal["ready", "blocked", "usage_error", "cancelled"] = "ready",
+    exit_code: Literal[0, 1, 2, 130] = 0,
+) -> DoctorReport:
     return DoctorReport(
         platform="android",
         platform_source="explicit",
-        requested_mode="strict",
-        status="ready",
-        exit_code=0,
+        status=status,
+        exit_code=exit_code,
         checks=[_check()],
-        readiness=DoctorReadiness(
-            dynamic_llm=DoctorReadinessItem(status="not_checked"),
-            strict_core=DoctorReadinessItem(status="ready"),
-            ai_assertion=DoctorReadinessItem(status="not_checked"),
-        ),
         summary={"pass": 1, "warn": 0, "fail": 0, "skip": 0},
     )
 
@@ -102,9 +99,169 @@ def test_plain_renderer_appends_lines_without_terminal_sequences() -> None:
     )
 
     output = stream.getvalue()
+    assert "[ADB devices]" in output
+    assert "  Check: RUNNING  — Discovering Android devices..." in output
+    assert "  Result: FAIL" in output
     assert "RUNNING" in output and "FAIL" in output
     assert "\x1b[" not in output
     assert "\r" not in output
+
+
+def test_renderer_displays_action_required_without_final_failure() -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
+    check = DoctorCheckResult(
+        id="workspace.initialized",
+        category="Workspace",
+        status="fail",
+        summary="Workspace is not initialized.",
+        fixes=[],
+    )
+
+    renderer(
+        DoctorProgressEvent(
+            event_type="action_required",
+            check_id=check.id,
+            status=check.status,
+            summary=check.summary,
+            check=check,
+        )
+    )
+
+    output = stream.getvalue()
+    assert "[Workspace initialized]" in output
+    assert "  Check: Workspace is not initialized." in output
+    assert "  Action:" in output
+    assert "ACTION REQUIRED" in output
+    assert "FAIL" not in output
+
+
+def test_tty_renderer_clears_action_required_after_decision() -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=True, color="never")
+    check = DoctorCheckResult(
+        id="workspace.initialized",
+        category="Workspace",
+        status="fail",
+        summary="Workspace is not initialized.",
+        fixes=[DoctorFix(description="Initialize the workspace.")],
+    )
+
+    renderer(
+        DoctorProgressEvent(
+            event_type="action_required",
+            check_id=check.id,
+            check=check,
+        )
+    )
+    renderer(
+        DoctorProgressEvent(
+            event_type="repair_started",
+            check_id=check.id,
+            repair_action="workspace.initialize",
+            summary="Applying repair...",
+        )
+    )
+
+    output = stream.getvalue()
+    assert "\x1b[3A" in output
+    assert output.count("\r\x1b[2K") >= 5
+    assert "\x1b[3A\r" in output
+    assert "RUNNING" in output
+
+
+def test_repair_events_reuse_target_check_section() -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
+    check = DoctorCheckResult(
+        id="workspace.initialized",
+        category="Workspace",
+        status="fail",
+        summary="Workspace is not initialized.",
+    )
+
+    renderer(
+        DoctorProgressEvent(
+            event_type="action_required",
+            check_id=check.id,
+            check=check,
+        )
+    )
+    renderer(
+        DoctorProgressEvent(
+            event_type="repair_started",
+            check_id=check.id,
+            repair_action="workspace.initialize",
+            summary="Applying repair...",
+        )
+    )
+    renderer(
+        DoctorProgressEvent(
+            event_type="repair_completed",
+            repair_action="workspace.initialize",
+            repair=DoctorRepairResult(
+                action_id="workspace.initialize",
+                target=check.id,
+                status="applied",
+            ),
+        )
+    )
+
+    output = stream.getvalue()
+    assert output.count("[Workspace initialized]") == 1
+    assert "  Repair: RUNNING" in output
+    assert "  Choice:" not in output
+    assert "  Input: y" in output
+    assert "  Repair: APPLIED" in output
+
+
+def test_declined_repair_keeps_action_without_choice_line() -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
+    check = DoctorCheckResult(
+        id="macos.target",
+        category="macOS",
+        status="fail",
+        summary="The configured application path does not exist.",
+        fixes=[DoctorFix(description="Correct FSQ_MACOS_APP_PATH.")],
+    )
+
+    renderer(DoctorProgressEvent(event_type="action_required", check_id=check.id, check=check))
+    renderer(
+        DoctorProgressEvent(
+            event_type="repair_completed",
+            repair_action="environment.update",
+            repair=DoctorRepairResult(
+                action_id="environment.update",
+                target=check.id,
+                status="declined",
+            ),
+        )
+    )
+
+    output = stream.getvalue()
+    assert "Correct FSQ_MACOS_APP_PATH." in output
+    assert "  Choice:" not in output
+    assert "  Input: n" in output
+    assert "  Repair: DECLINED" in output
+
+
+def test_renderer_header_has_no_mode_line() -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
+
+    renderer.write_header("android")
+
+    assert stream.getvalue() == "FSQ Doctor\n\nPlatform: android (explicit)\n\n"
+
+
+def test_phase_events_do_not_render_duplicate_headings() -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
+
+    renderer(DoctorProgressEvent(event_type="phase_started", phase="Provider", summary="Provider"))
+
+    assert stream.getvalue() == ""
 
 
 @pytest.mark.parametrize(
@@ -166,7 +323,7 @@ def test_color_auto_respects_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "\x1b[" not in stream.getvalue()
 
 
-def test_summary_event_prints_readiness_without_repeating_checks() -> None:
+def test_summary_event_prints_overall_result_without_repeating_checks() -> None:
     stream = StringIO()
     renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
     report = _report()
@@ -181,9 +338,40 @@ def test_summary_event_prints_readiness_without_repeating_checks() -> None:
     )
 
     output = stream.getvalue()
-    assert "Readiness" in output
-    assert "Strict core" in output
+    assert "Summary: PASS" in output
+    assert "Checks: 1 passed, 0 warnings, 0 failed, 0 skipped" in output
+    assert "Readiness" not in output
+    assert "Strict core" not in output
     assert "Android device discovery completed" not in output
+
+
+@pytest.mark.parametrize(
+    ("report_status", "exit_code", "display_status"),
+    [
+        ("ready", 0, "PASS"),
+        ("blocked", 1, "FAIL"),
+        ("usage_error", 2, "ERROR"),
+        ("cancelled", 130, "CANCELLED"),
+    ],
+)
+def test_summary_event_maps_report_status(
+    report_status: Literal["ready", "blocked", "usage_error", "cancelled"],
+    exit_code: Literal[0, 1, 2, 130],
+    display_status: str,
+) -> None:
+    stream = StringIO()
+    renderer = DoctorProgressTextRenderer(stream, tty=False, color="never")
+
+    renderer(
+        DoctorProgressEvent(
+            event_type="summary_ready",
+            report=_report(report_status, exit_code),
+        )
+    )
+
+    expected = f"Summary: {display_status}\nChecks:"
+    assert expected in stream.getvalue()
+    assert expected in render_doctor_text(_report(report_status, exit_code))
 
 
 def test_doctor_service_forwards_progress_sink_to_platform_probe(tmp_path: Path) -> None:
@@ -199,7 +387,6 @@ def test_doctor_service_forwards_progress_sink_to_platform_probe(tmp_path: Path)
                 category="Android",
                 status="pass",
                 summary="Live check complete.",
-                affected_targets=["strict"],
             )
             self.sink(
                 DoctorProgressEvent(
@@ -239,7 +426,7 @@ def test_doctor_service_forwards_progress_sink_to_platform_probe(tmp_path: Path)
         platform_probe_factory=Factory(),
         progress_sink=events.append,
         environ={"FSQ_ANDROID_APP_ID": "com.example.app"},
-    ).run(DoctorRequest(platform="android", mode="strict", working_directory=tmp_path))
+    ).run(DoctorRequest(platform="android", working_directory=tmp_path))
 
     live = [event.event_type for event in events if event.check_id == "android.live"]
     assert live == ["check_started", "check_completed"]
@@ -259,7 +446,6 @@ def test_progress_sink_failure_does_not_change_report(tmp_path: Path) -> None:
                     category="Android",
                     status="pass",
                     summary="ready",
-                    affected_targets=["strict"],
                 )
             ]
 
@@ -277,6 +463,6 @@ def test_progress_sink_failure_does_not_change_report(tmp_path: Path) -> None:
         platform_probe_factory=Factory(),
         progress_sink=FailingSink(),
         environ={"FSQ_ANDROID_APP_ID": "com.example.app"},
-    ).run(DoctorRequest(platform="android", mode="strict", working_directory=tmp_path))
+    ).run(DoctorRequest(platform="android", working_directory=tmp_path))
 
     assert report.exit_code == 0

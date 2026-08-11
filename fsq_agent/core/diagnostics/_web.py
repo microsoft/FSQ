@@ -115,12 +115,8 @@ def _terminate_process_tree(process: Any) -> None:
             pass
 
 
-def _targets() -> list[str]:
-    return ["dynamic", "strict", "ai_assertion"]
-
-
 def _pass(check_id: str, summary: str) -> DiagnosticProbeResult:
-    return DiagnosticProbeResult(id=check_id, category="Web", status="pass", summary=summary, affected_targets=_targets())
+    return DiagnosticProbeResult(id=check_id, category="Web", status="pass", summary=summary)
 
 
 def _fail(check_id: str, summary: str, description: str, command: str | None = None, env: str | None = None) -> DiagnosticProbeResult:
@@ -129,7 +125,6 @@ def _fail(check_id: str, summary: str, description: str, command: str | None = N
         category="Web",
         status="fail",
         summary=summary,
-        affected_targets=_targets(),
         fixes=[DoctorFix(description=description, command=command, environment_variable=env)],
     )
 
@@ -140,6 +135,5 @@ def _skip(check_id: str, summary: str, prerequisite_id: str) -> DiagnosticProbeR
         category="Web",
         status="skip",
         summary=summary,
-        affected_targets=_targets(),
         prerequisite_ids=[prerequisite_id],
     )

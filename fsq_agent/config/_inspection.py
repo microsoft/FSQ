@@ -95,7 +95,6 @@ def inspect_platform_settings(
                 category="Configuration",
                 status="fail",
                 summary=f"Configuration is invalid: {message}",
-                affected_targets=["dynamic", "strict", "ai_assertion"],
                 fixes=[DoctorFix(description="Correct the reported configuration issue and rerun doctor.")],
                 metadata={"config_file": config_path.name},
             )
@@ -108,7 +107,6 @@ def inspect_platform_settings(
                     category="Windows",
                     status="fail",
                     summary="FSQ_WINDOWS_LAUNCH_ARGS could not be parsed.",
-                    affected_targets=["dynamic", "strict", "ai_assertion"],
                     fixes=[
                         DoctorFix(
                             description="Correct the Windows launch argument quoting.",
@@ -125,7 +123,6 @@ def inspect_platform_settings(
             category="Configuration",
             status="pass",
             summary=f"{config_path.name} is valid for {platform_id}.",
-            affected_targets=["dynamic", "strict", "ai_assertion"],
             metadata={"config_file": config_path.name},
         )
     ]
@@ -261,7 +258,6 @@ def _failure(check_id: str, summary: str, fix: str) -> DiagnosticProbeResult:
         category="Configuration",
         status="fail",
         summary=summary,
-        affected_targets=["dynamic", "strict", "ai_assertion"],
         fixes=[DoctorFix(description=fix)],
     )
 

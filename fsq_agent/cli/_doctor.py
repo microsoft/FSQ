@@ -11,8 +11,6 @@ from fsq_agent.doctor import DoctorProgressTextRenderer, DoctorService, render_d
 from fsq_agent.models import (
     DoctorCheckResult,
     DoctorFix,
-    DoctorReadiness,
-    DoctorReadinessItem,
     DoctorReport,
     DoctorRequest,
 )
@@ -21,7 +19,6 @@ from fsq_agent.models import (
 def run_doctor_command(
     *,
     platform: str | None,
-    mode: str | None,
     output_format: str,
     color: str,
     non_interactive: bool,
@@ -29,7 +26,7 @@ def run_doctor_command(
 ) -> int:
     try:
         if output_format == "json" and repair:
-            report = _usage_error_report(mode or "all", "--format json cannot be combined with --repair.")
+            report = _usage_error_report("--format json cannot be combined with --repair.")
             click.echo(render_doctor_json(report), nl=False)
             return 2
         stdout = click.get_text_stream("stdout")
@@ -41,17 +38,8 @@ def run_doctor_command(
             and stdin_tty
             and stdout_tty
         )
-        selected_mode = mode
-        if selected_mode is None and interactive:
-            selected_mode = click.prompt(
-                "Diagnostic mode",
-                type=click.Choice(["dynamic", "strict", "all"]),
-                default="all",
-                show_choices=True,
-            )
         request = DoctorRequest(
             platform=platform,
-            mode=selected_mode or "all",
             output_format=output_format,
             interactive=interactive,
             repair=repair,
@@ -61,7 +49,7 @@ def run_doctor_command(
             report = DoctorService().run(request)
         else:
             renderer = DoctorProgressTextRenderer(stdout, tty=stdout_tty, color=color)
-            renderer.write_header(platform, selected_mode or "all")
+            renderer.write_header(platform)
             report = DoctorService(progress_sink=renderer).run(request)
     except KeyboardInterrupt:
         raise click.exceptions.Exit(130) from None
@@ -73,7 +61,7 @@ def run_doctor_command(
 __all__ = ["run_doctor_command"]
 
 
-def _usage_error_report(mode: str, summary: str) -> DoctorReport:
+def _usage_error_report(summary: str) -> DoctorReport:
     check = DoctorCheckResult(
         id="doctor.option_combination",
         category="Usage",
@@ -86,16 +74,9 @@ def _usage_error_report(mode: str, summary: str) -> DoctorReport:
             )
         ],
     )
-    not_checked = DoctorReadinessItem(status="not_checked")
     return DoctorReport(
-        requested_mode=mode,  # type: ignore[arg-type]
         status="usage_error",
         exit_code=2,
         checks=[check],
-        readiness=DoctorReadiness(
-            dynamic_llm=not_checked,
-            strict_core=not_checked,
-            ai_assertion=not_checked,
-        ),
         summary={"pass": 0, "warn": 0, "fail": 1, "skip": 0},
     )

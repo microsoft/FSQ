@@ -25,18 +25,16 @@ from fsq_agent.models import (
     DoctorFix,
     DoctorProgressEvent,
     DoctorProgressSink,
-    DoctorReadiness,
-    DoctorReadinessItem,
     DoctorRepairResult,
     DoctorReport,
     DoctorRequest,
     HarnessSettings,
 )
 from fsq_agent.providers import ProviderDiagnosticService
-from fsq_agent.doctor._checks import compute_readiness, normalize_probes, sanitize_checks
+from fsq_agent.doctor._checks import normalize_probes, sanitize_checks
 from fsq_agent.doctor._environment import PLATFORM_ENV, effective_environment, platform_candidates
 from fsq_agent.doctor._prompts import ConsoleDoctorPrompter, DoctorPrompter
-from fsq_agent.doctor._repairs import REPAIR_AFFECTED_CHECKS, validate_platform_environment_value
+from fsq_agent.doctor._repairs import validate_platform_environment_value
 
 
 _ALLOWED_REPAIR_ENV = {name for names in PLATFORM_ENV.values() for name in names} | {
@@ -56,6 +54,12 @@ _PLATFORM_CHECK_IDS = {
         "macos.target", "macos.runtime_unverified",
     ),
 }
+
+
+class _ImmediateRepairApplied(BaseException):
+    def __init__(self, repair: DoctorRepairResult, check: DoctorCheckResult) -> None:
+        self.repair = repair
+        self.check = check
 
 
 class DoctorService:
@@ -84,6 +88,7 @@ class DoctorService:
         self.environment_checker = environment_checker
         self.effective_environment_loader = effective_environment_loader
         self.progress_sink = progress_sink
+        self._presentation_sink = progress_sink
 
     def run(self, request: DoctorRequest) -> DoctorReport:
         working_directory = request.working_directory.expanduser().resolve()
@@ -103,48 +108,25 @@ class DoctorService:
             )
         )
 
-        checks, settings = self._diagnose(request, platform, working_directory)
-        checks = _with_verification_commands(checks, platform, request.mode)
         repairs: list[DoctorRepairResult] = []
-        if request.output_format != "json":
-            repairs, interrupted = self._apply_repairs(
-                request, platform, working_directory, checks, settings
+        attempted_repairs: set[tuple[str, str, str | None]] = set()
+        checks, settings, interrupted = self._diagnose(
+            request,
+            platform,
+            working_directory,
+            repairs=repairs,
+            attempted_repairs=attempted_repairs,
+        )
+        checks = _with_verification_commands(checks, platform)
+        if interrupted:
+            return self._report(
+                request,
+                platform,
+                source,
+                checks,
+                repairs,
+                interrupted=True,
             )
-            if interrupted:
-                return self._report(
-                    request,
-                    platform,
-                    source,
-                    checks,
-                    repairs,
-                    interrupted=True,
-                )
-            if any(repair.status == "applied" for repair in repairs):
-                checks, settings = self._rerun_after_repairs(
-                    request,
-                    platform,
-                    working_directory,
-                    checks,
-                    settings,
-                    repairs,
-                )
-                checks = _with_verification_commands(checks, platform, request.mode)
-                repairs = [
-                    repair.model_copy(
-                        update={
-                            "rerun_check_ids": [
-                                check.id
-                                for check in checks
-                                if check.id in REPAIR_AFFECTED_CHECKS[repair.action_id]
-                                or repair.action_id == "environment.update"
-                                and (check.id == "config.valid" or check.id.startswith(f"{platform}."))
-                            ]
-                        }
-                    )
-                    if repair.status == "applied"
-                    else repair
-                    for repair in repairs
-                ]
         return self._report(request, platform, source, checks, repairs)
 
     def _resolve_platform(
@@ -184,10 +166,15 @@ class DoctorService:
         platform: str,
         working_directory: Path,
         *,
+        repairs: list[DoctorRepairResult] | None = None,
+        attempted_repairs: set[tuple[str, str, str | None]] | None = None,
         include_base: bool = True,
         include_provider: bool = True,
         include_runtime_secrets: bool = True,
-    ) -> tuple[list[DoctorCheckResult], Settings | None]:
+    ) -> tuple[list[DoctorCheckResult], Settings | None, bool]:
+        repairs = repairs if repairs is not None else []
+        attempted_repairs = attempted_repairs if attempted_repairs is not None else set()
+        immediate = request.output_format == "text" and (request.interactive or request.repair)
         if include_base:
             self._phase("Environment")
         checks = (
@@ -200,20 +187,68 @@ class DoctorService:
             self._phase("Workspace")
             self._started("workspace.initialized", "Checking the fsq-agent workspace...", "Workspace")
             workspace_check = self._workspace_check(workspace)
+            workspace_check = _with_verification_commands([workspace_check], platform)[0]
+            if immediate:
+                workspace_check, interrupted = self._checkpoint_single_check(
+                    request,
+                    platform,
+                    working_directory,
+                    workspace_check,
+                    settings=None,
+                    repairs=repairs,
+                    attempted_repairs=attempted_repairs,
+                    verifier=lambda: self._workspace_check(workspace),
+                )
+                if interrupted:
+                    checks.append(workspace_check)
+                    return checks, None, True
+            else:
+                self._completed(workspace_check)
             checks.append(workspace_check)
-            self._completed(workspace_check)
         self._phase("Configuration")
-        settings, config_probes = self._inspect_config(
+        config_operation = lambda: self._inspect_config(
             platform, workspace, self._effective_environment(working_directory)
         )
+        if immediate:
+            config_result, interrupted = self._run_checkpointed_operation(
+                config_operation,
+                request=request,
+                platform=platform,
+                working_directory=working_directory,
+                settings=None,
+                repairs=repairs,
+                attempted_repairs=attempted_repairs,
+                result_kind="config",
+            )
+            settings, config_probes = config_result
+            if interrupted:
+                checks.extend(normalize_probes(config_probes))
+                return checks, None, True
+        else:
+            settings, config_probes = config_operation()
         checks.extend(normalize_probes(config_probes))
         if settings is None:
-            independent = self._independent_platform_checks(
-                platform,
-                working_directory,
-                request.timeout_seconds,
-                suppressed_check_ids={check.id for check in checks},
-            )
+            independent_operation = lambda: self._independent_platform_checks(
+                    platform,
+                    working_directory,
+                    request.timeout_seconds,
+                    suppressed_check_ids={check.id for check in checks},
+                )
+            if immediate:
+                independent, interrupted = self._run_checkpointed_operation(
+                    independent_operation,
+                    request=request,
+                    platform=platform,
+                    working_directory=working_directory,
+                    settings=None,
+                    repairs=repairs,
+                    attempted_repairs=attempted_repairs,
+                )
+                if interrupted:
+                    checks.extend(normalize_probes(independent))
+                    return checks, None, True
+            else:
+                independent = independent_operation()
             existing_ids = {check.id for check in checks}
             independent_by_id = {check.id: check for check in independent}
             checks.extend(check for check in independent if check.id not in existing_ids)
@@ -225,29 +260,57 @@ class DoctorService:
                             category=platform.title(),
                             status="skip",
                             summary="Check was skipped because normalized platform settings are unavailable.",
-                            affected_targets=["dynamic", "strict", "ai_assertion"],
                             prerequisite_ids=["config.valid"],
                         )
                     checks.append(skip_check)
                     self._started(skip_check.id, f"Skipping {skip_check.id}...", skip_check.category)
                     self._completed(skip_check)
-            if request.mode in {"dynamic", "all"}:
-                provider_skip = DoctorCheckResult(
-                        id="provider.probe",
-                        category="Provider",
-                        status="skip",
-                        summary="Provider checks were skipped because normalized settings are unavailable.",
-                        affected_targets=["dynamic", "ai_assertion"],
-                        prerequisite_ids=["config.valid"],
-                    )
-                checks.append(provider_skip)
-                self._started(provider_skip.id, "Skipping provider checks...", "Provider")
-                self._completed(provider_skip)
-            return checks, None
+            provider_skip = DoctorCheckResult(
+                    id="provider.probe",
+                    category="Provider",
+                    status="skip",
+                    summary="Provider checks were skipped because normalized settings are unavailable.",
+                    prerequisite_ids=["config.valid"],
+                )
+            checks.append(provider_skip)
+            self._started(provider_skip.id, "Skipping provider checks...", "Provider")
+            self._completed(provider_skip)
+            return checks, None, False
+        settings_box = [settings]
         try:
             self._phase(platform.title())
-            platform_probe = self._create_platform_probe(settings.harness.platform, settings.harness)
-            checks.extend(normalize_probes(platform_probe.probe(request.timeout_seconds)))
+            def platform_operation() -> list[DiagnosticProbeResult]:
+                refreshed, _ = self._inspect_config_quiet(
+                    platform,
+                    workspace,
+                    self._effective_environment(working_directory),
+                )
+                if refreshed is not None:
+                    settings_box[0] = refreshed
+                active_settings = settings_box[0]
+                platform_probe = self._create_platform_probe(
+                    active_settings.harness.platform,
+                    active_settings.harness,
+                )
+                return platform_probe.probe(request.timeout_seconds)
+
+            if immediate:
+                platform_probes, interrupted = self._run_checkpointed_operation(
+                    platform_operation,
+                    request=request,
+                    platform=platform,
+                    working_directory=working_directory,
+                    settings=settings_box[0],
+                    repairs=repairs,
+                    attempted_repairs=attempted_repairs,
+                )
+                if interrupted:
+                    checks.extend(normalize_probes(platform_probes))
+                    return checks, settings_box[0], True
+            else:
+                platform_probes = platform_operation()
+            settings = settings_box[0]
+            checks.extend(normalize_probes(platform_probes))
         except Exception as exc:  # noqa: BLE001 - diagnostic boundary
             self._started(f"{platform}.probe", "Starting the platform diagnostic probe...", platform.title())
             failure = DoctorCheckResult(
@@ -255,19 +318,34 @@ class DoctorService:
                     category=platform.title(),
                     status="fail",
                     summary=f"Platform probe failed ({type(exc).__name__}).",
-                    affected_targets=["dynamic", "strict", "ai_assertion"],
                     fixes=[DoctorFix(description="Correct the platform setup and rerun doctor.")],
                 )
             checks.append(failure)
             self._completed(failure)
-        if include_provider and request.mode in {"dynamic", "all"}:
+        if include_provider:
             try:
                 self._phase("Provider")
                 if not self._provider_diagnostics_supplied:
                     self.provider_diagnostics = ProviderDiagnosticService(
                         environ=self._effective_environment(working_directory)
                     )
-                checks.extend(normalize_probes(self._probe_provider(settings, request.timeout_seconds)))
+                provider_operation = lambda: self._probe_provider(settings, request.timeout_seconds)
+                if immediate:
+                    provider_probes, interrupted = self._run_checkpointed_operation(
+                        provider_operation,
+                        request=request,
+                        platform=platform,
+                        working_directory=working_directory,
+                        settings=settings,
+                        repairs=repairs,
+                        attempted_repairs=attempted_repairs,
+                    )
+                    if interrupted:
+                        checks.extend(normalize_probes(provider_probes))
+                        return checks, settings, True
+                else:
+                    provider_probes = provider_operation()
+                checks.extend(normalize_probes(provider_probes))
             except Exception as exc:  # noqa: BLE001 - diagnostic boundary
                 self._started("provider.probe", "Starting provider diagnostics...", "Provider")
                 failure = DoctorCheckResult(
@@ -275,7 +353,6 @@ class DoctorService:
                         category="Provider",
                         status="fail",
                         summary=f"Provider probe failed ({type(exc).__name__}).",
-                        affected_targets=["dynamic", "ai_assertion"],
                         fixes=[DoctorFix(description="Run provider initialization and rerun doctor.")],
                     )
                 checks.append(failure)
@@ -291,13 +368,12 @@ class DoctorService:
                     category="Configuration",
                     status="warn",
                     summary="Some allowlisted runtime-secret names have no current value.",
-                    affected_targets=["strict"],
                     fixes=[DoctorFix(description="Set required runtime-secret variables before running cases that reference them.")],
                     metadata={"missing_names": missing_secrets},
                 )
             checks.append(secret_check)
             self._completed(secret_check)
-        return checks, settings
+        return checks, settings, False
 
     def _independent_platform_checks(
         self,
@@ -349,49 +425,343 @@ class DoctorService:
                     category=platform.title(),
                     status="fail",
                     summary=f"Independent platform probe failed ({type(exc).__name__}).",
-                    affected_targets=["dynamic", "strict", "ai_assertion"],
                     fixes=[DoctorFix(description="Correct the platform setup and rerun doctor.")],
                 )
             ]
 
-    def _rerun_after_repairs(
+    def _checkpoint_single_check(
         self,
         request: DoctorRequest,
         platform: str,
         working_directory: Path,
-        checks: list[DoctorCheckResult],
+        check: DoctorCheckResult,
         settings: Settings | None,
         repairs: list[DoctorRepairResult],
-    ) -> tuple[list[DoctorCheckResult], Settings | None]:
-        final_by_id = {check.id: check for check in checks}
-        applied = {repair.action_id for repair in repairs if repair.status == "applied"}
-        if "workspace.initialize" in applied:
-            self._started("workspace.initialized", "Rechecking the fsq-agent workspace...", "Workspace")
-            workspace_check = self._workspace_check(
-                working_directory / ".fsq-agent-workspace"
+        attempted_repairs: set[tuple[str, str, str | None]],
+        verifier: Any,
+    ) -> tuple[DoctorCheckResult, bool]:
+        event = DoctorProgressEvent(
+            event_type="check_completed",
+            phase=check.category,
+            check_id=check.id,
+            status=check.status,
+            summary=check.summary,
+            check=check,
+        )
+        try:
+            self._handle_checkpoint_event(
+                event,
+                request=request,
+                platform=platform,
+                working_directory=working_directory,
+                settings=settings,
+                repairs=repairs,
+                attempted_repairs=attempted_repairs,
             )
-            final_by_id["workspace.initialized"] = workspace_check
-            self._completed(workspace_check)
-        if "environment.update" in applied:
-            rerun, settings = self._diagnose(
-                request,
-                platform,
-                working_directory,
-                include_base=False,
-                include_provider=False,
-                include_runtime_secrets=False,
+        except _ImmediateRepairApplied as applied:
+            repairs.append(applied.repair)
+            self._started(check.id, f"Verifying repair for {check.id}...", check.category)
+            try:
+                verified = _with_verification_commands([verifier()], platform)[0]
+            except KeyboardInterrupt:
+                self._completed(check)
+                return check, True
+            except Exception:  # noqa: BLE001 - verification failures retain original severity
+                verified = check
+                rerun_check_ids: list[str] = []
+            else:
+                rerun_check_ids = [verified.id]
+            repairs[-1] = repairs[-1].model_copy(update={"rerun_check_ids": rerun_check_ids})
+            self._completed(verified)
+            return verified, False
+        except KeyboardInterrupt:
+            return check, True
+        return check, False
+
+    def _run_checkpointed_operation(
+        self,
+        operation: Any,
+        *,
+        request: DoctorRequest,
+        platform: str,
+        working_directory: Path,
+        settings: Settings | None,
+        repairs: list[DoctorRepairResult],
+        attempted_repairs: set[tuple[str, str, str | None]],
+        result_kind: str = "probes",
+    ) -> tuple[Any, bool]:
+        pending_verifications: dict[int, DoctorCheckResult] = {}
+        settled_checks: dict[str, DoctorCheckResult] = {}
+        while True:
+            seen_completed: set[str] = set()
+            observed_checks: dict[str, DoctorCheckResult] = {}
+
+            def checkpoint_sink(event: DoctorProgressEvent) -> None:
+                if event.check_id in settled_checks and event.event_type in {
+                    "check_started",
+                    "check_completed",
+                }:
+                    return
+                if event.event_type != "check_completed" or event.check is None:
+                    self._emit(event)
+                    return
+                seen_completed.add(event.check.id)
+                check = _with_verification_commands([event.check], platform)[0]
+                observed_checks[check.id] = check
+                for index, original in list(pending_verifications.items()):
+                    if check.id != original.id:
+                        continue
+                    repair = repairs[index]
+                    repairs[index] = repair.model_copy(update={"rerun_check_ids": [check.id]})
+                    del pending_verifications[index]
+                self._handle_checkpoint_event(
+                    event.model_copy(update={"check": check}),
+                    request=request,
+                    platform=platform,
+                    working_directory=working_directory,
+                    settings=settings,
+                    repairs=repairs,
+                    attempted_repairs=attempted_repairs,
+                )
+
+            previous_sink = self.progress_sink
+            self.progress_sink = checkpoint_sink
+            try:
+                result = operation()
+                for check in self._operation_checks(result):
+                    if check.id in seen_completed:
+                        continue
+                    self._started(check.id, f"Checking {check.id}...", check.category)
+                    checkpoint_sink(
+                        DoctorProgressEvent(
+                            event_type="check_completed",
+                            phase=check.category,
+                            check_id=check.id,
+                            status=check.status,
+                            summary=check.summary,
+                            check=check,
+                        )
+                    )
+            except _ImmediateRepairApplied as applied:
+                settled_checks.update(
+                    (check_id, check)
+                    for check_id, check in observed_checks.items()
+                    if check_id != applied.check.id
+                )
+                repairs.append(applied.repair)
+                pending_verifications[len(repairs) - 1] = applied.check
+                continue
+            except Exception:  # noqa: BLE001 - verification failures preserve original severity
+                if not pending_verifications:
+                    if not observed_checks:
+                        raise
+                    completed = list(observed_checks.values())
+                    if result_kind == "config":
+                        return (None, completed), False
+                    return completed, False
+                originals = list(pending_verifications.values())
+                final_checks = self._merge_operation_checks(
+                    list(settled_checks.values()) + list(observed_checks.values()),
+                    originals,
+                )
+                for original in originals:
+                    if original.id not in observed_checks:
+                        self._completed(original)
+                if result_kind == "config":
+                    return (None, final_checks), False
+                return final_checks, False
+            except KeyboardInterrupt:
+                originals = list(pending_verifications.values())
+                final_checks = self._merge_operation_checks(
+                    list(settled_checks.values()) + list(observed_checks.values()),
+                    originals,
+                )
+                for original in originals:
+                    if original.id not in observed_checks:
+                        self._completed(original)
+                if result_kind == "config":
+                    return (None, final_checks), True
+                return final_checks, True
+            finally:
+                self.progress_sink = previous_sink
+
+            final_checks = self._merge_operation_checks(
+                list(settled_checks.values()) + self._operation_checks(result),
+                list(observed_checks.values()),
             )
-            final_by_id.update({check.id: check for check in rerun})
-        if "provider.refresh_copilot_token" in applied and settings is not None:
-            rerun = normalize_probes(
-                self._probe_provider(settings, request.timeout_seconds)
+            if pending_verifications:
+                missing = list(pending_verifications.values())
+                for original in missing:
+                    self._completed(original)
+                final_checks = self._merge_operation_checks(final_checks, missing)
+            if isinstance(result, tuple):
+                result = (result[0], final_checks)
+            else:
+                result = final_checks
+            return result, False
+
+    @staticmethod
+    def _merge_operation_checks(
+        primary: list[DoctorCheckResult],
+        additional: list[DoctorCheckResult],
+    ) -> list[DoctorCheckResult]:
+        merged = {check.id: check for check in primary}
+        ordered_ids = [check.id for check in primary]
+        for check in additional:
+            if check.id not in merged:
+                ordered_ids.append(check.id)
+            merged[check.id] = check
+        return [merged[check_id] for check_id in ordered_ids]
+
+    @staticmethod
+    def _operation_checks(result: Any) -> list[DoctorCheckResult]:
+        probes = result[1] if isinstance(result, tuple) else result
+        return normalize_probes(list(probes))
+
+    def _handle_checkpoint_event(
+        self,
+        event: DoctorProgressEvent,
+        *,
+        request: DoctorRequest,
+        platform: str,
+        working_directory: Path,
+        settings: Settings | None,
+        repairs: list[DoctorRepairResult],
+        attempted_repairs: set[tuple[str, str, str | None]],
+    ) -> None:
+        check = event.check
+        if check is None:
+            self._emit(event)
+            return
+        eligible = self._eligible_repair(check, request)
+        if eligible is None:
+            self._emit(event)
+            return
+        action, fix = eligible
+        key = (action, check.id, fix.environment_variable)
+        if key in attempted_repairs:
+            self._emit(event)
+            return
+        attempted_repairs.add(key)
+        if request.interactive:
+            self._emit(
+                DoctorProgressEvent(
+                    event_type="action_required",
+                    phase=check.category,
+                    check_id=check.id,
+                    status=check.status,
+                    summary=check.summary,
+                    check=check,
+                )
             )
-            final_by_id.update({check.id: check for check in rerun})
-        ordered_ids = [check.id for check in checks]
-        for check_id in final_by_id:
-            if check_id not in ordered_ids:
-                ordered_ids.append(check_id)
-        return [final_by_id[check_id] for check_id in ordered_ids], settings
+        should_apply = request.repair or (
+            request.interactive
+            and self.prompter.confirm(f"Apply repair: {fix.description}", True)
+        )
+        if not should_apply:
+            self._emit_repair_started(action, check.id, "Reviewing")
+            repair = DoctorRepairResult(action_id=action, target=check.id, status="declined")
+            repairs.append(repair)
+            self._repair_completed(repair)
+            self._emit(event)
+            return
+        self._emit_repair_started(action, check.id, "Applying")
+        repair = self._apply_one_repair(
+            action,
+            fix,
+            check,
+            request=request,
+            working_directory=working_directory,
+            settings=settings,
+        )
+        if repair.status != "applied":
+            repairs.append(repair)
+        self._repair_completed(repair)
+        if repair.status == "applied":
+            raise _ImmediateRepairApplied(repair, check)
+        self._emit(event)
+
+    def _eligible_repair(
+        self,
+        check: DoctorCheckResult,
+        request: DoctorRequest,
+    ) -> tuple[str, DoctorFix] | None:
+        if not (request.interactive or request.repair):
+            return None
+        for fix in check.fixes:
+            action = fix.repair_action
+            if not action and fix.environment_variable in _ALLOWED_REPAIR_ENV:
+                action = "environment.update"
+            if action:
+                return action, fix
+        return None
+
+    def _emit_repair_started(self, action: str, check_id: str, verb: str) -> None:
+        self._emit(
+            DoctorProgressEvent(
+                event_type="repair_started",
+                phase="Repair",
+                check_id=check_id,
+                repair_action=action,  # type: ignore[arg-type]
+                summary=f"{verb} repair for {check_id}...",
+            )
+        )
+
+    def _apply_one_repair(
+        self,
+        action: str,
+        fix: DoctorFix,
+        check: DoctorCheckResult,
+        *,
+        request: DoctorRequest,
+        working_directory: Path,
+        settings: Settings | None,
+    ) -> DoctorRepairResult:
+        backup: Path | None = None
+        try:
+            if action == "workspace.initialize":
+                self.workspace_initializer(working_directory / ".fsq-agent-workspace")
+            elif action == "provider.refresh_copilot_token" and settings is not None:
+                try:
+                    self.provider_diagnostics.refresh_cached_copilot_provider_token(settings)
+                except TypeError:
+                    self.provider_diagnostics.refresh_cached_copilot_provider_token(settings)
+            elif action == "environment.update" and request.interactive and fix.environment_variable:
+                value = self.prompter.text(f"Enter {fix.environment_variable}")
+                if not value:
+                    return DoctorRepairResult(action_id=action, target=check.id, status="skipped")  # type: ignore[arg-type]
+                validate_platform_environment_value(fix.environment_variable, value)
+                update = self.environment_updater(
+                    working_directory / ".env",
+                    {fix.environment_variable: value},
+                    backup=True,
+                )
+                backup = update.backup_path
+            else:
+                return DoctorRepairResult(action_id=action, target=check.id, status="skipped")  # type: ignore[arg-type]
+        except KeyboardInterrupt:
+            raise
+        except Exception:  # noqa: BLE001 - repair failures are report data
+            return DoctorRepairResult(action_id=action, target=check.id, status="failed")  # type: ignore[arg-type]
+        return DoctorRepairResult(
+            action_id=action,  # type: ignore[arg-type]
+            target=check.id,
+            status="applied",
+            backup_path=backup,
+        )
+
+    def _inspect_config_quiet(
+        self,
+        platform: str,
+        workspace: Path,
+        environ: dict[str, str],
+    ) -> tuple[Settings | None, list[DiagnosticProbeResult]]:
+        try:
+            return self.config_inspector(platform, workspace, environ, progress_sink=None)
+        except TypeError as exc:
+            if "progress_sink" not in str(exc):
+                raise
+            return self.config_inspector(platform, workspace, environ)
 
     def _effective_environment(self, working_directory: Path) -> dict[str, str]:
         return self.effective_environment_loader(working_directory, self.environ)
@@ -414,7 +784,8 @@ class DoctorService:
                 raise
             result = self.config_inspector(platform, workspace, environ)
             for check in normalize_probes(result[1]):
-                self._completed(check)
+                self._producer_started(check.id, f"Checking {check.id}...", check.category)
+                self._producer_completed(check)
             return result
 
     def _create_platform_probe(
@@ -454,7 +825,8 @@ class DoctorService:
                 raise
             results = self.provider_diagnostics.probe(settings, timeout_seconds)
             for check in normalize_probes(results):
-                self._completed(check)
+                self._producer_started(check.id, f"Checking {check.id}...", check.category)
+                self._producer_completed(check)
             return results
 
     def _phase(self, phase: str) -> None:
@@ -488,11 +860,41 @@ class DoctorService:
             )
         )
 
-    def _emit(self, event: DoctorProgressEvent) -> None:
+    def _producer_completed(self, check: DoctorCheckResult) -> None:
+        event = DoctorProgressEvent(
+            event_type="check_completed",
+            phase=check.category,
+            check_id=check.id,
+            status=check.status,
+            summary=check.summary,
+            check=check,
+        )
         if self.progress_sink is None:
             return
         try:
             self.progress_sink(event)
+        except Exception:
+            pass
+
+    def _producer_started(self, check_id: str, summary: str, phase: str) -> None:
+        event = DoctorProgressEvent(
+            event_type="check_started",
+            phase=phase,
+            check_id=check_id,
+            summary=summary,
+        )
+        if self.progress_sink is None:
+            return
+        try:
+            self.progress_sink(event)
+        except Exception:
+            pass
+
+    def _emit(self, event: DoctorProgressEvent) -> None:
+        if self._presentation_sink is None:
+            return
+        try:
+            self._presentation_sink(event)
         except Exception:
             pass
 
@@ -505,7 +907,6 @@ class DoctorService:
                 category="Environment",
                 status="pass" if version_ok else "fail",
                 summary=f"Python {sys.version_info.major}.{sys.version_info.minor} {'satisfies' if version_ok else 'does not satisfy'} >=3.11.",
-                affected_targets=["dynamic", "strict", "ai_assertion"],
                 fixes=[] if version_ok else [DoctorFix(description="Install Python 3.11 or newer and recreate the project environment.")],
             )
         ]
@@ -519,7 +920,6 @@ class DoctorService:
                 category="Environment",
                 status="fail" if missing else "pass",
                 summary="Core Python dependencies are installed." if not missing else "Core Python dependencies are missing.",
-                affected_targets=["dynamic", "strict", "ai_assertion"],
                 fixes=[] if not missing else [DoctorFix(description="Sync the project environment.", command="uv sync --extra dev")],
                 metadata={"missing": missing},
             )
@@ -566,7 +966,6 @@ class DoctorService:
                     if provenance_ready
                     else "The active interpreter or fsq-agent package does not belong to this source checkout."
                 ),
-                affected_targets=["dynamic", "strict", "ai_assertion"],
                 fixes=[]
                 if provenance_ready
                 else [
@@ -594,7 +993,6 @@ class DoctorService:
                 category="Workspace",
                 status="pass",
                 summary="The fsq-agent workspace is initialized.",
-                affected_targets=["dynamic", "strict", "ai_assertion"],
             )
         if workspace.exists() and not workspace.is_dir():
             summary = "The workspace path is not a directory."
@@ -610,7 +1008,6 @@ class DoctorService:
             category="Workspace",
             status="fail",
             summary=summary,
-            affected_targets=["dynamic", "strict", "ai_assertion"],
             fixes=[
                 DoctorFix(
                     description="Initialize the current-directory fsq-agent workspace.",
@@ -619,91 +1016,6 @@ class DoctorService:
                 )
             ],
         )
-
-    def _apply_repairs(
-        self,
-        request: DoctorRequest,
-        platform: str,
-        working_directory: Path,
-        checks: list[DoctorCheckResult],
-        settings: Settings | None,
-    ) -> tuple[list[DoctorRepairResult], bool]:
-        repairs: list[DoctorRepairResult] = []
-        try:
-            for check in checks:
-                for fix in check.fixes:
-                    action = fix.repair_action
-                    if not action and (request.interactive or request.repair) and fix.environment_variable in _ALLOWED_REPAIR_ENV:
-                        action = "environment.update"
-                    if not action:
-                        continue
-                    should_apply = request.repair or (
-                        request.interactive and self.prompter.confirm(f"Apply repair for: {check.summary}", True)
-                    )
-                    if not should_apply:
-                        self._emit(
-                            DoctorProgressEvent(
-                                event_type="repair_started",
-                                phase="Repair",
-                                repair_action=action,
-                                summary=f"Reviewing repair for {check.id}...",
-                            )
-                        )
-                        repair = DoctorRepairResult(action_id=action, target=check.id, status="declined")
-                        repairs.append(repair)
-                        self._repair_completed(repair)
-                        continue
-                    if action != "provider.refresh_copilot_token":
-                        self._emit(
-                            DoctorProgressEvent(
-                                event_type="repair_started",
-                                phase="Repair",
-                                repair_action=action,
-                                summary=f"Applying repair for {check.id}...",
-                            )
-                        )
-                    backup: Path | None = None
-                    try:
-                        if action == "workspace.initialize":
-                            self.workspace_initializer(working_directory / ".fsq-agent-workspace")
-                        elif action == "provider.refresh_copilot_token" and settings is not None:
-                            try:
-                                self.provider_diagnostics.refresh_cached_copilot_provider_token(
-                                    settings,
-                                    progress_sink=self.progress_sink,
-                                )
-                            except TypeError as exc:
-                                if "progress_sink" not in str(exc):
-                                    raise
-                                self.provider_diagnostics.refresh_cached_copilot_provider_token(settings)
-                        elif action == "environment.update" and request.interactive and fix.environment_variable:
-                            value = self.prompter.text(f"Enter {fix.environment_variable}")
-                            if not value:
-                                repair = DoctorRepairResult(action_id=action, target=check.id, status="skipped")
-                                repairs.append(repair)
-                                self._repair_completed(repair)
-                                continue
-                            validate_platform_environment_value(fix.environment_variable, value)
-                            update = self.environment_updater(
-                                working_directory / ".env",
-                                {fix.environment_variable: value},
-                                backup=True,
-                            )
-                            backup = update.backup_path
-                        else:
-                            repair = DoctorRepairResult(action_id=action, target=check.id, status="skipped")
-                            repairs.append(repair)
-                            self._repair_completed(repair)
-                            continue
-                    except Exception:  # noqa: BLE001 - repair failures are report data
-                        repair = DoctorRepairResult(action_id=action, target=check.id, status="failed")
-                    else:
-                        repair = DoctorRepairResult(action_id=action, target=check.id, status="applied", backup_path=backup)
-                    repairs.append(repair)
-                    self._repair_completed(repair)
-        except KeyboardInterrupt:
-            return repairs, True
-        return repairs, False
 
     def _repair_completed(self, repair: DoctorRepairResult) -> None:
         self._emit(
@@ -729,22 +1041,16 @@ class DoctorService:
         interrupted: bool = False,
     ) -> DoctorReport:
         checks = sanitize_checks(checks)
-        readiness = compute_readiness(request.mode, checks)
-        blocked = any(
-            item.status == "blocked"
-            for item in (readiness.dynamic_llm, readiness.strict_core, readiness.ai_assertion)
-        )
+        blocked = any(check.status == "fail" for check in checks)
         exit_code = 130 if interrupted else 2 if usage_error else 1 if blocked else 0
         summary = {status: sum(check.status == status for check in checks) for status in ("pass", "warn", "fail", "skip")}
         report = DoctorReport(
             platform=platform,
             platform_source=source,  # type: ignore[arg-type]
-            requested_mode=request.mode,
             status="cancelled" if interrupted else "usage_error" if usage_error else "blocked" if blocked else "ready",
             exit_code=exit_code,
             checks=checks,
             repairs=repairs,
-            readiness=readiness,
             summary=summary,
         )
         self._emit(
@@ -762,9 +1068,8 @@ class DoctorService:
 def _with_verification_commands(
     checks: list[DoctorCheckResult],
     platform: str,
-    mode: str,
 ) -> list[DoctorCheckResult]:
-    command = f"fsq-agent doctor --platform {platform} --mode {mode} --non-interactive"
+    command = f"fsq-agent doctor --platform {platform} --non-interactive"
     updated: list[DoctorCheckResult] = []
     for check in checks:
         fixes = [

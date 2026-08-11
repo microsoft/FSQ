@@ -94,7 +94,6 @@ class MacOSPlatformProbe:
                 category="macOS",
                 status="warn",
                 summary="Appium session creation and accessibility automation are not tested by doctor.",
-                affected_targets=_targets(),
                 fixes=[DoctorFix(description="Run a small real macOS case to verify Mac2 session and accessibility behavior.")],
             )
         )
@@ -166,12 +165,8 @@ def _contains_mac2(value: object) -> bool:
     return False
 
 
-def _targets() -> list[str]:
-    return ["dynamic", "strict", "ai_assertion"]
-
-
 def _pass(check_id: str, summary: str, metadata: dict[str, object] | None = None) -> DiagnosticProbeResult:
-    return DiagnosticProbeResult(id=check_id, category="macOS", status="pass", summary=summary, affected_targets=_targets(), metadata=metadata or {})
+    return DiagnosticProbeResult(id=check_id, category="macOS", status="pass", summary=summary, metadata=metadata or {})
 
 
 def _fail(check_id: str, summary: str, description: str, command: str | None = None, env: str | None = None) -> DiagnosticProbeResult:
@@ -180,7 +175,6 @@ def _fail(check_id: str, summary: str, description: str, command: str | None = N
         category="macOS",
         status="fail",
         summary=summary,
-        affected_targets=_targets(),
         fixes=[DoctorFix(description=description, command=command, environment_variable=env)],
     )
 
@@ -191,6 +185,5 @@ def _skip(check_id: str, summary: str) -> DiagnosticProbeResult:
         category="macOS",
         status="skip",
         summary=summary,
-        affected_targets=_targets(),
         prerequisite_ids=["macos.appium.status"],
     )

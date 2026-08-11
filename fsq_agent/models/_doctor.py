@@ -10,11 +10,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-DoctorMode = Literal["dynamic", "strict", "all"]
 DoctorOutputFormat = Literal["text", "json"]
 DoctorStatus = Literal["pass", "warn", "fail", "skip"]
-DoctorTarget = Literal["dynamic", "strict", "ai_assertion"]
-DoctorReadinessState = Literal["ready", "blocked", "not_checked"]
 DoctorRepairStatus = Literal["applied", "declined", "skipped", "failed"]
 DoctorRepairAction = Literal[
     "workspace.initialize",
@@ -27,7 +24,6 @@ class DoctorRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     platform: Literal["android", "web", "windows", "macos"] | None = None
-    mode: DoctorMode = "all"
     output_format: DoctorOutputFormat = "text"
     interactive: bool = False
     repair: bool = False
@@ -61,7 +57,6 @@ class DiagnosticProbeResult(BaseModel):
     category: str
     status: DoctorStatus
     summary: str
-    affected_targets: list[DoctorTarget] = Field(default_factory=list)
     prerequisite_ids: list[str] = Field(default_factory=list)
     fixes: list[DoctorFix] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -81,33 +76,16 @@ class DoctorRepairResult(BaseModel):
     rerun_check_ids: list[str] = Field(default_factory=list)
 
 
-class DoctorReadinessItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: DoctorReadinessState
-    blocking_check_ids: list[str] = Field(default_factory=list)
-
-
-class DoctorReadiness(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    dynamic_llm: DoctorReadinessItem
-    strict_core: DoctorReadinessItem
-    ai_assertion: DoctorReadinessItem
-
-
 class DoctorReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = 1
     platform: Literal["android", "web", "windows", "macos"] | None = None
     platform_source: Literal["explicit", "environment", "interactive", "unresolved"] = "unresolved"
-    requested_mode: DoctorMode = "all"
     status: Literal["ready", "blocked", "usage_error", "cancelled"]
     exit_code: Literal[0, 1, 2, 130]
     checks: list[DoctorCheckResult] = Field(default_factory=list)
     repairs: list[DoctorRepairResult] = Field(default_factory=list)
-    readiness: DoctorReadiness
     summary: dict[str, int] = Field(default_factory=dict)
 
 
@@ -117,6 +95,7 @@ class DoctorProgressEvent(BaseModel):
     event_type: Literal[
         "phase_started",
         "check_started",
+        "action_required",
         "check_completed",
         "repair_started",
         "repair_completed",

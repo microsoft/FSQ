@@ -70,7 +70,6 @@ class AndroidPlatformProbe:
                 category="Android",
                 status="pass",
                 summary="adb is installed and executable.",
-                affected_targets=_targets(),
                 metadata={"version": _first_line(version.stdout)},
             )
         )
@@ -124,7 +123,6 @@ class AndroidPlatformProbe:
                         category="Android",
                         status="warn",
                         summary="adb is ready, but no Android device is connected.",
-                        affected_targets=_targets(),
                         fixes=[
                             DoctorFix(
                                 description="Connect an Android device or start an emulator before running UI automation.",
@@ -168,7 +166,6 @@ class AndroidPlatformProbe:
                 category="Android",
                 status="pass",
                 summary="An online Android device is selected.",
-                affected_targets=_targets(),
                 metadata={"selection": "configured" if serial else "unique_online"},
             )
         )
@@ -197,7 +194,7 @@ class AndroidPlatformProbe:
                         "android.uiautomator2",
                         f"uiautomator2 could not communicate with the device ({type(exc).__name__}).",
                         "Check the device connection and uiautomator2 service, then rerun doctor.",
-                        verification="fsq-agent doctor --platform android --mode strict --non-interactive",
+                        verification="fsq-agent doctor --platform android --non-interactive",
                     )
                 )
             else:
@@ -207,7 +204,6 @@ class AndroidPlatformProbe:
                         category="Android",
                         status="pass",
                         summary="uiautomator2 can read basic device information.",
-                        affected_targets=_targets(),
                     )
                 )
         self._started("android.package.installed", "Checking the Android target package...")
@@ -238,7 +234,6 @@ class AndroidPlatformProbe:
                     category="Android",
                     status="pass",
                     summary="The configured Android package is installed.",
-                    affected_targets=_targets(),
                 )
             )
         return checks
@@ -329,10 +324,6 @@ def _first_line(value: str) -> str:
     return line[:160]
 
 
-def _targets() -> list[str]:
-    return ["dynamic", "strict", "ai_assertion"]
-
-
 def _skip(check_id: str, summary: str) -> DiagnosticProbeResult:
     prerequisite = "android.adb.installed" if check_id == "android.adb.devices" else "android.adb.devices"
     return DiagnosticProbeResult(
@@ -340,7 +331,6 @@ def _skip(check_id: str, summary: str) -> DiagnosticProbeResult:
         category="Android",
         status="skip",
         summary=summary,
-        affected_targets=_targets(),
         prerequisite_ids=[prerequisite],
     )
 
@@ -360,7 +350,6 @@ def _fail(
         category="Android",
         status="fail",
         summary=summary,
-        affected_targets=_targets(),
         fixes=[DoctorFix(description=description, command=command, verification_command=verification, environment_variable=env)],
         metadata=metadata or {},
     )

@@ -10,8 +10,6 @@ from click.testing import CliRunner
 from fsq_agent._strict_case_recording import StrictCaseRecording
 from fsq_agent.cli._main import _task_from_goal, _task_from_raw_case_source, main
 from fsq_agent.models import (
-    DoctorReadiness,
-    DoctorReadinessItem,
     DoctorReport,
     ReportArtifact,
     Task,
@@ -76,14 +74,8 @@ def _doctor_ready_report() -> DoctorReport:
     return DoctorReport(
         platform="android",
         platform_source="explicit",
-        requested_mode="all",
         status="ready",
         exit_code=0,
-        readiness=DoctorReadiness(
-            dynamic_llm=DoctorReadinessItem(status="ready"),
-            strict_core=DoctorReadinessItem(status="ready"),
-            ai_assertion=DoctorReadinessItem(status="ready"),
-        ),
         summary={"pass": 0, "warn": 0, "fail": 0, "skip": 0},
     )
 
@@ -150,13 +142,12 @@ def test_doctor_command_delegates_options(monkeypatch: pytest.MonkeyPatch) -> No
 
     result = CliRunner().invoke(
         main,
-        ["doctor", "--platform", "web", "--mode", "strict", "--non-interactive"],
+        ["doctor", "--platform", "web", "--non-interactive"],
     )
 
     assert result.exit_code == 0
     assert captured == {
         "platform": "web",
-        "mode": "strict",
         "output_format": "text",
         "color": "auto",
         "non_interactive": True,
@@ -171,6 +162,18 @@ def test_doctor_json_repair_error_is_valid_json() -> None:
     payload = json.loads(result.output)
     assert payload["status"] == "usage_error"
     assert payload["repairs"] == []
+    assert "requested_mode" not in payload
+    assert "readiness" not in payload
+
+
+def test_doctor_help_and_parser_do_not_support_mode() -> None:
+    help_result = CliRunner().invoke(main, ["doctor", "--help"])
+    mode_result = CliRunner().invoke(main, ["doctor", "--mode", "all"])
+
+    assert help_result.exit_code == 0
+    assert "--mode" not in help_result.output
+    assert mode_result.exit_code == 2
+    assert "No such option: --mode" in mode_result.output
 
 
 def test_doctor_json_ignores_forced_color_without_progress_or_ansi(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,20 +201,30 @@ def test_doctor_keyboard_interrupt_exits_130(monkeypatch: pytest.MonkeyPatch) ->
     assert result.exit_code == 130
 
 
-def test_doctor_mode_prompt_keyboard_interrupt_exits_130(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_doctor_interactive_run_does_not_prompt_for_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     class TtyStream:
+        def write(self, value: str) -> int:
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
         def isatty(self) -> bool:
             return True
 
     monkeypatch.setattr("fsq_agent.cli._doctor.click.get_text_stream", lambda _name: TtyStream())
     monkeypatch.setattr(
         "fsq_agent.cli._doctor.click.prompt",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("mode prompt is unsupported")),
+    )
+    monkeypatch.setattr(
+        "fsq_agent.cli._doctor.DoctorService.run",
+        lambda *_args, **_kwargs: _doctor_ready_report(),
     )
 
     result = CliRunner().invoke(main, ["doctor", "--platform", "web"])
 
-    assert result.exit_code == 130
+    assert result.exit_code == 0
 
 
 def test_init_provider_copilot_writes_env_and_prepares_interactive_session(
