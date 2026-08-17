@@ -19,13 +19,25 @@ from fsq_agent.config._user_provider import (
     refresh_provider_settings,
     save_azure_openai_provider,
 )
+from fsq_agent.config._workspace_init import (
+    ProjectLayout,
+    WorkspaceInitError,
+    WorkspaceInitResult,
+    initialize_project,
+    load_project_layout,
+)
 
 __all__ = [
     "PLATFORM_CONFIG_PATHS",
+    "ProjectLayout",
     "Settings",
     "UserProviderConfig",
+    "WorkspaceInitError",
+    "WorkspaceInitResult",
     "activate_github_copilot_provider",
+    "initialize_project",
     "load_platform_settings",
+    "load_project_layout",
     "load_settings",
     "load_user_provider_config",
     "refresh_provider_settings",

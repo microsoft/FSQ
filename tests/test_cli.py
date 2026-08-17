@@ -131,7 +131,7 @@ def test_control_plane_command_has_no_platform_and_delegates_current_workspace(
         "host": "localhost",
         "port": 9000,
         "open_browser": False,
-        "workspace_path": tmp_path / ".fsq-agent-workspace",
+        "workspace_path": tmp_path,
     }
     rejected = CliRunner().invoke(main, ["control-plane", "--platform", "android"])
     assert rejected.exit_code != 0
@@ -182,7 +182,35 @@ def test_init_without_provider_does_not_update_env_or_use_interactive_auth(
 
     assert result.exit_code == 0, result.output
     assert not (tmp_path / ".env").exists()
-    assert (tmp_path / ".fsq-agent-workspace" / ".fsq-agent-workspace").exists()
+    assert (tmp_path / ".fsq-workspace" / "workspace.yaml").is_file()
+    assert (tmp_path / "fsq-cases" / "android").is_dir()
+
+
+@pytest.mark.parametrize("output_format", ["json", "jsonl"])
+def test_init_machine_output_is_one_terminal_result(tmp_path: Path, output_format: str) -> None:
+    result = CliRunner().invoke(main, ["--output", output_format, "init", "--platform", "web", "--platform", "android"])
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["schemaVersion"] == "fsq.machine/v1"
+    assert payload["kind"] == "Result"
+    assert payload["operation"] == "workspace.init"
+    assert payload["requestedPlatforms"] == ["android", "web"]
+
+
+def test_init_machine_error_is_one_terminal_record(tmp_path: Path) -> None:
+    (tmp_path / ".fsq-agent-workspace").mkdir()
+
+    result = CliRunner().invoke(main, ["--output", "json", "init", "--platform", "web"])
+
+    assert result.exit_code == 3
+    lines = result.output.splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["kind"] == "Error"
+    assert payload["code"] == "workspace.legacy_layout_detected"
 
 
 def test_removed_setup_command_fails() -> None:

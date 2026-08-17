@@ -24,7 +24,13 @@ from fsq_agent.cli._formatting import log_result, log_run_event
 from fsq_agent.cli._logging import configure_cli_logging
 from fsq_agent.cli._strict_replay import resolve_strict_replay_steps
 from fsq_agent.cli._task_loader import discover_case_yaml_paths, read_raw_text_file, resolve_case_yaml_path
-from fsq_agent.config import Settings, load_platform_settings, validate_runtime_settings, validate_strict_core_settings
+from fsq_agent.config import (
+    Settings,
+    WorkspaceInitError,
+    initialize_project,
+    load_platform_settings,
+    validate_strict_core_settings,
+)
 from fsq_agent.control_plane import ControlPlaneServerOptions, run_control_plane
 from fsq_agent.core import (
     ArtifactStore,
@@ -47,26 +53,76 @@ def _log_cli_error(message: str, *args: object) -> None:
 
 
 @click.group()
-def main() -> None:
+@click.option("--output", "output_format", type=click.Choice(["human", "json", "jsonl"]), default="human")
+@click.pass_context
+def main(context: click.Context, output_format: str) -> None:
     configure_cli_logging()
+    context.ensure_object(dict)
+    context.obj["output_format"] = output_format
 
 
 @main.command()
-@click.option("--platform", type=PLATFORM_CHOICE, required=True)
-def init(platform: str) -> None:
+@click.option("--platform", type=PLATFORM_CHOICE, required=True, multiple=True)
+@click.pass_context
+def init(context: click.Context, platform: tuple[str, ...]) -> None:
+    output_format = context.find_root().obj["output_format"]
     try:
-        settings = load_platform_settings(platform, _current_workspace_path())
-        logger.info("Initialized fsq-agent workspace: %s", settings.workspace.root_dir)
-        logger.info("Output root: %s", settings.output.root_dir)
-        _log_readiness("LLM run", lambda: validate_runtime_settings(settings))
-        _log_readiness("Strict-core run", lambda: validate_strict_core_settings(settings))
-        _log_readiness("AI assertion", lambda: validate_strict_core_settings(settings, requires_ai_assertion=True))
-    except FsqAgentError as exc:
-        _log_cli_error("Error: %s", exc)
-        raise click.Abort() from exc
+        result = initialize_project(Path.cwd(), platform)
+        payload = {
+            "schemaVersion": "fsq.machine/v1",
+            "kind": "Result",
+            "operation": "workspace.init",
+            "status": result.status,
+            "projectId": result.project_id,
+            "projectRoot": str(result.project_root),
+            "workspace": str(result.workspace),
+            "requestedPlatforms": result.requested_platforms,
+            "addedPlatforms": result.added_platforms,
+            "createdPaths": [str(path) for path in result.created_paths],
+            "warnings": result.warnings,
+        }
+        if output_format == "human":
+            click.echo(f"Workspace {result.status.replace('_', ' ')}.")
+            click.echo(f"Project ID: {result.project_id}")
+            click.echo(f"Platforms: {', '.join(result.requested_platforms)}")
+            click.echo("Recommendation: add .fsq-workspace/ to .gitignore.")
+        else:
+            click.echo(json.dumps(payload, separators=(",", ":")))
+    except WorkspaceInitError as exc:
+        if output_format == "human":
+            click.echo(f"Error: {exc.message}", err=True)
+        else:
+            click.echo(
+                json.dumps(
+                    {
+                        "schemaVersion": "fsq.machine/v1",
+                        "kind": "Error",
+                        "operation": "workspace.init",
+                        "code": exc.code,
+                        "message": exc.message,
+                        "details": exc.details,
+                    },
+                    separators=(",", ":"),
+                )
+            )
+        raise click.exceptions.Exit(3) from exc
     except OSError as exc:
-        _log_cli_error("Error: %s", exc)
-        raise click.Abort() from exc
+        if output_format == "human":
+            click.echo(f"Error: {exc}", err=True)
+        else:
+            click.echo(
+                json.dumps(
+                    {
+                        "schemaVersion": "fsq.machine/v1",
+                        "kind": "Error",
+                        "operation": "workspace.init",
+                        "code": "workspace.io_failed",
+                        "message": "Workspace initialization failed.",
+                    },
+                    separators=(",", ":"),
+                )
+            )
+        raise click.exceptions.Exit(5) from exc
 
 
 @main.command()
@@ -174,7 +230,7 @@ def control_plane(host: str, port: int, open_browser: bool) -> None:
                 host=host,
                 port=port,
                 open_browser=open_browser,
-                workspace_path=_current_workspace_path(),
+                workspace_path=Path.cwd(),
             )
         )
     except FsqAgentError as exc:
@@ -186,7 +242,8 @@ def control_plane(host: str, port: int, open_browser: bool) -> None:
 
 
 def _current_workspace_path() -> Path:
-    return Path.cwd() / ".fsq-agent-workspace"
+    current = Path.cwd()
+    return current if (current / "fsq.yaml").is_file() else current / ".fsq-agent-workspace"
 
 
 def _validate_run_inputs(

@@ -70,6 +70,34 @@ def _ensure_inside(path: Path, root: Path, message: str) -> None:
 
 def resolve_runtime_paths(settings: Settings, base_dir: Path | None = None) -> None:
     config_base = (base_dir or Path.cwd()).expanduser().resolve()
+    configured_workspace = settings.workspace.root_dir
+    project_base = _resolve_path(configured_workspace, config_base) if configured_workspace is not None and (_resolve_path(configured_workspace, config_base) / "fsq.yaml").is_file() else config_base
+    project_config = project_base / "fsq.yaml"
+    if project_config.is_file():
+        from fsq_agent.config._workspace_init import load_project_layout
+
+        layout = load_project_layout(project_base)
+        platform_id = settings.harness.platform
+        if platform_id not in layout.platforms:
+            raise ConfigurationError(
+                "Requested platform is not enabled in this FSQ project.",
+                context={"platform": platform_id, "enabled_platforms": list(layout.platforms)},
+            )
+        settings.workspace.root_dir = layout.workspace
+        settings.cases.dir = layout.case_directories[platform_id]
+        settings.output.root_dir = layout.run_directories[platform_id]
+        settings.output.runs_dir = layout.run_directories[platform_id]
+        knowledge = settings.agent_context.knowledge
+        knowledge.root_dir = _resolve_path(knowledge.root_dir, project_base)
+        knowledge.skills.dir = _resolve_path(knowledge.skills.dir, knowledge.root_dir)
+        if knowledge.pre_plan.dir is not None:
+            knowledge.pre_plan.dir = _resolve_path(knowledge.pre_plan.dir, knowledge.root_dir)
+        prompt = settings.openai_agents.prompt
+        if prompt.agent_template_path is not None:
+            prompt.agent_template_path = _resolve_path(prompt.agent_template_path, project_base)
+        if prompt.task_template_path is not None:
+            prompt.task_template_path = _resolve_path(prompt.task_template_path, project_base)
+        return
     workspace_root = _ensure_workspace(settings, config_base)
 
     output_root = _resolve_path(settings.output.root_dir, workspace_root)
