@@ -81,7 +81,6 @@ include = [
     "/docs/demo.html",
     "/docs/getting-started.md",
     "/docs/getting-started.zh-CN.md",
-    "/docs/launch",
     "/docs/media",
     "/docs/platform-prerequisites.md",
     "/docs/releases",

@@ -10,7 +10,6 @@ This document governs project collaboration. Microsoft organization policies, th
 - Community participation should be accessible without weakening quality or security.
 - Public behavior and architecture should remain aligned with confirmed specifications.
 - Maintainer authority comes with service responsibilities, not only merge access.
-- Project direction should follow the published [Roadmap](ROADMAP.md) and its grounding strategy.
 
 ## Roles
 
@@ -37,7 +36,7 @@ Maintainers steward the project as a whole. Their responsibilities include:
 - Triaging Issues and reviewing pull requests.
 - Protecting public contracts, architecture boundaries, and specification accuracy.
 - Maintaining CI, releases, dependencies, security response, and repository policy.
-- Keeping the Roadmap and contributor documentation current.
+- Keeping contributor documentation current.
 - Developing other contributors and sharing project knowledge.
 
 The current maintainers are the recognized owners listed in [.github/CODEOWNERS](.github/CODEOWNERS). Repository permissions determine whether GitHub recognizes an account as a code owner.
@@ -60,17 +59,17 @@ Changes to supported behavior, public interfaces, project requirements, or archi
 
 ### Project-Level Decisions
 
-Roadmap priorities, governance changes, release policy, and major cross-module decisions should be discussed publicly through an Issue, design document, or pull request whenever security or privacy does not require private handling.
+Project priorities, governance changes, release policy, and major cross-module decisions should be discussed publicly through an Issue, design document, or pull request whenever security or privacy does not require private handling.
 
 Maintainers seek consensus. If material disagreement remains after reasonable discussion, eligible active maintainers decide by simple majority. If no proposal receives a majority, the current policy or behavior remains in place. The outcome and rationale should be recorded in the relevant public thread.
 
 Administrators may use repository-rule bypasses only through a pull request when the configured ruleset permits it. A pull request and auditable rationale remain required.
 
-## Roadmap and Releases
+## Project Direction and Releases
 
-[ROADMAP.md](ROADMAP.md) communicates project direction. GitHub Issues and milestones represent committed or scheduled work; roadmap placement alone does not promise delivery.
+GitHub Issues and milestones communicate committed or scheduled work; placement alone does not promise delivery.
 
-Maintainers review roadmap accuracy at least monthly and after material strategy changes. Releases are approved and published by maintainers after required validation succeeds. Release frequency depends on readiness rather than a fixed calendar.
+Maintainers review project priorities at least monthly and after material strategy changes. Releases are approved and published by maintainers after required validation succeeds. Release frequency depends on readiness rather than a fixed calendar.
 
 ## Role Progression
 

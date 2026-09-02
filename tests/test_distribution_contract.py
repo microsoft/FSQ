@@ -74,7 +74,6 @@ def test_sdist_includes_public_release_documentation_and_example() -> None:
         "/docs/cli-reference.md",
         "/docs/getting-started.md",
         "/docs/getting-started.zh-CN.md",
-        "/docs/launch",
         "/docs/media",
         "/docs/platform-prerequisites.md",
         "/docs/releases",

@@ -223,7 +223,6 @@ Provider configuration is stored under `~/.fsq` and shared by the CLI and local 
 | [Architecture](docs/architecture.md) | Current runtime layers and ownership boundaries |
 | [Release acceptance](docs/release-acceptance-checklist.md) | Maintainer release-candidate verification |
 | [Directory migration guide](docs/package-directory-migration-guide.md) | Package ownership and future migration criteria |
-| [Roadmap](ROADMAP.md) | Direction rather than release commitment |
 
 ## Contributing
 
