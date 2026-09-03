@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from fsq_agent.config import (
     PLATFORM_CONFIG_PATHS,
@@ -47,34 +48,16 @@ def _windows_executable(tmp_path: Path, name: str = "app.exe") -> Path:
     return app_path
 
 
-def test_runtime_resource_root_ignores_incomplete_editable_package_resources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    (checkout / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
-    editable_package = tmp_path / "site-packages" / "fsq_agent"
-    config_module = editable_package / "config" / "_loader.py"
-    config_module.parent.mkdir(parents=True)
-    (editable_package / "resources").mkdir()
-    monkeypatch.setattr(_loader, "__file__", str(config_module))
-    monkeypatch.chdir(checkout)
+def test_platform_config_paths_are_package_owned() -> None:
+    config_root = Path(_loader.__file__).resolve().parent
 
-    assert _loader._runtime_resource_root() == checkout
-
-
-def test_resolve_platform_config_path_recovers_a_stale_editable_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    (checkout / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
-    preset = checkout / "config.macos.yaml"
-    preset.write_text("harness:\n  platform: macos\n", encoding="utf-8")
-    stale = tmp_path / "build-cache" / "fsq_agent" / "resources" / "config.macos.yaml"
-    stale_module = stale.parents[1] / "config" / "_loader.py"
-    monkeypatch.setattr(_loader, "__file__", str(stale_module))
-    monkeypatch.setitem(_loader.PLATFORM_CONFIG_PATHS, "macos", stale)
-    monkeypatch.setitem(_loader._DEFAULT_PLATFORM_CONFIG_PATHS, "macos", stale)
-    monkeypatch.chdir(checkout)
-
-    assert _loader.resolve_platform_config_path("macos") == preset
+    assert {
+        "android": config_root / "config.android.yaml",
+        "web": config_root / "config.web.yaml",
+        "windows": config_root / "config.windows.yaml",
+        "macos": config_root / "config.macos.yaml",
+    } == PLATFORM_CONFIG_PATHS
+    assert all(path.is_file() for path in PLATFORM_CONFIG_PATHS.values())
 
 
 def test_load_workspace_platform_settings_composes_workspace_without_creating_content(tmp_path: Path) -> None:
@@ -134,7 +117,7 @@ env: {{}}
     assert settings.harness.android.backend == "uiautomator2"
     assert settings.harness.android.app_id == "com.example.registered"
     assert settings.openai_agents.max_turns == 100
-    assert settings.agent_context.knowledge.skills.dir == Path(__file__).parents[1] / "knowledge" / "skills"
+    assert settings.agent_context.knowledge.skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
 
 
 def _macos_workspace(tmp_path: Path, name: str) -> Path:
@@ -357,8 +340,8 @@ caseLifecycle:
         load_settings(config_path)
 
 
-def test_config_example_is_reference_only_and_shows_case_lifecycle() -> None:
-    example_path = Path(__file__).parents[1] / "config.example.yaml"
+def test_config_example_is_reference_only_and_shows_case_lifecycle(tmp_path: Path) -> None:
+    example_path = Path(_loader.__file__).resolve().parent / "config.example.yaml"
 
     assert example_path.exists()
     content = example_path.read_text(encoding="utf-8")
@@ -366,23 +349,32 @@ def test_config_example_is_reference_only_and_shows_case_lifecycle() -> None:
     assert "onCaseStart:" in content
     assert "onCaseComplete:" in content
     assert "reference" in content.casefold()
+    settings = load_settings(example_path, user_config_root=tmp_path / "user")
+    repository_root = Path(_loader.__file__).resolve().parents[2]
+    assert settings.agent_context.knowledge.root_dir == repository_root / "knowledge" / "project_android_v1"
+    assert settings.agent_context.knowledge.skills.dir == repository_root / "fsq_agent" / "resources" / "skills"
 
 
 @pytest.mark.parametrize(
-    ("config_name", "expected_max_turns"),
+    ("platform", "expected_max_turns"),
     [
-        ("config.android.yaml", 100),
-        ("config.web.yaml", 50),
-        ("config.windows.yaml", 100),
-        ("config.macos.yaml", 50),
+        ("android", 100),
+        ("web", 50),
+        ("windows", 100),
+        ("macos", 50),
     ],
 )
-def test_committed_platform_presets_define_max_turns(config_name: str, expected_max_turns: int, tmp_path: Path) -> None:
-    config_path = Path(__file__).parents[1] / config_name
+def test_committed_platform_presets_define_max_turns_and_bind_package_skills(platform: str, expected_max_turns: int, tmp_path: Path) -> None:
+    config_path = PLATFORM_CONFIG_PATHS[platform]
 
     settings = load_settings(config_path, workspace=tmp_path / config_path.stem)
 
     assert settings.openai_agents.max_turns == expected_max_turns
+    skills = settings.agent_context.knowledge.skills
+    assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
+    assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
+    preset = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert "dir" not in preset["agent_context"]["knowledge"]["skills"]
 
 
 def test_load_settings_ignores_config_example_by_default(tmp_path: Path) -> None:
@@ -411,7 +403,7 @@ def test_load_platform_settings_loads_committed_platform_preset(tmp_path: Path) 
     assert settings.harness.web.base_url is None
     assert settings.openai_agents.max_turns == 50
     skills = settings.agent_context.knowledge.skills
-    assert skills.dir == Path(__file__).parents[1] / "knowledge" / "skills"
+    assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
     assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
 
 

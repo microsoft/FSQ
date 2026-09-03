@@ -20,8 +20,8 @@ Use when `harness.platform` is Windows. This skill contains Windows-specific sta
 
 ## Verification and Assertion Rules
 
-- Use `assert_visible` or `assert_not_visible` for required presence or absence of a control.
-- Use `assert_with_ai` when the assertion requires visual judgment, window interpretation, or a deterministic control check would require a brittle complex locator.
+- Use `assert_visible` for required presence of a control.
+- Use `assert_with_ai` for required absence, visual judgment, window interpretation, or when a deterministic presence check would require a brittle complex locator.
 - Use `ui_snapshot` to inspect, locate, or collect context before an assertion.
 
 ## Argument Rules

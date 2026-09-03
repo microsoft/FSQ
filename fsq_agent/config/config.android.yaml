@@ -1,14 +1,11 @@
 openai_agents:
-  max_turns: 50
+  max_turns: 100
   tracing_enabled: true
 
 harness:
-  platform: web
-  web:
-    backend: playwright
-    channel: chrome
-    headless: false
-    base_url: null
+  platform: android
+  android:
+    backend: uiautomator2
 
 execution:
   post_action_delay_seconds:
@@ -18,15 +15,16 @@ execution:
 agent_context:
   knowledge:
     skills:
-      dir: knowledge/skills
       items:
         - name: automation-basics
           description: Semantic action and evidence guidance for local runs.
           kind: markdown
           path: automation-basics.md
           required: true
-        - name: web-harness
-          description: Web harness action selection and recovery guidance.
+        - name: android-harness
+          description: Android harness action selection and recovery guidance.
           kind: markdown
-          path: web-harness.md
+          path: android-harness.md
           required: true
+    pre_plan:
+          dir: .

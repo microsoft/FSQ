@@ -15,6 +15,34 @@ ROOT = Path(__file__).resolve().parents[1]
 EXACT_REQUIREMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9._,-]+\])?==[^;\s]+(?:\s*;.*)?$")
 
 
+def _load_workflow(name: str) -> tuple[str, dict[str, Any]]:
+    raw = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+    workflow = yaml.safe_load(raw)
+    assert isinstance(workflow, dict)
+    assert isinstance(workflow.get("jobs"), dict)
+    for job_name, job in workflow["jobs"].items():
+        assert isinstance(job, dict), job_name
+        assert isinstance(job.get("steps"), list), job_name
+        assert all(isinstance(step, dict) for step in job["steps"]), job_name
+    return raw, workflow
+
+
+def _workflow_step(workflow: dict[str, Any], job_name: str, step_name: str) -> dict[str, Any]:
+    matches = [step for step in workflow["jobs"][job_name]["steps"] if step.get("name") == step_name]
+    assert len(matches) == 1, (job_name, step_name)
+    return matches[0]
+
+
+def _delimited_python(script: str, opener: str, terminator: str) -> str:
+    lines = script.splitlines()
+    starts = [index for index, line in enumerate(lines) if opener in line]
+    assert len(starts) == 1, opener
+    start = starts[0]
+    end = next((index for index in range(start + 1, len(lines)) if lines[index] == terminator), None)
+    assert end is not None, terminator
+    return "\n".join(lines[start + 1 : end]) + "\n"
+
+
 def test_python_dependencies_are_lock_free_public_and_exactly_versioned() -> None:
     pyproject_path = ROOT / "pyproject.toml"
     pyproject_text = pyproject_path.read_text(encoding="utf-8")
@@ -81,9 +109,7 @@ def test_sdist_includes_public_release_documentation_and_example() -> None:
 
 
 def test_release_workflow_is_manual_safe_and_uses_oidc_trusted_publishing() -> None:
-    workflow_path = ROOT / ".github" / "workflows" / "release.yml"
-    raw = workflow_path.read_text(encoding="utf-8")
-    workflow: dict[str, Any] = yaml.safe_load(raw)
+    raw, workflow = _load_workflow("release.yml")
     trigger = workflow[True]  # PyYAML 1.1 parses the unquoted GitHub Actions `on` key as true.
     dispatch = trigger["workflow_dispatch"]
     assert set(trigger) == {"workflow_dispatch"}
@@ -114,6 +140,7 @@ def test_release_workflow_is_manual_safe_and_uses_oidc_trusted_publishing() -> N
         "fsq-agent",
     ):
         assert command in install_smoke_commands
+    assert "load_platform_settings" in install_smoke_commands
     verify = workflow["jobs"]["verify"]
     assert any(step.get("uses", "").startswith("actions/upload-artifact@") for step in verify["steps"])
     commands = "\n".join(str(step.get("run", "")) for step in verify["steps"])
@@ -129,6 +156,7 @@ def test_release_workflow_is_manual_safe_and_uses_oidc_trusted_publishing() -> N
         "tests/test_distribution_contract.py",
         '"$RUNNER_TEMP/fsq-release-smoke/bin/fsq" --help',
         '"$RUNNER_TEMP/fsq-release-smoke/bin/fsq-agent" --help',
+        "load_platform_settings",
     ):
         assert command in commands
     assert "uv sync --extra dev --reinstall-package fsq-agent" in commands
@@ -141,59 +169,113 @@ def test_release_workflow_is_manual_safe_and_uses_oidc_trusted_publishing() -> N
     assert "password:" not in raw
 
 
+def test_workflow_embedded_python_is_syntactically_valid() -> None:
+    _, ci = _load_workflow("ci.yml")
+    for job_name, step_name in (
+        ("quality", "Verify clean checkout package resource ownership"),
+        ("tests", "Verify clean checkout package resource ownership"),
+        ("package", "Verify distribution contracts"),
+    ):
+        step = _workflow_step(ci, job_name, step_name)
+        assert step["shell"] == "python"
+        compile(step["run"], f"ci.yml:{job_name}:{step_name}", "exec")
+
+    _, release = _load_workflow("release.yml")
+    verify_script = _workflow_step(release, "verify", "Install wheel in a clean environment")["run"]
+    compile(_delimited_python(verify_script, "<<'PY'", "PY"), "release.yml:verify:installed-wheel", "exec")
+    matrix_script = _workflow_step(release, "install-smoke", "Install wheel and verify console scripts")["run"]
+    compile(_delimited_python(matrix_script, "$resourceSmoke = @'", "'@"), "release.yml:install-smoke:resources", "exec")
+
+
+def test_release_install_smoke_checks_every_native_command_exit() -> None:
+    _, release = _load_workflow("release.yml")
+    script = _workflow_step(release, "install-smoke", "Install wheel and verify console scripts")["run"]
+    lines = script.splitlines()
+
+    for command in (
+        "python -m venv $venv",
+        "& $python -m pip install --upgrade pip",
+        "& $python -m pip install $wheels[0].FullName",
+        '& $python -c "import fsq_agent"',
+        "& $fsq --help",
+        "& $fsqAgent --help",
+        "$resourceSmoke | & $python -",
+    ):
+        command_index = lines.index(command)
+        assert lines[command_index + 1] == "if ($LASTEXITCODE -ne 0) {"
+        assert lines[command_index + 2].strip().startswith('throw "')
+        assert lines[command_index + 3] == "}"
+
+
 def test_distribution_includes_only_control_plane_frontend_assets() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     expected = "fsq_agent/adapters/control_plane/static/**"
     retired = "fsq_agent/adapters/control_plane/playground/static/**"
 
     wheel = project["tool"]["hatch"]["build"]["targets"]["wheel"]
-    assert set(wheel["artifacts"]) == {expected, "fsq_agent/resources/**"}
+    assert set(wheel["artifacts"]) == {expected}
     assert retired not in wheel["artifacts"]
     assert "force-include" not in wheel
     sdist = project["tool"]["hatch"]["build"]["targets"]["sdist"]
-    assert expected in sdist["artifacts"]
+    assert set(sdist["artifacts"]) == {expected}
     assert retired not in sdist["artifacts"]
     assert "force-include" not in sdist
 
 
-def test_sdist_maps_runtime_resources_to_package_paths() -> None:
+def test_frontend_distribution_script_does_not_mutate_python_resources() -> None:
+    script = (ROOT / "scripts" / "distribute-frontend-build.mjs").read_text(encoding="utf-8")
+
+    assert "fsq_agent/resources" not in script
+    assert "knowledge/skills" not in script
+
+
+def test_sdist_uses_tracked_package_runtime_resources() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     sdist = project["tool"]["hatch"]["build"]["targets"]["sdist"]
-    assert set(sdist["artifacts"]) == {
-        "config.android.yaml",
-        "config.web.yaml",
-        "config.windows.yaml",
-        "config.macos.yaml",
-        "knowledge/skills/**",
-        "fsq_agent/resources/**",
-        "fsq_agent/adapters/control_plane/static/**",
-    }
+    includes = set(sdist["include"])
+
+    assert "/fsq_agent" in includes
+    assert not {"/config.android.yaml", "/config.web.yaml", "/config.windows.yaml", "/config.macos.yaml", "/knowledge/skills"} & includes
+    for path in (
+        ROOT / "fsq_agent/config/config.android.yaml",
+        ROOT / "fsq_agent/config/config.web.yaml",
+        ROOT / "fsq_agent/config/config.windows.yaml",
+        ROOT / "fsq_agent/config/config.macos.yaml",
+        ROOT / "fsq_agent/config/config.example.yaml",
+        ROOT / "fsq_agent/resources/skills/android-harness.md",
+        ROOT / "fsq_agent/resources/skills/web-harness.md",
+        ROOT / "fsq_agent/resources/skills/windows-harness.md",
+        ROOT / "fsq_agent/resources/skills/macos-harness.md",
+        ROOT / "fsq_agent/resources/skills/automation-basics.md",
+    ):
+        assert path.is_file()
 
 
 def test_ci_verifies_all_runtime_package_resources() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     for resource in (
-        "fsq_agent/resources/config.android.yaml",
-        "fsq_agent/resources/config.web.yaml",
-        "fsq_agent/resources/config.windows.yaml",
-        "fsq_agent/resources/config.macos.yaml",
-        "fsq_agent/resources/knowledge/skills/android-harness.md",
-        "fsq_agent/resources/knowledge/skills/web-harness.md",
-        "fsq_agent/resources/knowledge/skills/windows-harness.md",
-        "fsq_agent/resources/knowledge/skills/macos-harness.md",
-        "fsq_agent/resources/knowledge/skills/automation-basics.md",
+        "fsq_agent/config/config.android.yaml",
+        "fsq_agent/config/config.web.yaml",
+        "fsq_agent/config/config.windows.yaml",
+        "fsq_agent/config/config.macos.yaml",
+        "fsq_agent/config/config.example.yaml",
+        "fsq_agent/resources/skills/android-harness.md",
+        "fsq_agent/resources/skills/web-harness.md",
+        "fsq_agent/resources/skills/windows-harness.md",
+        "fsq_agent/resources/skills/macos-harness.md",
+        "fsq_agent/resources/skills/automation-basics.md",
         "fsq_agent/agent/templates/agent_instructions.j2",
         "fsq_agent/agent/templates/task_input.j2",
     ):
         assert resource in workflow
 
     for contract in (
-        "Verify clean checkout has no generated package resources",
+        "Verify clean checkout package resource ownership",
         "uv.lock must not be tracked",
         "uv build --wheel dist/*.tar.gz --out-dir rebuilt-dist",
         "Wheel rebuilt from sdist has different runtime package resources",
-        "Sdist is missing build input",
+        "Sdist contains retired root resource",
     ):
         assert contract in workflow
     assert "uv sync --extra dev --reinstall-package fsq-agent" in workflow

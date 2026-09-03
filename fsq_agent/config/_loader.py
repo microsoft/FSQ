@@ -37,21 +37,24 @@ _PLATFORM_CONFIG_FILENAMES = {
 _MACOS_APPIUM_SERVER_URL_ENV = "FSQ_MACOS_APPIUM_SERVER_URL"
 
 
-def _runtime_resource_root() -> Path:
-    source_root = Path(__file__).resolve().parents[2]
-    if (source_root / "pyproject.toml").is_file():
-        return source_root
-    package_root = Path(__file__).resolve().parents[1] / "resources"
-    if all((package_root / filename).is_file() for filename in _PLATFORM_CONFIG_FILENAMES.values()):
-        return package_root
-    checkout_root = Path.cwd().resolve()
-    if (checkout_root / "pyproject.toml").is_file():
-        return checkout_root
-    return package_root
+def _package_config_root() -> Path:
+    return Path(__file__).resolve().parent
 
 
-PLATFORM_CONFIG_PATHS = {platform: _runtime_resource_root() / filename for platform, filename in _PLATFORM_CONFIG_FILENAMES.items()}
-_DEFAULT_PLATFORM_CONFIG_PATHS = dict(PLATFORM_CONFIG_PATHS)
+def _package_skill_root() -> Path:
+    return (Path(__file__).resolve().parents[1] / "resources" / "skills").resolve()
+
+
+def _is_package_platform_config(path: Path) -> bool:
+    resolved_path = path.expanduser().resolve()
+    return any(resolved_path == preset_path.expanduser().resolve() for preset_path in PLATFORM_CONFIG_PATHS.values())
+
+
+def _bind_package_skill_resources(settings: Settings) -> None:
+    settings.agent_context.knowledge.skills.dir = _package_skill_root()
+
+
+PLATFORM_CONFIG_PATHS = {platform: _package_config_root() / filename for platform, filename in _PLATFORM_CONFIG_FILENAMES.items()}
 SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai")
 
 
@@ -90,6 +93,8 @@ def load_settings(
     settings = refresh_provider_settings(settings, user_config_root)
     base_dir = config_path.parent if config_path is not None else Path.cwd()
     resolve_runtime_paths(settings, base_dir)
+    if config_path is not None and _is_package_platform_config(config_path):
+        _bind_package_skill_resources(settings)
     return settings
 
 
@@ -101,8 +106,6 @@ def resolve_platform_config_path(platform: str) -> Path:
             "Unsupported harness platform.",
             context={"platform": platform, "supported": sorted(PLATFORM_CONFIG_PATHS)},
         )
-    if not config_path.is_file() and config_path == _DEFAULT_PLATFORM_CONFIG_PATHS[platform_id]:
-        config_path = _runtime_resource_root() / _PLATFORM_CONFIG_FILENAMES[platform_id]
     if not config_path.is_file():
         raise ConfigurationError(
             "Platform configuration file is missing.",
@@ -124,13 +127,6 @@ def load_platform_settings(
             "Platform configuration does not match requested platform.",
             context={"platform": platform_id, "configured_platform": settings.harness.platform},
         )
-    knowledge = settings.agent_context.knowledge
-    try:
-        skills_relative = knowledge.skills.dir.relative_to(knowledge.root_dir)
-    except ValueError:
-        pass
-    else:
-        knowledge.skills.dir = (preset_path.parent / skills_relative).resolve()
     return settings
 
 
@@ -149,6 +145,7 @@ def load_workspace_platform_settings(
         settings = Settings.model_validate(preset_data)
     except ValidationError as exc:
         raise ConfigurationError("Invalid platform preset.", context={"errors": exc.errors()}) from exc
+    _bind_package_skill_resources(settings)
 
     settings.workspace = WorkspaceSettings(root_dir=workspace_root, config_path=workspace_config_path)
     settings.harness.platform = platform_id

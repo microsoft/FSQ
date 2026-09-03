@@ -69,7 +69,23 @@ jobs:
           "$RUNNER_TEMP/fsq-release-smoke/bin/fsq" --help
           "$RUNNER_TEMP/fsq-release-smoke/bin/fsq-agent" --help
           "$RUNNER_TEMP/fsq-release-smoke/bin/python" - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
           from fsq_agent.adapters.control_plane import ControlPlaneServer, ControlPlaneServerOptions
+          from fsq_agent.config import PLATFORM_CONFIG_PATHS, load_platform_settings
+
+          with TemporaryDirectory() as temp_dir:
+              temp_root = Path(temp_dir)
+              for platform, preset_path in PLATFORM_CONFIG_PATHS.items():
+                  assert preset_path.is_file()
+                  settings = load_platform_settings(
+                      platform,
+                      workspace=temp_root / platform,
+                      user_config_root=temp_root / "user",
+                  )
+                  skills = settings.agent_context.knowledge.skills
+                  assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
 
           server = ControlPlaneServer(ControlPlaneServerOptions(open_browser=False))
           status, body, content_type = server.static_response("/")
@@ -114,6 +130,9 @@ jobs:
         run: |
           $venv = Join-Path $env:RUNNER_TEMP "fsq-install-smoke"
           python -m venv $venv
+          if ($LASTEXITCODE -ne 0) {
+            throw "Virtual environment creation failed with exit code $LASTEXITCODE."
+          }
           if ($IsWindows) {
             $python = Join-Path $venv "Scripts/python.exe"
             $fsq = Join-Path $venv "Scripts/fsq.exe"
@@ -128,10 +147,47 @@ jobs:
             throw "Expected exactly one wheel in dist/, found $($wheels.Count)."
           }
           & $python -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) {
+            throw "pip upgrade failed with exit code $LASTEXITCODE."
+          }
           & $python -m pip install $wheels[0].FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "Wheel installation failed with exit code $LASTEXITCODE."
+          }
           & $python -c "import fsq_agent"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed package import failed with exit code $LASTEXITCODE."
+          }
           & $fsq --help
+          if ($LASTEXITCODE -ne 0) {
+            throw "fsq console-script smoke failed with exit code $LASTEXITCODE."
+          }
           & $fsqAgent --help
+          if ($LASTEXITCODE -ne 0) {
+            throw "fsq-agent console-script smoke failed with exit code $LASTEXITCODE."
+          }
+          $resourceSmoke = @'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from fsq_agent.config import PLATFORM_CONFIG_PATHS, load_platform_settings
+
+          with TemporaryDirectory() as temp_dir:
+              temp_root = Path(temp_dir)
+              for platform, preset_path in PLATFORM_CONFIG_PATHS.items():
+                  assert preset_path.is_file()
+                  settings = load_platform_settings(
+                      platform,
+                      workspace=temp_root / platform,
+                      user_config_root=temp_root / "user",
+                  )
+                  skills = settings.agent_context.knowledge.skills
+                  assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
+          '@
+          $resourceSmoke | & $python -
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installed package resource smoke failed with exit code $LASTEXITCODE."
+          }
 
   publish:
     name: Publish to PyPI
