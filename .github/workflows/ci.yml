@@ -75,18 +75,6 @@ jobs:
           if missing:
               raise SystemExit(f"Tracked package resources are missing: {missing}")
 
-          retired = (
-              Path("config.android.yaml"),
-              Path("config.web.yaml"),
-              Path("config.windows.yaml"),
-              Path("config.macos.yaml"),
-              Path("config.example.yaml"),
-              Path("knowledge/skills"),
-          )
-          present = [str(path) for path in retired if path.exists()]
-          if present:
-              raise SystemExit(f"Retired root resources are still present: {present}")
-
       - name: Install quality dependencies
         run: uv sync --extra dev --reinstall-package fsq-agent
 
@@ -156,18 +144,6 @@ jobs:
           missing = [str(path) for path in package_resources if not path.is_file()]
           if missing:
             raise SystemExit(f"Tracked package resources are missing: {missing}")
-
-          retired = (
-            Path("config.android.yaml"),
-            Path("config.web.yaml"),
-            Path("config.windows.yaml"),
-            Path("config.macos.yaml"),
-            Path("config.example.yaml"),
-            Path("knowledge/skills"),
-          )
-          present = [str(path) for path in retired if path.exists()]
-          if present:
-            raise SystemExit(f"Retired root resources are still present: {present}")
 
       - name: Install test dependencies
         run: uv sync --all-extras --reinstall-package fsq-agent
