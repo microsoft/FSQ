@@ -62,7 +62,6 @@ fsq-agent = "fsq_agent.adapters.cli:main"
 packages = ["fsq_agent"]
 artifacts = [
     "fsq_agent/adapters/control_plane/static/**",
-    "fsq_agent/resources/**",
 ]
 
 [tool.hatch.build.targets.sdist]
@@ -86,19 +85,8 @@ include = [
     "/examples",
     "/LICENSE",
     "/pyproject.toml",
-    "/config.android.yaml",
-    "/config.web.yaml",
-    "/config.windows.yaml",
-    "/config.macos.yaml",
-    "/knowledge/skills",
 ]
 artifacts = [
-    "config.android.yaml",
-    "config.web.yaml",
-    "config.windows.yaml",
-    "config.macos.yaml",
-    "knowledge/skills/**",
-    "fsq_agent/resources/**",
     "fsq_agent/adapters/control_plane/static/**",
 ]
 

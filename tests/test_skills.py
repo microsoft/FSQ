@@ -40,7 +40,7 @@ def test_skill_loader_fails_missing_required_skill(tmp_path: Path) -> None:
 
 
 def test_repository_android_harness_skill_documents_tool_usage_recovery() -> None:
-    skill_path = Path(__file__).resolve().parents[1] / "knowledge" / "skills" / "android-harness.md"
+    skill_path = Path(__file__).resolve().parents[1] / "fsq_agent" / "resources" / "skills" / "android-harness.md"
 
     bundles = SkillLoader(skill_path.parent).load([SkillConfig(name="android-harness", path=Path("android-harness.md"), required=True)])
 
@@ -53,6 +53,8 @@ def test_repository_android_harness_skill_documents_tool_usage_recovery() -> Non
     assert "Start each Android case with `launch_app`" in bundles[0].instructions
     assert "End each Android case with `kill_app`" in bundles[0].instructions
     assert "Use coordinate taps only when current platform evidence" in bundles[0].instructions
+    assert "ui_snapshot" in bundles[0].instructions
+    assert "ui_tree" not in bundles[0].instructions
     assert "textType" in bundles[0].instructions
     assert "runtimeSecret" in bundles[0].instructions
     assert '"key": "Back"' in bundles[0].instructions
@@ -69,7 +71,7 @@ def test_repository_android_harness_skill_documents_tool_usage_recovery() -> Non
 
 
 def test_repository_web_harness_skill_documents_snapshot_first_guidance() -> None:
-    skill_path = Path(__file__).resolve().parents[1] / "knowledge" / "skills" / "web-harness.md"
+    skill_path = Path(__file__).resolve().parents[1] / "fsq_agent" / "resources" / "skills" / "web-harness.md"
 
     bundles = SkillLoader(skill_path.parent).load([SkillConfig(name="web-harness", path=Path("web-harness.md"), required=True)])
 
@@ -85,3 +87,14 @@ def test_repository_web_harness_skill_documents_snapshot_first_guidance() -> Non
     assert "JavaScript evaluation" not in bundles[0].instructions
     assert "active tool schema already defines callable names and arguments" in bundles[0].instructions
     assert "ui_tree" not in bundles[0].instructions
+
+
+def test_repository_windows_harness_skill_uses_exposed_assertions() -> None:
+    skill_path = Path(__file__).resolve().parents[1] / "fsq_agent" / "resources" / "skills" / "windows-harness.md"
+
+    bundles = SkillLoader(skill_path.parent).load([SkillConfig(name="windows-harness", path=skill_path.name, required=True)])
+
+    assert "ui_snapshot" in bundles[0].instructions
+    assert "assert_visible" in bundles[0].instructions
+    assert "assert_with_ai" in bundles[0].instructions
+    assert "assert_not_visible" not in bundles[0].instructions

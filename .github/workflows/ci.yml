@@ -38,7 +38,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
 
-      - name: Verify clean checkout has no generated package resources
+      - name: Verify clean checkout package resource ownership
         shell: python
         run: |
           import subprocess
@@ -54,11 +54,38 @@ jobs:
 
           generated = (
               Path("fsq_agent/adapters/control_plane/static"),
-              Path("fsq_agent/resources"),
           )
           present = [str(path) for path in generated if path.exists()]
           if present:
               raise SystemExit(f"Generated package resources are unexpectedly tracked: {present}")
+
+          package_resources = (
+              Path("fsq_agent/config/config.android.yaml"),
+              Path("fsq_agent/config/config.web.yaml"),
+              Path("fsq_agent/config/config.windows.yaml"),
+              Path("fsq_agent/config/config.macos.yaml"),
+              Path("fsq_agent/config/config.example.yaml"),
+              Path("fsq_agent/resources/skills/android-harness.md"),
+              Path("fsq_agent/resources/skills/web-harness.md"),
+              Path("fsq_agent/resources/skills/windows-harness.md"),
+              Path("fsq_agent/resources/skills/macos-harness.md"),
+              Path("fsq_agent/resources/skills/automation-basics.md"),
+          )
+          missing = [str(path) for path in package_resources if not path.is_file()]
+          if missing:
+              raise SystemExit(f"Tracked package resources are missing: {missing}")
+
+          retired = (
+              Path("config.android.yaml"),
+              Path("config.web.yaml"),
+              Path("config.windows.yaml"),
+              Path("config.macos.yaml"),
+              Path("config.example.yaml"),
+              Path("knowledge/skills"),
+          )
+          present = [str(path) for path in retired if path.exists()]
+          if present:
+              raise SystemExit(f"Retired root resources are still present: {present}")
 
       - name: Install quality dependencies
         run: uv sync --extra dev --reinstall-package fsq-agent
@@ -102,18 +129,45 @@ jobs:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
 
-      - name: Verify clean checkout has no generated package resources
+      - name: Verify clean checkout package resource ownership
         shell: python
         run: |
           from pathlib import Path
 
           generated = (
               Path("fsq_agent/adapters/control_plane/static"),
-              Path("fsq_agent/resources"),
           )
           present = [str(path) for path in generated if path.exists()]
           if present:
               raise SystemExit(f"Generated package resources are unexpectedly tracked: {present}")
+
+          package_resources = (
+            Path("fsq_agent/config/config.android.yaml"),
+            Path("fsq_agent/config/config.web.yaml"),
+            Path("fsq_agent/config/config.windows.yaml"),
+            Path("fsq_agent/config/config.macos.yaml"),
+            Path("fsq_agent/config/config.example.yaml"),
+            Path("fsq_agent/resources/skills/android-harness.md"),
+            Path("fsq_agent/resources/skills/web-harness.md"),
+            Path("fsq_agent/resources/skills/windows-harness.md"),
+            Path("fsq_agent/resources/skills/macos-harness.md"),
+            Path("fsq_agent/resources/skills/automation-basics.md"),
+          )
+          missing = [str(path) for path in package_resources if not path.is_file()]
+          if missing:
+            raise SystemExit(f"Tracked package resources are missing: {missing}")
+
+          retired = (
+            Path("config.android.yaml"),
+            Path("config.web.yaml"),
+            Path("config.windows.yaml"),
+            Path("config.macos.yaml"),
+            Path("config.example.yaml"),
+            Path("knowledge/skills"),
+          )
+          present = [str(path) for path in retired if path.exists()]
+          if present:
+            raise SystemExit(f"Retired root resources are still present: {present}")
 
       - name: Install test dependencies
         run: uv sync --all-extras --reinstall-package fsq-agent
@@ -231,15 +285,16 @@ jobs:
           required_files = (
               "fsq_agent/adapters/control_plane/static/control-plane/index.html",
               "fsq_agent/adapters/control_plane/static/entry-assets.json",
-              "fsq_agent/resources/config.android.yaml",
-              "fsq_agent/resources/config.web.yaml",
-              "fsq_agent/resources/config.windows.yaml",
-              "fsq_agent/resources/config.macos.yaml",
-              "fsq_agent/resources/knowledge/skills/android-harness.md",
-              "fsq_agent/resources/knowledge/skills/web-harness.md",
-              "fsq_agent/resources/knowledge/skills/windows-harness.md",
-              "fsq_agent/resources/knowledge/skills/macos-harness.md",
-              "fsq_agent/resources/knowledge/skills/automation-basics.md",
+              "fsq_agent/config/config.android.yaml",
+              "fsq_agent/config/config.web.yaml",
+              "fsq_agent/config/config.windows.yaml",
+              "fsq_agent/config/config.macos.yaml",
+              "fsq_agent/config/config.example.yaml",
+              "fsq_agent/resources/skills/android-harness.md",
+              "fsq_agent/resources/skills/web-harness.md",
+              "fsq_agent/resources/skills/windows-harness.md",
+              "fsq_agent/resources/skills/macos-harness.md",
+              "fsq_agent/resources/skills/automation-basics.md",
               "fsq_agent/agent/templates/agent_instructions.j2",
               "fsq_agent/agent/templates/task_input.j2",
           )
@@ -253,29 +308,55 @@ jobs:
 
           with ZipFile(rebuilt_wheels[0]) as archive:
               rebuilt_names = set(archive.namelist())
+          runtime_prefixes = (
+              "fsq_agent/config/config.",
+              "fsq_agent/resources/skills/",
+              *required_prefixes,
+          )
           required_runtime_names = {
-              name for name in names if name.startswith(("fsq_agent/resources/", *required_prefixes))
+              name for name in names if name.startswith(runtime_prefixes)
           }
           rebuilt_runtime_names = {
-              name for name in rebuilt_names if name.startswith(("fsq_agent/resources/", *required_prefixes))
+              name for name in rebuilt_names if name.startswith(runtime_prefixes)
           }
           if rebuilt_runtime_names != required_runtime_names:
               raise SystemExit("Wheel rebuilt from sdist has different runtime package resources")
 
+          retired_wheel_resources = {
+              name
+              for name in names
+              if name.startswith("fsq_agent/resources/knowledge/")
+              or name
+              in {
+                  "fsq_agent/resources/config.android.yaml",
+                  "fsq_agent/resources/config.web.yaml",
+                  "fsq_agent/resources/config.windows.yaml",
+                  "fsq_agent/resources/config.macos.yaml",
+              }
+          }
+          if retired_wheel_resources:
+              raise SystemExit(f"Wheel contains retired package resource: {sorted(retired_wheel_resources)}")
+
           with tarfile.open(sdists[0], "r:gz") as archive:
               sdist_names = {name.split("/", 1)[-1] for name in archive.getnames()}
-          for path in (
-              "config.android.yaml",
-              "config.web.yaml",
-              "config.windows.yaml",
-              "config.macos.yaml",
-              "knowledge/skills/automation-basics.md",
-          ):
-              if path not in sdist_names:
-                  raise SystemExit(f"Sdist is missing build input {path}")
           for path in required_files:
               if path not in sdist_names:
                   raise SystemExit(f"Sdist is missing {path}")
+          retired_sdist_resources = {
+              name
+              for name in sdist_names
+              if name.startswith("knowledge/skills/")
+              or name
+              in {
+                  "config.android.yaml",
+                  "config.web.yaml",
+                  "config.windows.yaml",
+                  "config.macos.yaml",
+                  "config.example.yaml",
+              }
+          }
+          if retired_sdist_resources:
+              raise SystemExit(f"Sdist contains retired root resource: {sorted(retired_sdist_resources)}")
           for prefix in required_prefixes:
               for suffix in (".js", ".css"):
                   if not any(name.startswith(prefix) and name.endswith(suffix) for name in sdist_names):

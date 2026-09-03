@@ -11,10 +11,10 @@ Use when `harness.platform` is Android. This skill contains Android-specific sta
 
 ## Observation and Locator Rules
 
-- Use `ui_tree` as the Android structural observation for locating current elements and resolving target ambiguity.
+- Use `ui_snapshot` as the Android structural observation for locating current elements and resolving target ambiguity.
 - Prefer locator fields confirmed in current output in this order: `resourceId`, `accessibilityId`, exact visible `text`, then `className` or `xpath` when simpler fields are absent or ambiguous.
 - Use coordinate taps only when current platform evidence or the user explicitly supplies the point and no reliable locator is available; prefer locator-based actions for normal UI elements.
-- Re-evaluate stale or missing targets with a fresh `ui_tree` before retrying the same semantic action.
+- Re-evaluate stale or missing targets with a fresh `ui_snapshot` before retrying the same semantic action.
 - Do not invent abstract Android targets such as an outside blank area. If a menu or dialog must be dismissed and no concrete target is exposed, use the requested semantic key action such as `Back`, then verify the UI state.
 - For Android key actions, use the requested semantic key string only. Do not mix key names with backend-native key codes.
 
@@ -23,7 +23,7 @@ Use when `harness.platform` is Android. This skill contains Android-specific sta
 - Use `assert_state` for deterministic element state or text checks, such as verifying that `com.microsoft.emmx:id/url_bar` contains or equals a required URL or keyword.
 - Use `assert_visible` or `assert_not_visible` for required presence or absence of visible UI elements.
 - Use `assert_with_ai` for visual/page-content assertions or when the only deterministic option is a brittle complex locator, such as a long XPath through repeated generic controls or reused switch ids.
-- Use `ui_tree` to inspect, locate, or collect evidence before an assertion. Before teardown, collect the final required verification with an assertion tool when an assertion-capable locator or text condition is available.
+- Use `ui_snapshot` to inspect, locate, or collect evidence before an assertion. Before teardown, collect the final required verification with an assertion tool when an assertion-capable locator or text condition is available.
 
 ## Argument Rules
 

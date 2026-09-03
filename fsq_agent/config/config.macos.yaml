@@ -1,12 +1,15 @@
 openai_agents:
-  max_turns: 100
+  max_turns: 50
   tracing_enabled: true
 
 harness:
-  platform: windows
-  windows:
-    backend: pywinauto
-    backend_kind: uia
+  platform: macos
+  macos:
+    backend: appium_mac2
+    appium_server_url: http://127.0.0.1:4723
+    page_source_max_depth: 12
+    action_timeout_seconds: 10
+    new_command_timeout_seconds: 300
 
 execution:
   post_action_delay_seconds:
@@ -16,15 +19,14 @@ execution:
 agent_context:
   knowledge:
     skills:
-      dir: knowledge/skills
       items:
         - name: automation-basics
           description: Semantic action and evidence guidance for local runs.
           kind: markdown
           path: automation-basics.md
           required: true
-        - name: windows-harness
-          description: Windows harness action selection and recovery guidance.
+        - name: macos-harness
+          description: macOS Appium Mac2 harness action selection and recovery guidance.
           kind: markdown
-          path: windows-harness.md
+          path: macos-harness.md
           required: true

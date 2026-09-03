@@ -1,9 +1,9 @@
 # Reference-only configuration example.
 #
-# Public CLI platform runs use config.android.yaml, config.web.yaml,
-# config.windows.yaml, or config.macos.yaml. This file is not a runtime preset
-# and is ignored by default config discovery. Copy pieces from here into a
-# platform preset or local config.yaml when experimenting manually.
+# Public CLI platform runs use the sibling config.android.yaml,
+# config.web.yaml, config.windows.yaml, or config.macos.yaml presets. This
+# file is not a runtime preset and is ignored by default config discovery.
+# Copy pieces from here into a local config.yaml when experimenting manually.
 
 openai_agents:
   max_turns: 100
@@ -37,9 +37,9 @@ runtime_secrets:
 
 agent_context:
   knowledge:
-    root_dir: ./knowledge/project_android_v1
+    root_dir: ../../knowledge/project_android_v1
     skills:
-      dir: ../skills
+      dir: ../../fsq_agent/resources/skills
       items:
         - name: automation-basics
           description: Semantic action and evidence guidance for local runs.

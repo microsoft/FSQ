@@ -19,13 +19,13 @@ screenshots/
 dist/
 *.egg-info/
 knowledge/*
-!knowledge/skills/
-!knowledge/skills/**
 node_modules/
 .frontend-dist/
 fsq_agent/adapters/control_plane/playground/static/
 fsq_agent/adapters/control_plane/static/
-fsq_agent/resources/
+fsq_agent/resources/*
+!fsq_agent/resources/skills/
+!fsq_agent/resources/skills/**
 
 
 # Private/local planning material. Do not commit.

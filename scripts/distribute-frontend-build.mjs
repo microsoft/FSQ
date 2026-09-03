@@ -1,5 +1,5 @@
-import { copyFile, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const staging = resolve(root, '.frontend-dist');
@@ -37,16 +37,4 @@ for (const { name, target } of entries) {
     await copyFile(resolve(staging, file), destination);
   }
   await writeFile(resolve(target, 'entry-assets.json'), `${JSON.stringify({ entry: name, files: [...files].sort() }, null, 2)}\n`);
-}
-
-const resources = resolve(root, 'fsq_agent/resources');
-await rm(resources, { recursive: true, force: true });
-await mkdir(resolve(resources, 'knowledge/skills'), { recursive: true });
-for (const platform of ['android', 'web', 'windows', 'macos']) {
-  const name = `config.${platform}.yaml`;
-  await copyFile(resolve(root, name), resolve(resources, name));
-}
-const skillNames = (await readdir(resolve(root, 'knowledge/skills'))).filter((name) => name.endsWith('.md')).sort();
-for (const name of skillNames) {
-  await copyFile(resolve(root, 'knowledge/skills', basename(name)), resolve(resources, 'knowledge/skills', basename(name)));
 }
