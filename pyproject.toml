@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
  
 [project]
 name = "fsq-agent"
-version = "0.1.0a3"
+version = "0.1.0"
 description = "Goal-driven FSQ automated testing agent built around OpenAI Agents SDK, Azure OpenAI, harness actions, local utilities, observation, and reporting."
 readme = "README.md"
 license = "MIT"
