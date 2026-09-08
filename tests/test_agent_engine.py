@@ -9,7 +9,6 @@ import json
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import httpx
@@ -86,7 +85,7 @@ def test_engine_dependency_boundary_has_no_business_or_external_sdk_consumers() 
             for name in names:
                 if in_engine and name.startswith("fsq_agent.") and not name.startswith("fsq_agent.agent_engine"):
                     violations.append(f"{relative}:{node.lineno}: business dependency {name}")
-                if not in_engine and name.split(".")[0] in {"agents", "openai"}:
+                if name.split(".")[0] == "agents" or (not in_engine and name.split(".")[0] == "openai"):
                     violations.append(f"{relative}:{node.lineno}: external SDK dependency {name}")
     assert violations == []
 
@@ -167,6 +166,10 @@ def _http_response(payload: dict, *, stream: bool) -> httpx.Response:
         {"type": "response.created", "sequence_number": 0, "response": {**payload, "output": [], "status": "in_progress"}},
         {"type": "response.completed", "sequence_number": 1, "response": payload},
     ]
+    return _sse_response(events)
+
+
+def _sse_response(events: list[dict]) -> httpx.Response:
     content = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
@@ -223,6 +226,8 @@ async def test_agent_tool_loop_output_contract_events_and_context(monkeypatch: p
             assert payload["reasoning"]["effort"] == "medium"
             assert payload["text"]["verbosity"] == "medium"
             assert payload["text"]["format"]["type"] == "json_schema"
+            assert payload["text"]["format"]["name"] == "final_output"
+            assert payload["include"] == []
         assert entries[0].call_id == "call_test"
         assert entries[0].user_turn == 1
         assert entries[0].output == "original tool output"
@@ -238,6 +243,188 @@ async def test_agent_tool_loop_output_contract_events_and_context(monkeypatch: p
     finally:
         await provider.aclose()
     assert client.is_closed
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_parallel_tools_keep_model_order_and_private_history(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    payloads = []
+    events = []
+    completed = []
+    first_started = asyncio.Event()
+    second_finished = asyncio.Event()
+    reasoning = {"type": "reasoning", "id": "reason_test", "summary": [{"type": "summary_text", "text": "Public summary."}], "encrypted_content": "opaque-private-state"}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        response = _response('{"value":"done"}')
+        if len(payloads) == 1:
+            response["output"] = [
+                reasoning,
+                {"id": "fc_first", "type": "function_call", "name": "echo", "call_id": "call_first", "arguments": "{}", "status": "completed"},
+                {"id": "fc_second", "type": "function_call", "name": "echo", "call_id": "call_second", "arguments": "{}", "status": "completed"},
+                _response('{"value":"not final"}')["output"][0],
+            ]
+        return _http_response(response, stream=stream)
+
+    async def invoke(call: ToolCall) -> str:
+        if call.call_id == "call_first":
+            first_started.set()
+            await second_finished.wait()
+        else:
+            await first_started.wait()
+            second_finished.set()
+        completed.append(call.call_id)
+        return call.call_id
+
+    async def on_event(event: AgentEvent) -> None:
+        events.append(event)
+
+    provider, _client = _provider(monkeypatch, respond)
+    request = AgentRequest(
+        name="parallel",
+        instructions="Execute tools.",
+        input="run",
+        tools=(ToolBinding(name="echo", description="Echo", parameters_schema={"type": "object", "properties": {}}, invoke=invoke),),
+        output=OutputContract(name="Final", schema=_FinalOutput.model_json_schema(), parse=_FinalOutput.model_validate_json),
+        stream=stream,
+    )
+    try:
+        result = await asyncio.wait_for(create_agent_engine().run(provider.get_model("test-model"), request, on_event=on_event), timeout=5)
+        assert result.final_output.value == "done"
+        assert completed == ["call_second", "call_first"]
+        assert len(payloads) == 2
+        outputs = [item for item in payloads[1]["input"] if item.get("type") == "function_call_output"]
+        assert [(item["call_id"], item["output"]) for item in outputs] == [("call_first", "call_first"), ("call_second", "call_second")]
+        retained = next(item for item in payloads[1]["input"] if item.get("type") == "reasoning")
+        assert retained["encrypted_content"] == "opaque-private-state"
+        assert result.usage is not None
+        assert result.usage.requests == 2
+        assert result.usage.total_tokens == 10
+        if stream:
+            assert [(event.kind, event.call_id) for event in events if event.kind in {"tool_called", "tool_output"}] == [
+                ("tool_called", "call_first"),
+                ("tool_called", "call_second"),
+                ("tool_output", "call_first"),
+                ("tool_output", "call_second"),
+            ]
+            assert [event.text for event in events if event.kind == "reasoning_summary"] == ["Public summary."]
+        else:
+            assert events == []
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("tool_only", [False, True])
+async def test_turn_limit_counts_model_turns(monkeypatch: pytest.MonkeyPatch, stream: bool, tool_only: bool) -> None:
+    payloads = []
+    calls = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        response = _response("")
+        if tool_only:
+            response["output"] = [{"id": f"fc_{len(payloads)}", "type": "function_call", "name": "echo", "call_id": f"call_{len(payloads)}", "arguments": "{}", "status": "completed"}]
+        return _http_response(response, stream=stream)
+
+    async def invoke(call: ToolCall) -> str:
+        calls.append(call.call_id)
+        return "continue"
+
+    provider, _client = _provider(monkeypatch, respond)
+    request = AgentRequest(
+        name="limited",
+        instructions="Return structured output.",
+        input="run",
+        tools=(ToolBinding(name="echo", description="Echo", parameters_schema={"type": "object", "properties": {}}, invoke=invoke),),
+        output=OutputContract(name="Final", schema=_FinalOutput.model_json_schema(), parse=_FinalOutput.model_validate_json),
+        max_turns=2,
+        stream=stream,
+    )
+    try:
+        with pytest.raises(EngineError) as failure:
+            await create_agent_engine().run(provider.get_model("test-model"), request)
+        assert failure.value.category == "max_turns"
+        assert len(payloads) == 2
+        assert calls == (["call_1", "call_2"] if tool_only else [])
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("terminal", ["response.failed", "response.incomplete", "error", "missing"])
+async def test_stream_terminal_failures_do_not_complete(monkeypatch: pytest.MonkeyPatch, terminal: str) -> None:
+    response = _response("private terminal output")
+    response["status"] = "in_progress"
+    events = [{"type": "response.created", "sequence_number": 0, "response": response}]
+    if terminal == "error":
+        events.append({"type": "error", "sequence_number": 1, "code": "server_error", "message": "private terminal detail", "param": None})
+    elif terminal != "missing":
+        response = {**response, "status": terminal.removeprefix("response.")}
+        if terminal == "response.incomplete":
+            response["incomplete_details"] = {"reason": "content_filter"}
+        else:
+            response["error"] = {"code": "server_error", "message": "private terminal detail"}
+        events.append({"type": terminal, "sequence_number": 1, "response": response})
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _sse_response(events)
+
+    provider, client = _provider(monkeypatch, respond)
+    try:
+        with pytest.raises(EngineError) as failure:
+            await create_agent_engine().run(provider.get_model("test-model"), AgentRequest(name="stream", instructions="test", input="test", stream=True))
+        assert failure.value.category == ("incomplete" if terminal == "response.incomplete" else "invalid_output")
+        if terminal == "response.incomplete":
+            assert failure.value.reason == "content_filter"
+        assert "private terminal" not in str(failure.value)
+        assert len(requests) == 1
+    finally:
+        await provider.aclose()
+    assert client.is_closed
+
+
+async def test_stream_item_events_do_not_duplicate_tool_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = []
+    calls = []
+    events = []
+    tool_item = {"id": "fc_incremental", "type": "function_call", "name": "echo", "call_id": "call_incremental", "arguments": "{}", "status": "completed"}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        response = _response()
+        if len(requests) != 1:
+            return _http_response(response, stream=True)
+        response["output"] = [tool_item]
+        return _sse_response(
+            [
+                {"type": "response.created", "sequence_number": 0, "response": {**response, "output": [], "status": "in_progress"}},
+                {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": {**tool_item, "arguments": "", "status": "in_progress"}},
+                {"type": "response.function_call_arguments.delta", "sequence_number": 2, "output_index": 0, "item_id": "fc_incremental", "delta": "{"},
+                {"type": "response.function_call_arguments.done", "sequence_number": 3, "output_index": 0, "item_id": "fc_incremental", "arguments": "{}"},
+                {"type": "response.output_item.done", "sequence_number": 4, "output_index": 0, "item": tool_item},
+                {"type": "response.completed", "sequence_number": 5, "response": response},
+            ]
+        )
+
+    async def invoke(call: ToolCall) -> str:
+        calls.append(call)
+        return "done"
+
+    async def on_event(event: AgentEvent) -> None:
+        events.append(event)
+
+    provider, _client = _provider(monkeypatch, respond)
+    request = AgentRequest(name="stream", instructions="test", input="test", tools=(ToolBinding(name="echo", description="Echo", parameters_schema={}, invoke=invoke),), stream=True)
+    try:
+        result = await create_agent_engine().run(provider.get_model("test-model"), request, on_event=on_event)
+        assert result.final_output == "done"
+        assert calls == [ToolCall(name="echo", call_id="call_incremental", arguments={})]
+        assert [event.kind for event in events if event.kind.startswith("tool_")] == ["tool_called", "tool_output"]
+        assert len(requests) == 2
+    finally:
+        await provider.aclose()
 
 
 async def test_agent_invalid_output_is_neutral_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,9 +544,7 @@ async def test_provider_rejects_foreign_event_loop_and_concurrent_use(monkeypatc
 
 
 def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
-    from agents.run_config import ModelInputData
-
-    from fsq_agent.agent_engine._context import ModelInputFilter
+    from fsq_agent.agent_engine._context import ModelInputData, ModelInputFilter
 
     items = [
         {"role": "user", "content": "first"},
@@ -378,7 +563,7 @@ def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
         return {entries[-1].entry_id: "new bounded output"}
 
     bridge = ModelInputFilter(ToolOutputTrimSettings(recent_turns=1, max_output_chars=100, preview_chars=10), filter_outputs)
-    result = bridge(SimpleNamespace(model_data=ModelInputData(input=items, instructions="instructions")))
+    result = bridge(ModelInputData(input=items, instructions="instructions"))
 
     assert observed[0].output.startswith("[Trimmed:")
     assert observed[1].output == original[6]["output"]
@@ -392,13 +577,11 @@ def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
 
 
 def test_context_bridge_rejects_replacing_non_tool_input() -> None:
-    from agents.run_config import ModelInputData
-
-    from fsq_agent.agent_engine._context import ModelInputFilter
+    from fsq_agent.agent_engine._context import ModelInputData, ModelInputFilter
 
     bridge = ModelInputFilter(None, lambda entries: {0: "replaced user content"})
     with pytest.raises(EngineError, match="known entries"):
-        bridge(SimpleNamespace(model_data=ModelInputData(input=[{"role": "user", "content": "test"}], instructions=None)))
+        bridge(ModelInputData(input=[{"role": "user", "content": "test"}], instructions=None))
 
 
 async def test_backend_accepts_real_macos_tool_schema_without_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -429,36 +612,16 @@ async def test_backend_accepts_real_macos_tool_schema_without_mutation(monkeypat
 
 
 def _capture_tracing(monkeypatch: pytest.MonkeyPatch) -> tuple[list[dict], list[dict]]:
-    from agents.tracing import TracingProcessor
-    from agents.tracing import setup as tracing_setup
-    from agents.tracing.provider import DefaultTraceProvider
+    from fsq_agent.agent_engine import _tracing
 
     traces = []
     spans = []
 
-    class CaptureProcessor(TracingProcessor):
-        def on_trace_start(self, trace) -> None:
-            traces.append(trace.export())
+    async def capture(items):
+        traces.extend(item for item in items if item["object"] == "trace")
+        spans.extend(item for item in items if item["object"] == "trace.span")
 
-        def on_trace_end(self, trace) -> None:
-            pass
-
-        def on_span_start(self, span) -> None:
-            pass
-
-        def on_span_end(self, span) -> None:
-            spans.append(span.export())
-
-        def shutdown(self) -> None:
-            pass
-
-        def force_flush(self) -> None:
-            pass
-
-    provider = DefaultTraceProvider()
-    provider.set_disabled(False)
-    provider.set_processors([CaptureProcessor()])
-    monkeypatch.setattr(tracing_setup, "GLOBAL_TRACE_PROVIDER", provider)
+    monkeypatch.setattr(_tracing, "_export", capture)
     return traces, spans
 
 
@@ -537,17 +700,96 @@ async def test_independent_engines_preserve_per_run_tracing_choice(monkeypatch: 
         await silent_provider.aclose()
 
 
-async def test_complete_preserves_known_incomplete_message_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    response = _response("partial text")
-    response["status"] = "incomplete"
-    response["output"][0]["status"] = "incomplete"
-    provider, _client = _provider(monkeypatch, lambda request: httpx.Response(200, json=response))
+@pytest.mark.parametrize("entry", ["complete", "agent", "streamed_agent"])
+@pytest.mark.parametrize("failure_kind", ["incomplete", "incomplete_empty", "incomplete_item", "failed", "error", "refusal", "refusal_empty"])
+async def test_shared_response_failures_stop_before_output_or_tools(monkeypatch: pytest.MonkeyPatch, entry: str, failure_kind: str) -> None:
+    response = _response('{"value":"private partial output"}')
+    requests = []
+    events = []
+    if failure_kind.startswith("incomplete"):
+        response["incomplete_details"] = {"reason": "content_filter"}
+        if failure_kind == "incomplete_item":
+            response["output"][0]["status"] = "incomplete"
+        else:
+            response["status"] = "incomplete"
+        if failure_kind == "incomplete_empty":
+            response["output"] = []
+        expected_category = "incomplete"
+    elif failure_kind in {"failed", "error"}:
+        if failure_kind == "failed":
+            response["status"] = "failed"
+        response["error"] = {"code": "server_error", "message": "private provider error"}
+        expected_category = "invalid_output"
+    else:
+        response["output"][0]["content"].append({"type": "refusal", "refusal": "" if failure_kind == "refusal_empty" else "private refusal"})
+        expected_category = "refusal"
+    if entry != "complete":
+        response["output"].append({"id": "fc_forbidden", "type": "function_call", "name": "forbidden", "call_id": "call_forbidden", "arguments": "{}", "status": "completed"})
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _http_response(response, stream=entry == "streamed_agent")
+
+    async def forbidden(call: ToolCall) -> str:
+        raise AssertionError("A failed model response must not execute tools")
+
+    async def on_event(event: AgentEvent) -> None:
+        events.append(event)
+
+    provider, client = _provider(monkeypatch, respond)
     try:
-        result = await provider.get_model("test-model").complete(ModelRequest(input="test"))
-        assert result.text == "partial text"
-        assert result.finish_reason == "incomplete"
+        model = provider.get_model("test-model")
+        if entry == "complete":
+            operation = model.complete(ModelRequest(input="test"))
+        else:
+            request = AgentRequest(
+                name="test",
+                instructions="test",
+                input="test",
+                stream=entry == "streamed_agent",
+                tools=(ToolBinding(name="forbidden", description="Forbidden", parameters_schema={}, invoke=forbidden),),
+            )
+            operation = create_agent_engine().run(model, request, on_event=on_event)
+        with pytest.raises(EngineError) as failure:
+            await operation
+        assert failure.value.category == expected_category
+        if expected_category == "incomplete":
+            assert failure.value.reason == "content_filter"
+        assert "private" not in str(failure.value)
+        assert len(requests) == 1
+        assert all(event.kind == "agent_started" for event in events)
     finally:
         await provider.aclose()
+    assert client.is_closed
+
+
+@pytest.mark.parametrize("configuration", ["tool_ref", "output_node", "recent_turns", "max_output_chars", "preview_chars"])
+async def test_invalid_preflight_is_configuration_without_model_or_tool_effects(monkeypatch: pytest.MonkeyPatch, configuration: str) -> None:
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_response())
+
+    async def forbidden(call: ToolCall) -> str:
+        raise AssertionError("Invalid configuration must not invoke a tool")
+
+    schema = {"type": "object", "properties": {"field": {"$ref": "#/private_missing", "description": "private schema"}}} if configuration == "tool_ref" else {}
+    output = OutputContract(name="Invalid", schema={"type": "object", "properties": {"private_field": False}}, parse=json.loads) if configuration == "output_node" else None
+    trimming = ToolOutputTrimSettings(**{configuration: -1}) if configuration in {"recent_turns", "max_output_chars", "preview_chars"} else None
+    request = AgentRequest(
+        name="test", instructions="test", input="test", tools=(ToolBinding(name="unused", description="Unused", parameters_schema=schema, invoke=forbidden),), output=output, trimming=trimming
+    )
+    provider, client = _provider(monkeypatch, respond)
+    try:
+        with pytest.raises(EngineError) as failure:
+            await create_agent_engine().run(provider.get_model("test-model"), request)
+        assert failure.value.category == "configuration"
+        assert "private" not in str(failure.value)
+        assert requests == []
+    finally:
+        await provider.aclose()
+    assert client.is_closed
 
 
 @pytest.mark.parametrize("source", ["provider", "tool", "filter", "unknown_tool"])
@@ -596,17 +838,19 @@ async def test_trace_errors_never_export_private_exception_details(monkeypatch: 
         await provider.aclose()
 
 
-@pytest.mark.parametrize("arguments", ["", " ", "{", "[]", "null"])
-async def test_invalid_tool_input_returns_formatted_failure_without_execution(monkeypatch: pytest.MonkeyPatch, arguments: str) -> None:
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("arguments", ["", " ", "{", "[]", "null", '{"value":NaN}', '{"value":[Infinity]}', '{"value":{"nested":-Infinity}}'])
+async def test_invalid_tool_input_returns_formatted_failure_without_execution(monkeypatch: pytest.MonkeyPatch, arguments: str, stream: bool) -> None:
     payloads = []
     failures = []
+    events = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         payloads.append(json.loads(request.content))
         response = _response("Handled invalid input.")
         if len(payloads) == 1:
             response["output"] = [{"id": "fc_invalid", "type": "function_call", "name": "echo", "call_id": "call_invalid", "arguments": arguments, "status": "completed"}]
-        return httpx.Response(200, json=response)
+        return _http_response(response, stream=stream)
 
     async def forbidden_invocation(call: ToolCall) -> str:
         raise AssertionError("Invalid input must not execute tools")
@@ -615,10 +859,13 @@ async def test_invalid_tool_input_returns_formatted_failure_without_execution(mo
         failures.append(failure)
         return json.dumps({"status": "failed", "tool_name": failure.name, "error": failure.message})
 
+    async def on_event(event: AgentEvent) -> None:
+        events.append(event)
+
     provider, _client = _provider(monkeypatch, respond)
     try:
         tool = ToolBinding(name="echo", description="Echo", parameters_schema={"type": "object", "properties": {}}, invoke=forbidden_invocation, on_invalid_input=on_invalid_input)
-        result = await create_agent_engine().run(provider.get_model("test-model"), AgentRequest(name="test", instructions="test", input="test", tools=(tool,)))
+        result = await create_agent_engine().run(provider.get_model("test-model"), AgentRequest(name="test", instructions="test", input="test", tools=(tool,), stream=stream), on_event=on_event)
         assert result.final_output == "Handled invalid input."
         assert len(payloads) == 2
         assert len(failures) == 1
@@ -627,8 +874,114 @@ async def test_invalid_tool_input_returns_formatted_failure_without_execution(mo
         output = next(item for item in payloads[1]["input"] if item.get("type") == "function_call_output")
         assert output["call_id"] == "call_invalid"
         assert json.loads(output["output"])["status"] == "failed"
+        if stream:
+            assert next(event.arguments for event in events if event.kind == "tool_called") == arguments
     finally:
         await provider.aclose()
+
+
+@pytest.mark.parametrize("interrupt_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("stream", [False, True])
+def test_process_interruption_waits_for_sibling_cleanup(monkeypatch: pytest.MonkeyPatch, interrupt_type: type[BaseException], stream: bool) -> None:
+    loop = asyncio.new_event_loop()
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cleaned = asyncio.Event()
+    interruption = interrupt_type("synthetic interrupt")
+    response = _response()
+    response["output"] = [{"id": f"fc_{name}", "type": "function_call", "name": name, "call_id": f"call_{name}", "arguments": "{}", "status": "completed"} for name in ("wait", "interrupt")]
+
+    async def wait(call: ToolCall) -> str:
+        started.set()
+        try:
+            await blocked.wait()
+        finally:
+            loop.call_soon(cleanup_release.set)
+            await cleanup_release.wait()
+            cleaned.set()
+        return "unused"
+
+    async def interrupt(call: ToolCall) -> str:
+        await started.wait()
+        raise interruption
+
+    provider, client = _provider(monkeypatch, lambda request: _http_response(response, stream=stream))
+    request = AgentRequest(
+        name="interrupt",
+        instructions="test",
+        input="test",
+        stream=stream,
+        tools=tuple(ToolBinding(name=name, description=name, parameters_schema={}, invoke=invoke) for name, invoke in (("wait", wait), ("interrupt", interrupt))),
+    )
+
+    async def observe():
+        try:
+            await create_agent_engine().run(provider.get_model("test-model"), request)
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError) as error:
+            return error
+        return None
+
+    execution = loop.create_task(observe())
+    try:
+        try:
+            outcome = loop.run_until_complete(execution)
+        except (KeyboardInterrupt, SystemExit):
+            outcome = None
+        assert outcome is interruption
+        assert execution.done()
+        assert cleaned.is_set()
+        assert not asyncio.all_tasks(loop)
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(provider.aclose())
+        loop.close()
+    assert client.is_closed
+
+
+@pytest.mark.parametrize("interrupt_type", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("has_primary", [False, True])
+def test_stream_close_interruption_is_delivered_to_owner(interrupt_type: type[BaseException], has_primary: bool) -> None:
+    from fsq_agent.agent_engine._runner import _close_stream
+
+    loop = asyncio.new_event_loop()
+    interruption = interrupt_type("synthetic close interrupt")
+    primary = RuntimeError("primary error") if has_primary else None
+
+    class InterruptedStream:
+        async def close(self) -> None:
+            raise interruption
+
+    async def observe():
+        try:
+            await _close_stream(InterruptedStream(), primary)
+        except (KeyboardInterrupt, SystemExit) as error:
+            return error
+        return None
+
+    execution = loop.create_task(observe())
+    try:
+        escaped = False
+        try:
+            outcome = loop.run_until_complete(execution)
+        except (KeyboardInterrupt, SystemExit):
+            escaped = True
+            outcome = None
+        assert not escaped
+        assert outcome is (None if has_primary else interruption)
+        assert execution.done()
+        assert not asyncio.all_tasks(loop)
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
 
 
 async def test_client_cleanup_failure_retains_resources_for_retry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -656,15 +1009,16 @@ async def test_client_cleanup_failure_retains_resources_for_retry(monkeypatch: p
         await close()
 
 
-async def test_trace_error_safety_leaves_unrelated_sdk_spans_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    from agents import custom_span, trace
+async def test_trace_error_safety_leaves_unrelated_spans_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fsq_agent.agent_engine._tracing import TraceSession, span
 
     _traces, spans = _capture_tracing(monkeypatch)
     provider, _client = _provider(monkeypatch, lambda request: httpx.Response(200, json=_response()))
     try:
-        await create_agent_engine().run(provider.get_model("test-model"), AgentRequest(name="test", instructions="test", input="test", tracing_enabled=True))
-        with trace("unrelated"), custom_span("unrelated") as span:
-            span.set_error({"message": "caller-owned error", "data": {"category": "caller"}})
+        async with TraceSession("unrelated", enabled=True):
+            with span("custom", name="unrelated") as unrelated:
+                unrelated["error"] = {"message": "caller-owned error", "data": {"category": "caller"}}
+                await create_agent_engine().run(provider.get_model("test-model"), AgentRequest(name="test", instructions="test", input="test", tracing_enabled=True))
         assert spans[-1]["error"] == {"message": "caller-owned error", "data": {"category": "caller"}}
     finally:
         await provider.aclose()

@@ -3,32 +3,25 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 from copy import deepcopy
 from typing import TYPE_CHECKING
 
-from agents import FunctionTool
-from agents.agent_output import AgentOutputSchemaBase
-from agents.exceptions import ModelBehaviorError
-from agents.strict_schema import ensure_strict_json_schema
 from openai import APITimeoutError
 
-from ._contracts import AgentEvent, EngineError, ImageContent, ModelResult, TextContent, TokenUsage, ToolCall, ToolInputFailure
+from ._contracts import AgentEvent, EngineError, ImageContent, ModelResult, TextContent, TokenUsage
+from ._schema import ensure_strict_json_schema
 
 if TYPE_CHECKING:
-    from agents.items import ModelResponse, TResponseInputItem
-    from agents.stream_events import StreamEvent
-    from agents.tool_context import ToolContext
-    from agents.usage import Usage
+    from openai.types.responses import Response
 
     from ._contracts import Message, OutputContract, ToolBinding
 
 
-def model_input(value: str | tuple[Message, ...]) -> str | list[TResponseInputItem]:
+def model_input(value: str | tuple[Message, ...]) -> list[dict]:
     if isinstance(value, str):
-        return value
+        return [{"content": value, "role": "user"}]
     messages = []
     for message in value:
         content = []
@@ -46,79 +39,104 @@ def model_input(value: str | tuple[Message, ...]) -> str | list[TResponseInputIt
     return messages
 
 
-def token_usage(usage: Usage | None) -> TokenUsage | None:
-    if usage is None or not usage.requests:
+def token_usage(usage: object) -> TokenUsage | None:
+    values = [getattr(usage, name, None) for name in ("input_tokens", "output_tokens", "total_tokens")]
+    if not all(type(value) is int and value >= 0 for value in values):
         return None
-    return TokenUsage(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens, total_tokens=usage.total_tokens, requests=usage.requests)
+    return TokenUsage(input_tokens=values[0], output_tokens=values[1], total_tokens=values[2], requests=1)
 
 
-def model_result(response: ModelResponse) -> ModelResult:
-    pieces = []
-    refused = False
-    incomplete = False
-    for item in response.output:
-        incomplete = incomplete or getattr(item, "status", None) == "incomplete"
-        if item.type != "message":
-            continue
-        for part in item.content:
-            if part.type == "output_text":
-                pieces.append(part.text)
-            elif part.type == "refusal":
-                refused = True
-    finish_reason = "refusal" if refused else "incomplete" if incomplete else "unknown"
-    return ModelResult(text="\n".join(pieces), usage=token_usage(response.usage), finish_reason=finish_reason)
-
-
-def sdk_tool(binding: ToolBinding, invocation_tasks: set[asyncio.Task]) -> FunctionTool:
-    async def invoke(context: ToolContext, raw_arguments: str) -> str:
-        task = asyncio.current_task()
-        if task is not None:
-            invocation_tasks.add(task)
-            task.add_done_callback(invocation_tasks.discard)
-        try:
-            arguments = json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            arguments = None
-        if not isinstance(arguments, dict):
-            failure = ToolInputFailure(name=binding.name, call_id=context.tool_call_id, message="Tool arguments must be a JSON object.")
-            if binding.on_invalid_input is not None:
-                return await binding.on_invalid_input(failure)
-            return json.dumps({"error": failure.message})
-        return await binding.invoke(ToolCall(name=binding.name, arguments=arguments, call_id=context.tool_call_id))
-
-    return FunctionTool(
-        name=binding.name,
-        description=binding.description,
-        params_json_schema=deepcopy(binding.parameters_schema),
-        strict_json_schema=binding.strict,
-        on_invoke_tool=invoke,
-        _use_default_failure_error_function=False,
+def add_usage(total: TokenUsage | None, measured: TokenUsage | None) -> TokenUsage | None:
+    if total is None:
+        return measured
+    if measured is None:
+        return total
+    return TokenUsage(
+        input_tokens=total.input_tokens + measured.input_tokens,
+        output_tokens=total.output_tokens + measured.output_tokens,
+        total_tokens=total.total_tokens + measured.total_tokens,
+        requests=total.requests + measured.requests,
     )
 
 
-class SDKOutputContract(AgentOutputSchemaBase):
-    def __init__(self, contract: OutputContract) -> None:
-        self._contract = contract
-        schema = deepcopy(contract.schema)
-        self._schema = ensure_strict_json_schema(schema) if contract.strict else schema
+def _incomplete_response(response: Response) -> EngineError:
+    reason = "content_filter" if _field(_field(response, "incomplete_details"), "reason") == "content_filter" else "incomplete"
+    return EngineError("incomplete", "Model provider returned an incomplete response.", reason=reason)
 
-    def is_plain_text(self) -> bool:
-        return False
 
-    def name(self) -> str:
-        return self._contract.name
+def check_response(response: Response) -> None:
+    status = _field(response, "status")
+    if status == "incomplete":
+        raise _incomplete_response(response)
+    if status != "completed" or _field(response, "error") is not None:
+        raise EngineError("invalid_output", "Model provider returned an invalid response or structured output.")
+    output = _field(response, "output")
+    if not isinstance(output, list):
+        raise EngineError("invalid_output", "Model provider returned an invalid response.")
+    for item in output:
+        if _field(item, "status") == "incomplete":
+            raise _incomplete_response(response)
+        if _field(item, "type") == "message":
+            content = _field(item, "content")
+            if not isinstance(content, list):
+                raise EngineError("invalid_output", "Model provider returned an invalid message.")
+            if any(_field(part, "type") == "refusal" for part in content):
+                raise EngineError("refusal", "Model provider refused the request.")
 
-    def json_schema(self) -> dict:
-        return self._schema
 
-    def is_strict_json_schema(self) -> bool:
-        return self._contract.strict
+def model_result(response: Response) -> ModelResult:
+    check_response(response)
+    pieces = [part.text for item in response.output if item.type == "message" for part in item.content if part.type == "output_text"]
+    return ModelResult(text="\n".join(pieces), usage=token_usage(response.usage))
 
-    def validate_json(self, json_str: str):
-        try:
-            return self._contract.parse(json_str)
-        except (ValueError, TypeError):
-            raise ModelBehaviorError("Structured model output failed validation.") from None
+
+def response_parameters(
+    model_name: str,
+    input_items: list[dict],
+    instructions: str | None,
+    *,
+    tools: tuple[ToolBinding, ...] = (),
+    output: OutputContract | None = None,
+    agent: bool = False,
+) -> dict:
+    parameters = {
+        "model": model_name,
+        "input": input_items,
+        "include": [],
+        "tools": [
+            {
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": ensure_strict_json_schema(tool.parameters_schema) if tool.strict else deepcopy(tool.parameters_schema),
+                "strict": tool.strict,
+            }
+            for tool in tools
+        ],
+    }
+    if instructions is not None:
+        parameters["instructions"] = instructions
+    if agent:
+        parameters["reasoning"] = {"effort": "medium"}
+        text = {"verbosity": "medium"}
+        if output is not None:
+            text["format"] = {
+                "type": "json_schema",
+                "name": "final_output",
+                "schema": ensure_strict_json_schema(output.schema) if output.strict else deepcopy(output.schema),
+                "strict": output.strict,
+            }
+        parameters["text"] = text
+    return parameters
+
+
+def response_items(response: Response) -> list[dict]:
+    if not isinstance(response.output, list):
+        raise EngineError("invalid_output", "Model provider returned an invalid response.")
+    items = [item.model_dump(exclude_unset=True) for item in response.output]
+    if any(item.get("type") not in {"message", "function_call", "reasoning"} for item in items):
+        raise EngineError("invalid_output", "Model provider returned an unsupported response item.")
+    return items
 
 
 def _field(value: object, name: str):
@@ -132,39 +150,31 @@ def _item_text(value: object) -> str:
     return "\n".join(text for part in content if isinstance(text := _field(part, "text"), str))
 
 
-def semantic_event(event: StreamEvent, calls: dict[str, ToolCall]) -> AgentEvent | None:
-    if event.type == "agent_updated_stream_event":
-        return AgentEvent(kind="agent_started", agent_name=event.new_agent.name)
-    if event.type != "run_item_stream_event":
+def _reject_json_constant(value: str) -> None:
+    raise ValueError("Tool arguments must contain valid JSON values.")
+
+
+def decode_tool_arguments(raw_arguments: object) -> dict | None:
+    if not isinstance(raw_arguments, str):
         return None
-    raw = event.item.raw_item
-    call_id = _field(raw, "call_id") or _field(event.item, "call_id")
-    call_id = call_id if isinstance(call_id, str) else None
-    name = _field(event.item, "tool_name") or _field(raw, "name")
-    name = name if isinstance(name, str) else None
-    if event.name == "tool_called":
-        arguments = _field(raw, "arguments")
-        if isinstance(arguments, str):
-            try:
-                decoded = json.loads(arguments)
-            except json.JSONDecodeError:
-                decoded = arguments
-            arguments = decoded if isinstance(decoded, dict | str) else arguments
-        elif not isinstance(arguments, dict):
-            arguments = None
-        if call_id and name and isinstance(arguments, dict):
-            calls[call_id] = ToolCall(name=name, arguments=arguments, call_id=call_id)
-        return AgentEvent(kind="tool_called", tool_name=name, call_id=call_id, arguments=arguments)
-    if event.name == "tool_output":
-        remembered = calls.pop(call_id, None) if call_id else None
-        output = _field(event.item, "output")
-        if not isinstance(output, str):
-            output = json.dumps(output, ensure_ascii=False)
-        return AgentEvent(kind="tool_output", tool_name=name or (remembered.name if remembered else None), call_id=call_id, output=output)
-    if event.name == "message_output_created":
-        return AgentEvent(kind="message", text=_item_text(raw))
-    if event.name == "reasoning_item_created":
-        summary = _field(raw, "summary")
+    try:
+        arguments = json.loads(raw_arguments, parse_constant=_reject_json_constant)
+    except ValueError:
+        return None
+    return arguments if isinstance(arguments, dict) else None
+
+
+def semantic_event(item: dict) -> AgentEvent | None:
+    if item["type"] == "function_call":
+        raw_arguments = item.get("arguments")
+        arguments = decode_tool_arguments(raw_arguments)
+        if arguments is None:
+            arguments = raw_arguments if isinstance(raw_arguments, str) else None
+        return AgentEvent(kind="tool_called", tool_name=item.get("name"), call_id=item.get("call_id"), arguments=arguments)
+    if item["type"] == "message":
+        return AgentEvent(kind="message", text=_item_text(item))
+    if item["type"] == "reasoning":
+        summary = item.get("summary")
         if isinstance(summary, list):
             summary = "\n".join(text for part in summary if isinstance(text := _field(part, "text"), str))
         if isinstance(summary, str) and summary:
@@ -185,17 +195,4 @@ def engine_error(error: Exception) -> EngineError:
         return EngineError("unavailable", "Model provider or selected model is unavailable.", status_code=status_code)
     if isinstance(error, TimeoutError | APITimeoutError):
         return EngineError("timeout", "Model operation timed out.")
-    name = type(error).__name__
-    if name == "ModelRefusalError":
-        return EngineError("refusal", "Model provider refused the request.")
-    if name == "MaxTurnsExceeded":
-        return EngineError("max_turns", "Agent exceeded the configured turn limit.")
-    if name == "UserError":
-        return EngineError("configuration", "Agent backend configuration is invalid.")
-    if name == "ModelBehaviorError":
-        message = str(error).lower()
-        if "response.incomplete" in message or "status=incomplete" in message:
-            reason = "content_filter" if "content_filter" in message else "incomplete"
-            return EngineError("incomplete", "Model provider returned an incomplete response.", reason=reason)
-        return EngineError("invalid_output", "Model provider returned an invalid response or structured output.")
     return EngineError("runtime", "Model backend operation failed.", status_code=status_code)

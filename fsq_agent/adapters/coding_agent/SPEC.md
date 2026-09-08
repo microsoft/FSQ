@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Implement public SDK-neutral Agent runtime protocols through `agent_engine`. This adapter owns FSQ request assembly, configured model access, capability/helper tool bindings, business output contracts, neutral-event-to-RunEvent conversion, and FSQ context/artifact policy. It does not construct SDK agents, tools, clients, results, or raw protocol messages. Dynamic planning and verification policy remain in Agent; execution recording and platform automation remain in their owning modules.
+Implement public SDK-neutral Agent runtime protocols through `agent_engine`. This adapter owns FSQ request assembly, configured model access, capability/helper tool bindings, business output contracts, neutral-event-to-RunEvent conversion, and FSQ context/artifact policy. It does not construct concrete backend agents, protocol tools, clients, results, or raw protocol messages. Dynamic planning and verification policy remain in Agent; execution recording and platform automation remain in their owning modules.
 
 ## Dependencies
 
@@ -35,7 +35,7 @@ The runtime implements required public `run_task`, `run_pre_plan`, and `run_veri
 - Architecture level: Level 3 Layered Application adapter.
 - Public API: runtime factory plus the documented `DefaultCodingAgentRuntime` concrete implementation export.
 - Internal modules: all `_*.py` implementation files.
-- Domain boundaries: FSQ-to-generic-agent request and result assembly; SDK mechanisms remain inside `agent_engine`.
+- Domain boundaries: FSQ-to-generic-agent request and result assembly; inference protocol, continuation, tool dispatch, and tracing mechanisms remain inside `agent_engine`.
 - Boundary models: FSQ values come from `models` or public Agent protocols; generic inference values come from `agent_engine`.
 - Dependency direction: composition roots depend on this adapter; inward packages never do.
 - Cross-module boundary: adapter implementation imports Agent-owned behavior only from `fsq_agent.agent`; imports from `fsq_agent.agent._*` are forbidden.
@@ -47,13 +47,13 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 
 ## Current Invariants
 
-- Main execution, pre-plan, and verification preserve current SDK behavior, model settings, tracing, context trimming, event metadata, and structured output contracts.
+- Main execution, pre-plan, and verification use the same neutral engine contracts for model settings, tracing, context trimming, event metadata, and structured output. The adapter does not depend on OpenAI Agents SDK or implement a tool-continuation loop.
 - Runtime settings are consumed through `settings.agent_runtime`. FSQ-owned implementation names, progress text, and result summaries describe the neutral agent runtime rather than SDK objects.
 - Main and verification provenance records use `agent_runtime.runner` and `agent_runtime.verifier`. They are runtime summaries, not capability invocations or recordable Case commands.
 - Startup readiness uses the `Agent runtime ready` title, and runtime failures use `Agent run failed`; event types and payload field shapes are stable.
 - All three operations call `AgentEngine.run` with the selected neutral model. Main execution requests streaming; output contracts are derived from the authoritative FSQ Pydantic models and their parsers, not duplicated schemas or SDK classes.
 - Tracing readiness is computed from the configured switch and OpenAI export-key presence, then passed as an effective neutral choice. The private backend supplies fixed GPT agent parameters.
-- Context policy receives only ordered post-turn-trimmer tool-output entries. It preserves tool-count protection, artifact contents/references, previews, and secret handling and returns output replacements only; SDK history and private reasoning state are not exposed.
+- Context policy receives only ordered post-turn-trimmer tool-output entries. It preserves tool-count protection, artifact contents/references, previews, and secret handling and returns output replacements only; vendor transcripts and private reasoning state are not exposed.
 - Unnamed historical tool-output entries use `runtime_tool` when a new artifact must be written. Existing artifact references retain their saved paths and are never renamed or reconstructed from current tool labels.
 - Neutral tool events are the single source of model-call events. FSQ adds run/task identity, redaction, capability metadata, display text, and existing persisted event types without duplicate calls/events.
 - Capability calls continue through Core `StepRunner`; AgentTool calls continue through Tools-owned behavior.
