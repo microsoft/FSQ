@@ -88,7 +88,7 @@ class AgentToolAdapter:
                     result = await self._execute_through_runner(tool_name, arguments)
                 else:
                     result = await self.executor.execute(AgentToolCall(tool_name=tool_name, arguments=arguments))
-            # The SDK callback boundary normalizes all tool failures into structured results.
+            # The tool callback boundary normalizes all tool failures into structured results.
             except Exception as exc:  # noqa: BLE001
                 result = AgentToolResult(
                     tool_name=tool_name,

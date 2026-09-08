@@ -294,7 +294,7 @@ async def test_dynamic_summary_redacts_before_metadata_length_limit(tmp_path: Pa
 async def test_dynamic_workspace_identity_uses_configured_user_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path / "different-directory-name")
     selected_root = tmp_path / "selected-config"
-    settings.openai_agents.user_config_root = selected_root
+    settings.agent_runtime.user_config_root = selected_root
     observed_roots = []
 
     def list_registry(user_config_root=None):

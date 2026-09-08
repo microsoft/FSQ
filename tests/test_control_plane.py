@@ -607,6 +607,26 @@ def test_evidence_projection_rejects_escape_and_reads_latest_artifacts(tmp_path:
     assert "super-secret" not in json.dumps(state.snapshot(request_id))
 
 
+@pytest.mark.parametrize(
+    ("ready_title", "failure_title", "failure_category"),
+    [("SDK agent ready", "SDK run failed", "sdk_error"), ("Agent runtime ready", "Agent run failed", "agent_runtime_error")],
+)
+def test_evidence_projection_preserves_runtime_labels_as_data(tmp_path: Path, ready_title: str, failure_title: str, failure_category: str) -> None:
+    state = ControlPlaneState()
+    request_id = state.reserve(workspace_name="checkout", platform="android", target_id="device", mode="explore", source={"goal": "Go"})
+    projection = EvidenceProjection(state, request_id, tmp_path / "runs")
+    projection.project_run_event(RunEvent(run_id="run-1", task_id="task", type="planning_update", title=ready_title))
+    projection.project_run_event(
+        RunEvent(run_id="run-1", task_id="task", type="run_failed", title=failure_title, message="Runtime failed.", payload={"failure_category": failure_category, "failure_reason": failure_category})
+    )
+
+    events = state.snapshot(request_id)["events"]
+    assert [event["label"] for event in events] == [ready_title, failure_title]
+    assert "status" not in events[0]
+    assert events[1]["status"] == "failed"
+    assert events[1]["payload"] == {"failure_category": failure_category, "failure_reason": failure_category}
+
+
 def test_strict_step_results_project_to_case_steps_without_event_status_override(tmp_path: Path) -> None:
     state = ControlPlaneState()
     request_id = state.reserve(

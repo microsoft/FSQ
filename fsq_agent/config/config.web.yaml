@@ -1,4 +1,4 @@
-openai_agents:
+agent_runtime:
   max_turns: 50
   tracing_enabled: true
 

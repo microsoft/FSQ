@@ -89,18 +89,18 @@ class GitHubCopilotModel:
 
 
 def build_github_copilot_client_config(settings: Settings) -> ProviderClientConfig:
-    cached_provider_token = _load_provider_token(settings.openai_agents.provider_token)
+    cached_provider_token = _load_provider_token(settings.agent_runtime.provider_token)
     if cached_provider_token:
         return _client_config_from_cached_provider_token(settings, cached_provider_token)
     return refresh_github_copilot_client_config(settings)
 
 
 def refresh_github_copilot_client_config(settings: Settings) -> ProviderClientConfig:
-    github_payload = settings.openai_agents.github_token
+    github_payload = settings.agent_runtime.github_token
     github_token = _load_github_token(github_payload)
     if github_token is None:
         raise ConfigurationError("GitHub Copilot authentication is not configured. Authenticate in Control Plane Config.")
-    user_config_root = settings.openai_agents.user_config_root
+    user_config_root = settings.agent_runtime.user_config_root
     if user_config_root is None:
         raise ConfigurationError("GitHub Copilot user configuration root is unavailable.")
     plan = _get_copilot_plan(github_token)
@@ -111,12 +111,12 @@ def refresh_github_copilot_client_config(settings: Settings) -> ProviderClientCo
         "plan": plan,
     }
     activate_github_copilot_provider(
-        model=settings.openai_agents.model,
+        model=settings.agent_runtime.model,
         github_token=github_payload or {},
         provider_token=provider_payload,
         user_config_root=user_config_root,
     )
-    settings.openai_agents.provider_token = provider_payload
+    settings.agent_runtime.provider_token = provider_payload
     return _client_config_from_cached_provider_token(
         settings,
         CachedCopilotProviderToken(token=copilot_token.token, expires_at=copilot_token.expires_at, plan=plan),
@@ -127,7 +127,7 @@ def _client_config_from_cached_provider_token(
     settings: Settings,
     provider_token: CachedCopilotProviderToken,
 ) -> ProviderClientConfig:
-    model = settings.openai_agents.model.strip()
+    model = settings.agent_runtime.model.strip()
     if not model:
         raise ConfigurationError("GitHub Copilot model name is required.")
     return ProviderClientConfig(

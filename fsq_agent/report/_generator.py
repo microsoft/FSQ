@@ -79,7 +79,7 @@ class ReportGenerator:
         }
 
     def _parse_runner_output(self, steps: list[StepResult]) -> AgentFinalOutput | None:
-        runner_steps = [step for step in steps if step.tool_name == "openai_agents.runner"]
+        runner_steps = [step for step in steps if step.tool_name == "agent_runtime.runner"]
         if not runner_steps:
             return None
         raw_output = runner_steps[-1].tool_output or runner_steps[-1].actual_outcome

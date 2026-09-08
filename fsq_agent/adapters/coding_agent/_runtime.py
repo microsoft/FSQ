@@ -54,23 +54,23 @@ _RUNTIME_TOOL_NAMES = {
 }
 
 
-def _sdk_failure_metadata(exc: BaseException) -> dict[str, str]:
+def _runtime_failure_metadata(exc: BaseException) -> dict[str, str]:
     if isinstance(exc, EngineError) and exc.category == "incomplete" and exc.reason == "content_filter":
         return {
             "failure_category": "provider_content_filter",
             "failure_reason": "content_filter",
-            "failure_summary": "OpenAI Agents SDK run ended with an incomplete provider response due to content filtering.",
+            "failure_summary": "Agent runtime execution ended with an incomplete provider response due to content filtering.",
         }
     if isinstance(exc, EngineError) and exc.category == "incomplete":
         return {
             "failure_category": "provider_response_incomplete",
             "failure_reason": "incomplete",
-            "failure_summary": "OpenAI Agents SDK run ended with an incomplete provider response.",
+            "failure_summary": "Agent runtime execution ended with an incomplete provider response.",
         }
     return {
-        "failure_category": "sdk_error",
-        "failure_reason": "sdk_error",
-        "failure_summary": "OpenAI Agents SDK run failed before producing structured verification output.",
+        "failure_category": "agent_runtime_error",
+        "failure_reason": "agent_runtime_error",
+        "failure_summary": "Agent runtime execution failed before producing structured verification output.",
     }
 
 
@@ -124,7 +124,7 @@ class _RecentToolOutputInputFilter:
         call_id = entry.call_id or ""
         if call_id in self.artifact_paths_by_call_id:
             return self.artifact_paths_by_call_id[call_id]
-        tool_name = entry.tool_name or "sdk_tool"
+        tool_name = entry.tool_name or "runtime_tool"
         path = self.artifact_store.write(tool_name, entry.output, {"source": "model_input_filter", "call_id": call_id})
         if not path:
             return None
@@ -150,7 +150,7 @@ class _RecentToolOutputInputFilter:
         return False
 
 
-class OpenAIAgentsRuntime:
+class DefaultCodingAgentRuntime:
     def __init__(
         self,
         settings: Settings,
@@ -204,7 +204,7 @@ class OpenAIAgentsRuntime:
                     task_id=task.id,
                     type="planning_update",
                     title="Runtime startup started",
-                    message="Preparing provider, harness, tools, and SDK agent for main execution.",
+                    message="Preparing provider, harness, tools, and agent runtime for main execution.",
                     payload={"platform": self.settings.harness.platform},
                 ),
             )
@@ -216,7 +216,7 @@ class OpenAIAgentsRuntime:
                     type="planning_update",
                     title="Provider setup started",
                     message="Creating the configured model provider session.",
-                    payload={"provider": self.settings.openai_agents.provider, "model": self.settings.openai_agents.model},
+                    payload={"provider": self.settings.agent_runtime.provider, "model": self.settings.agent_runtime.model},
                 ),
             )
             provider_session = build_model_provider_session(self.settings)
@@ -229,7 +229,7 @@ class OpenAIAgentsRuntime:
                     type="planning_update",
                     title="Provider setup completed",
                     message="Model provider session is ready for the main execution agent.",
-                    payload={"provider": self.settings.openai_agents.provider, "model": self.settings.openai_agents.model},
+                    payload={"provider": self.settings.agent_runtime.provider, "model": self.settings.agent_runtime.model},
                 ),
             )
             try:
@@ -263,7 +263,7 @@ class OpenAIAgentsRuntime:
                         task_id=task.id,
                         type="planning_update",
                         title="Tool setup started",
-                        message="Building AgentTools and platform tools for the SDK agent.",
+                        message="Building AgentTools and platform tools for the agent runtime.",
                     ),
                 )
                 harness_adapter = HarnessToolAdapter(
@@ -290,7 +290,7 @@ class OpenAIAgentsRuntime:
                         task_id=task.id,
                         type="planning_update",
                         title="Tool setup completed",
-                        message="SDK tools are ready for main execution.",
+                        message="AgentTools and platform tools are ready for main execution.",
                         payload={"agent_tool_count": len(agent_tools), "platform_tool_count": len(harness_tools)},
                     ),
                 )
@@ -308,7 +308,7 @@ class OpenAIAgentsRuntime:
                         run_id=run_id,
                         task_id=task.id,
                         type="planning_update",
-                        title="SDK agent ready",
+                        title="Agent runtime ready",
                         message="Main execution agent is ready to start streamed planning.",
                         payload={"tool_count": len(agent_tools) + len(harness_tools)},
                     ),
@@ -324,10 +324,10 @@ class OpenAIAgentsRuntime:
                     ),
                 )
                 result = await self._run_agent(model, request, run_id, task.id, event_sink)
-            # SDK and provider packages raise implementation-specific exceptions that become failed steps.
+            # Engine and provider packages raise implementation-specific exceptions that become failed steps.
             except Exception as exc:  # noqa: BLE001
                 duration_ms = int((time.perf_counter() - started) * 1000)
-                failure_metadata = _sdk_failure_metadata(exc)
+                failure_metadata = _runtime_failure_metadata(exc)
                 error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
                 await self._emit(
                     event_sink,
@@ -335,7 +335,7 @@ class OpenAIAgentsRuntime:
                         run_id=run_id,
                         task_id=task.id,
                         type="run_failed",
-                        title="SDK run failed",
+                        title="Agent run failed",
                         message=error_message,
                         duration_ms=duration_ms,
                         payload=failure_metadata,
@@ -348,14 +348,14 @@ class OpenAIAgentsRuntime:
                         actual_outcome=failure_metadata["failure_summary"],
                         duration_ms=duration_ms,
                         error=error_message,
-                        tool_name="openai_agents.runner",
+                        tool_name="agent_runtime.runner",
                         tool_output=failure_metadata,
                     )
                 ]
         # Runtime startup dependencies may fail with package-specific exceptions that become failed steps.
         except Exception as exc:  # noqa: BLE001
             duration_ms = int((time.perf_counter() - started) * 1000)
-            failure_metadata = _sdk_failure_metadata(exc)
+            failure_metadata = _runtime_failure_metadata(exc)
             error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
             await self._emit(
                 event_sink,
@@ -363,7 +363,7 @@ class OpenAIAgentsRuntime:
                     run_id=run_id,
                     task_id=task.id,
                     type="run_failed",
-                    title="SDK run failed",
+                    title="Agent run failed",
                     message=error_message,
                     duration_ms=duration_ms,
                     payload=failure_metadata,
@@ -376,7 +376,7 @@ class OpenAIAgentsRuntime:
                     actual_outcome=failure_metadata["failure_summary"],
                     duration_ms=duration_ms,
                     error=error_message,
-                    tool_name="openai_agents.runner",
+                    tool_name="agent_runtime.runner",
                     tool_output=failure_metadata,
                 )
             ]
@@ -390,10 +390,10 @@ class OpenAIAgentsRuntime:
                 StepResult(
                     step_id=1,
                     status="failed",
-                    actual_outcome="OpenAI Agents SDK run ended before producing a streamed result.",
+                    actual_outcome="Agent runtime execution ended before producing a streamed result.",
                     duration_ms=duration_ms,
-                    error="OpenAI Agents SDK run ended before producing a streamed result.",
-                    tool_name="openai_agents.runner",
+                    error="Agent runtime execution ended before producing a streamed result.",
+                    tool_name="agent_runtime.runner",
                 )
             ]
         final_output = self.policy.coerce_agent_final_output(result.final_output) or str(result.final_output)
@@ -408,7 +408,7 @@ class OpenAIAgentsRuntime:
                 status="success",
                 actual_outcome=serialized_final_output,
                 duration_ms=duration_ms,
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
                 tool_output=final_output.model_dump(mode="json") if isinstance(final_output, AgentFinalOutput) else serialized_final_output,
             ),
         ]
@@ -716,7 +716,7 @@ class OpenAIAgentsRuntime:
                 run_id=run_id,
             )
             result = await self._run_agent(model, request, run_id, task.id, event_sink)
-        # Verifier SDK/provider failures must become reportable verification step failures.
+        # Verifier engine/provider failures must become reportable verification step failures.
         except Exception as exc:  # noqa: BLE001
             duration_ms = int((time.perf_counter() - started) * 1000)
             return [
@@ -726,7 +726,7 @@ class OpenAIAgentsRuntime:
                     actual_outcome="Evidence-based verifier agent failed before producing structured output.",
                     duration_ms=duration_ms,
                     error=self._replace_secret_values(str(exc), self._runtime_secret_values()),
-                    tool_name="openai_agents.verifier",
+                    tool_name="agent_runtime.verifier",
                 )
             ]
         finally:
@@ -742,7 +742,7 @@ class OpenAIAgentsRuntime:
                 status="success",
                 actual_outcome=serialized_final_output,
                 duration_ms=duration_ms,
-                tool_name="openai_agents.verifier",
+                tool_name="agent_runtime.verifier",
                 tool_output=final_output.model_dump(mode="json") if isinstance(final_output, AgentFinalOutput) else serialized_final_output,
             )
         ]
@@ -761,15 +761,15 @@ class OpenAIAgentsRuntime:
         if inspect.isawaitable(result):
             await result
 
-    def _sdk_tracing_disabled(self) -> bool:
-        if not self.settings.openai_agents.tracing_enabled:
+    def _tracing_disabled(self) -> bool:
+        if not self.settings.agent_runtime.tracing_enabled:
             return True
         export_api_key = os.getenv("OPENAI_API_KEY")
         return not bool(export_api_key and export_api_key.strip())
 
     def _build_request(self, *, name: str, instructions: str, model_input: str, tools: list[ToolBinding], output_type: type[BaseModel], run_id: str = "") -> AgentRequest:
-        trimming = self.settings.openai_agents.context_trimming
-        local_output = self.settings.openai_agents.local_tool_output
+        trimming = self.settings.agent_runtime.context_trimming
+        local_output = self.settings.agent_runtime.local_tool_output
         input_filter = None
         trim_settings = None
         if trimming.enabled:
@@ -794,11 +794,11 @@ class OpenAIAgentsRuntime:
             input=model_input,
             tools=tuple(tools),
             output=OutputContract(name=output_type.__name__, schema=output_type.model_json_schema(), parse=output_type.model_validate_json),
-            max_turns=self.settings.openai_agents.max_turns,
+            max_turns=self.settings.agent_runtime.max_turns,
             stream=True,
             trimming=trim_settings,
             tool_output_filter=input_filter,
-            tracing_enabled=not self._sdk_tracing_disabled(),
+            tracing_enabled=not self._tracing_disabled(),
         )
 
     async def _run_agent(self, model: Model, request: AgentRequest, run_id: str, task_id: str, event_sink: RunEventSink | None) -> AgentResult:
@@ -1021,11 +1021,11 @@ class OpenAIAgentsRuntime:
         )
 
     def _build_instructions(self, knowledge: KnowledgeBundle, skills: list[SkillBundle]) -> str:
-        prompt = self.settings.openai_agents.prompt
+        prompt = self.settings.agent_runtime.prompt
         return self.policy.build_agent_prompt(prompt, knowledge, skills)
 
     def _build_task_input(self, task: Task, runtime_policy: list[str] | None = None) -> str:
-        prompt = self.settings.openai_agents.prompt
+        prompt = self.settings.agent_runtime.prompt
         store = self._runtime_secret_store()
         return self.policy.build_task_prompt(
             prompt,
@@ -1061,7 +1061,7 @@ class OpenAIAgentsRuntime:
             return None
         try:
             payload = json.loads(text)
-        # Arbitrary malformed SDK tool output is treated as having no artifact reference.
+        # Arbitrary malformed tool output is treated as having no artifact reference.
         except json.JSONDecodeError:
             return None
         if not isinstance(payload, dict):
@@ -1146,6 +1146,6 @@ class OpenAIAgentsRuntime:
             return None
         try:
             return json.loads(text)
-        # Arbitrary malformed SDK tool output is treated as an absent JSON payload.
+        # Arbitrary malformed tool output is treated as an absent JSON payload.
         except json.JSONDecodeError:
             return None

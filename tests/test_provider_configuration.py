@@ -15,7 +15,7 @@ from fsq_agent.config import (
     load_user_provider_config,
     save_azure_openai_provider,
 )
-from fsq_agent.models import ConfigurationError, OpenAIAgentsSettings
+from fsq_agent.models import AgentRuntimeSettings, ConfigurationError
 from fsq_agent.providers import (
     GitHubDeviceCode,
     activate_github_copilot_authorization,
@@ -77,9 +77,9 @@ def test_github_client_uses_saved_custom_model_and_user_provider_token(tmp_path:
 
 
 def test_runtime_missing_github_credentials_never_starts_device_flow(tmp_path: Path) -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings(provider="github_copilot"))
-    settings.openai_agents.model = "copilot-model"
-    settings.openai_agents.user_config_root = tmp_path
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider="github_copilot"))
+    settings.agent_runtime.model = "copilot-model"
+    settings.agent_runtime.user_config_root = tmp_path
 
     with (
         patch.object(copilot, "request_github_copilot_device_code") as request_device_code,

@@ -20,20 +20,20 @@ The adapter must not be imported by Application, Agent, Execution, Core, Case DS
 
 ## Public Interface
 
-`create_coding_agent_runtime(settings, *, harness_factory=None)` is the stable composition factory and returns `CodingAgentRuntime`. `OpenAIAgentsRuntime` is a compatibility export of the canonical FSQ runtime implementation, not an SDK object. Concrete tool adapters are private. Runtime tests may inject neutral engine/provider collaborators without exposing SDK types.
+`create_coding_agent_runtime(settings, *, harness_factory=None)` is the stable composition factory and returns `CodingAgentRuntime`. `DefaultCodingAgentRuntime` is the exported concrete FSQ runtime implementation, not an SDK object. These are the only package exports; concrete tool adapters are private. Runtime tests may inject neutral engine/provider collaborators without exposing SDK types.
 
 The runtime implements required public `run_task`, `run_pre_plan`, and `run_verification` operations. It receives or constructs `CodingAgentPolicy` through the public Agent API and does not import Agent-private modules.
 
 ## Internal Structure
 
-- `__init__.py`: public factory and compatibility export.
-- `_openai_runtime.py`: FSQ runtime assembly, neutral provider/engine wiring, main/pre-plan/verification requests, context/artifact policy, and business event/result conversion.
+- `__init__.py`: public factory and concrete-runtime export.
+- `_runtime.py`: FSQ runtime assembly, neutral provider/engine wiring, main/pre-plan/verification requests, context/artifact policy, and business event/result conversion.
 - `_harness_tools.py`: capability-to-neutral ToolBinding construction and StepRunner-backed invocation.
 
 ## Python Architecture
 
 - Architecture level: Level 3 Layered Application adapter.
-- Public API: runtime factory plus the documented concrete-runtime compatibility export.
+- Public API: runtime factory plus the documented `DefaultCodingAgentRuntime` concrete implementation export.
 - Internal modules: all `_*.py` implementation files.
 - Domain boundaries: FSQ-to-generic-agent request and result assembly; SDK mechanisms remain inside `agent_engine`.
 - Boundary models: FSQ values come from `models` or public Agent protocols; generic inference values come from `agent_engine`.
@@ -43,17 +43,21 @@ The runtime implements required public `run_task`, `run_pre_plan`, and `run_veri
 
 ## Error Handling
 
-Neutral engine dependency/configuration, model, tool conversion, streaming, content filtering, timeout, and structured-output failures map to safe FSQ results/events. The adapter branches on `EngineError` categories, not SDK error strings/types. Cancellation propagates after scoped cleanup; cleanup does not overwrite the primary failure.
+Neutral engine dependency/configuration, model, tool conversion, streaming, content filtering, timeout, and structured-output failures map to safe FSQ results/events. The adapter branches on `EngineError` categories, not SDK error strings/types. Generic runtime failures use `agent_runtime_error` for both failure category and reason. Provider content-filter and incomplete-response failures retain their distinct categories and reasons. Cancellation propagates after scoped cleanup; cleanup does not overwrite the primary failure.
 
 ## Current Invariants
 
 - Main execution, pre-plan, and verification preserve current SDK behavior, model settings, tracing, context trimming, event metadata, and structured output contracts.
+- Runtime settings are consumed through `settings.agent_runtime`. FSQ-owned implementation names, progress text, and result summaries describe the neutral agent runtime rather than SDK objects.
+- Main and verification provenance records use `agent_runtime.runner` and `agent_runtime.verifier`. They are runtime summaries, not capability invocations or recordable Case commands.
+- Startup readiness uses the `Agent runtime ready` title, and runtime failures use `Agent run failed`; event types and payload field shapes are stable.
 - All three operations call `AgentEngine.run` with the selected neutral model. Main execution requests streaming; output contracts are derived from the authoritative FSQ Pydantic models and their parsers, not duplicated schemas or SDK classes.
 - Tracing readiness is computed from the configured switch and OpenAI export-key presence, then passed as an effective neutral choice. The private backend supplies fixed GPT agent parameters.
 - Context policy receives only ordered post-turn-trimmer tool-output entries. It preserves tool-count protection, artifact contents/references, previews, and secret handling and returns output replacements only; SDK history and private reasoning state are not exposed.
+- Unnamed historical tool-output entries use `runtime_tool` when a new artifact must be written. Existing artifact references retain their saved paths and are never renamed or reconstructed from current tool labels.
 - Neutral tool events are the single source of model-call events. FSQ adds run/task identity, redaction, capability metadata, display text, and existing persisted event types without duplicate calls/events.
 - Capability calls continue through Core `StepRunner`; AgentTool calls continue through Tools-owned behavior.
 - Capability tool bindings format neutral invalid-input failures through their existing failure-result shape, including capability provenance, without executing StepRunner or a platform action. The engine retains call IDs and returns the failure to the model for continuation.
 - Harness construction remains lazy and browser/application lifecycle remains explicit capability behavior.
 - CLI and Control Plane inject the same runtime factory at composition boundaries.
-- Relocation does not change CLI, HTTP/SSE, reports, evidence, provider configuration, workspace behavior, or `fsq runs`.
+- The adapter does not migrate user configuration or historical Run files. CLI and HTTP/SSE field shapes, report schemas, evidence paths, and business verdict semantics remain independent of the concrete Python runtime name.

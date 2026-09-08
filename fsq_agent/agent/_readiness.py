@@ -17,8 +17,8 @@ def check_dynamic_agent_readiness(settings: Settings) -> tuple[bool, str, str]:
         skills = SkillLoader(knowledge_settings.skills.dir).load(settings.skills)
         knowledge = PrivateKnowledgeLoader(knowledge_settings.root_dir).load_for_task(Task(description="Doctor readiness"))
         policy = CodingAgentPolicy()
-        policy.build_agent_prompt(settings.openai_agents.prompt, knowledge, skills)
-        policy.build_task_prompt(settings.openai_agents.prompt, Task(description="Doctor readiness"))
+        policy.build_agent_prompt(settings.agent_runtime.prompt, knowledge, skills)
+        policy.build_task_prompt(settings.agent_runtime.prompt, Task(description="Doctor readiness"))
         definitions = [
             *CommonPlatformTools.capability_definitions(),
             *CapabilityDefinitionFactory().platform_definitions(platform=settings.harness.platform),
@@ -31,7 +31,7 @@ def check_dynamic_agent_readiness(settings: Settings) -> tuple[bool, str, str]:
         provider = DefaultAgentToolProvider(
             file_ops,
             runtime_secret_settings=settings.runtime_secrets,
-            local_tool_output_settings=settings.openai_agents.local_tool_output,
+            local_tool_output_settings=settings.agent_runtime.local_tool_output,
             runs_dir=settings.output.runs_dir,
         )
         AgentToolRegistry.from_providers([provider])

@@ -263,7 +263,7 @@ def refresh_provider_settings(
     root = _user_config_root(user_config_root)
     config = load_user_provider_config(root)
     refreshed = settings.model_copy(deep=True)
-    provider_settings = refreshed.openai_agents
+    provider_settings = refreshed.agent_runtime
     provider_settings.provider = config.provider.type if config.provider is not None else None
     provider_settings.model = config.provider.model if config.provider is not None else ""
     provider_settings.base_url = config.provider.base_url if isinstance(config.provider, _AzureOpenAIProviderRecord) else ""

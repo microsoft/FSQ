@@ -12,7 +12,7 @@ Adapters may import public APIs from `application`, `execution`, `models`, `conf
 
 - `adapters.cli` owns the `fsq` Click command tree and exports `main`.
 - `adapters.control_plane` owns `ControlPlaneServer`, `ControlPlaneServerOptions`, `run_control_plane`, and the documented HTTP/SSE/static API.
-- `adapters.coding_agent` implements public Agent runtime protocols by assembling FSQ requests/tool bindings and consuming neutral `agent_engine` results/events. Composition roots consume its public runtime factory and the documented runtime compatibility export.
+- `adapters.coding_agent` implements public Agent runtime protocols by assembling FSQ requests/tool bindings and consuming neutral `agent_engine` results/events. Composition roots consume its public runtime factory and the documented `DefaultCodingAgentRuntime` concrete implementation export.
 
 The installed scripts target canonical `fsq_agent.adapters.cli:main`. Existing `fsq_agent.cli` and `fsq_agent.control_plane` packages remain compatibility entries for documented public symbols only, and each compatibility symbol references the canonical adapter object. Old private transport submodule imports are unsupported and absent.
 

@@ -62,7 +62,7 @@ class DynamicExecutionService:
                 safe_source_id = re.sub(re.escape(slug_value), "***", safe_source_id, flags=re.IGNORECASE)
         metadata = allocate_run(
             workspace=workspace,
-            workspace_name=_workspace_name(workspace, settings.openai_agents.user_config_root),
+            workspace_name=_workspace_name(workspace, settings.agent_runtime.user_config_root),
             platform=settings.harness.platform,
             source_id=safe_source_id,
             mode="explore",
@@ -87,7 +87,7 @@ class DynamicExecutionService:
                 metadata,
                 result.status if result.status in {"success", "failed", "inconclusive"} else "error",
                 result=RunResultSummary(summary=_redact_metadata_text(result.verification.summary, private_values, workspace)[:2000]),
-                runtime=RunRuntime(provider=settings.openai_agents.provider, model=settings.openai_agents.model),
+                runtime=RunRuntime(provider=settings.agent_runtime.provider, model=settings.agent_runtime.model),
                 artifacts=RunArtifactIndex(
                     report=result.report.path.name if result.report.format == "json" else result.report.path.with_suffix(".json").name if result.report.format == "markdown" else None,
                     report_markdown=result.report.path.name if result.report.format == "markdown" else None,

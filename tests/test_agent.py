@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from fsq_agent import FsqAgent, Task
-from fsq_agent.adapters.coding_agent._openai_runtime import OpenAIAgentsRuntime, _RecentToolOutputInputFilter
+from fsq_agent.adapters.coding_agent._runtime import DefaultCodingAgentRuntime, _RecentToolOutputInputFilter
 from fsq_agent.agent import Verifier
 from fsq_agent.agent_engine import ToolCall, ToolOutputEntry
 from fsq_agent.config import Settings
@@ -31,13 +31,13 @@ async def test_agent_run_requires_configured_model_provider_auth(tmp_path: Path,
 
     settings = Settings.model_validate(
         {
-            "openai_agents": {"provider": "azure_openai"},
+            "agent_runtime": {"provider": "azure_openai"},
             "output": {"root_dir": tmp_path / "output"},
         }
     )
     settings.output.runs_dir = tmp_path / "runs"
     with pytest.raises(ConfigurationError, match="not configured"):
-        await FsqAgent.from_settings(settings, lambda configured, *, harness_factory=None: OpenAIAgentsRuntime(configured, object())).run(task, run_id="smoke-run")
+        await FsqAgent.from_settings(settings, lambda configured, *, harness_factory=None: DefaultCodingAgentRuntime(configured, object())).run(task, run_id="smoke-run")
 
 
 class _KnowledgeLoader:
@@ -90,7 +90,7 @@ class _Runtime:
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Done","pre_plan":[],"plan_updates":[],"satisfied_criteria":["A report exists."],"unmet_criteria":[],"evidence":["Report generated"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ]
 
@@ -154,7 +154,7 @@ class _GoalRunRuntime(_Runtime):
                 actual_outcome=(
                     f'{{"status":"success","summary":"Goal done","pre_plan":[],"plan_updates":[],"satisfied_criteria":["{satisfied}"],"unmet_criteria":[],"evidence":["Goal observed"],"errors":[]}}'
                 ),
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ]
 
@@ -674,7 +674,7 @@ async def test_pre_plan_runtime_reads_page_by_index_page_id(tmp_path: Path) -> N
         encoding="utf-8",
     )
     (pages_dir / "edge_android_new_tab_page.md").write_text("# New Tab Page", encoding="utf-8")
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
 
     output = await runtime._read_knowledge_page_tool(ToolCall(name="read_knowledge_page", arguments={"page_id": "edge_android_new_tab_page"}, call_id="call-page"))
 
@@ -693,7 +693,7 @@ async def test_pre_plan_runtime_reads_from_pre_plan_knowledge_dir(tmp_path: Path
     pages_dir.mkdir(parents=True)
     (page_knowledge_dir / "index.md").write_text("# Page Graph Index", encoding="utf-8")
     (pages_dir / "edge_android_new_tab_page.md").write_text("# New Tab Page", encoding="utf-8")
-    runtime = OpenAIAgentsRuntime(
+    runtime = DefaultCodingAgentRuntime(
         _settings_with_knowledge(private_knowledge_dir, page_knowledge_dir),
         object(),
     )  # type: ignore[arg-type]
@@ -711,7 +711,7 @@ async def test_pre_plan_runtime_reads_project_knowledge_without_index(tmp_path: 
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir(parents=True)
     (knowledge_dir / "project.md").write_text("# Project Knowledge", encoding="utf-8")
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
 
     payload = json.loads(await runtime._read_knowledge_index_tool(ToolCall(name="read_knowledge_index", arguments={}, call_id="call-index")))
 
@@ -724,7 +724,7 @@ async def test_pre_plan_runtime_reads_project_knowledge_without_index(tmp_path: 
 async def test_pre_plan_runtime_returns_structured_page_read_failures(tmp_path: Path) -> None:
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir(parents=True)
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
 
     missing_payload = json.loads(await runtime._read_knowledge_page_tool(ToolCall(name="read_knowledge_page", arguments={"page_id": "missing_page"}, call_id="call-missing")))
     unsafe_payload = json.loads(await runtime._read_knowledge_page_tool(ToolCall(name="read_knowledge_page", arguments={"file": "../secret.md"}, call_id="call-unsafe")))
@@ -747,7 +747,7 @@ async def test_pre_plan_runtime_returns_structured_page_read_failures(tmp_path: 
 async def test_pre_plan_runtime_returns_empty_knowledge_when_no_project_or_index(tmp_path: Path) -> None:
     knowledge_dir = tmp_path / "knowledge"
     knowledge_dir.mkdir(parents=True)
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(knowledge_dir), object())  # type: ignore[arg-type]
 
     payload = json.loads(await runtime._read_knowledge_index_tool(ToolCall(name="read_knowledge_index", arguments={}, call_id="call-index")))
 
@@ -777,7 +777,7 @@ async def test_optional_knowledge_read_errors_are_safe_and_recoverable(tmp_path:
         target.write_bytes(b"\xffprivate-read-detail")
     else:
         monkeypatch.setattr(Path, "read_text", unreadable)
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(root), object())
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(root), object())
     tool = next(binding for binding in runtime._build_pre_plan_tools() if binding.name == tool_name)
     call = ToolCall(name=tool_name, arguments={"page_id": "page"} if tool_name == "read_knowledge_page" else {}, call_id="knowledge-call")
     output = await tool.invoke(call)
@@ -790,7 +790,7 @@ async def test_optional_knowledge_read_errors_are_safe_and_recoverable(tmp_path:
 
 
 async def test_optional_knowledge_invalid_parameters_return_safe_failure(tmp_path: Path) -> None:
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(tmp_path), object())
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(tmp_path), object())
     output = await runtime._read_knowledge_page_tool(ToolCall(name="read_knowledge_page", arguments={"page_id": ["private-invalid-value"]}, call_id="invalid-knowledge"))
     assert json.loads(output)["ok"] is False
     assert "private-invalid-value" not in output
@@ -804,7 +804,7 @@ async def test_optional_knowledge_read_cancellation_propagates(tmp_path: Path, m
     def cancelled_read(path: Path, *args, **kwargs):
         raise cancellation
 
-    runtime = OpenAIAgentsRuntime(_settings_with_knowledge(tmp_path), object())
+    runtime = DefaultCodingAgentRuntime(_settings_with_knowledge(tmp_path), object())
     tool = next(binding for binding in runtime._build_pre_plan_tools() if binding.name == tool_name)
     call = ToolCall(name=tool_name, arguments={"page_id": "page"} if tool_name == "read_knowledge_page" else {}, call_id="cancelled-knowledge")
     monkeypatch.setattr(Path, "read_text", cancelled_read)

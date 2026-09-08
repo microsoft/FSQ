@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Load private testing knowledge, recorded UI-element notes, application-specific notes, and plain-text/image knowledge assets. Provide relevant project knowledge context to the OpenAI Agents SDK agent without coupling the agent runtime to storage layout or a single upstream data source, while keeping loader diagnostics out of model-facing prompt text.
+Load private testing knowledge, recorded UI-element notes, application-specific notes, and plain-text/image knowledge assets. Provide relevant project knowledge context to the SDK-neutral agent runtime without coupling that runtime to storage layout or a single upstream data source, while keeping loader diagnostics out of model-facing prompt text.
 
 ## Dependencies
 
@@ -22,6 +22,16 @@ Current `__init__.py` exports via `__all__`:
 - `__init__.py`: Public exports only.
 - `_loader.py`: Knowledge provider protocol, directory-backed provider, file discovery, and loader aggregation.
 - `SPEC.md`: Module design.
+
+## Python Architecture
+
+- Architecture level: 2 Simple Package.
+- Public API: knowledge provider/loader types and `KnowledgeBundle` exported from `__init__.py`.
+- Internal modules: `_loader.py` owns private loading mechanics.
+- Domain boundaries: advisory knowledge loading and operational diagnostics, not execution, runtime construction, or user-file migration.
+- Boundary models: `Task` and `KnowledgeBundle` from `models`.
+- Dependency direction: depends on `models`, never agent implementations or SDK packages.
+- Rationale: focused file loading and provider aggregation do not need additional application layers.
 
 ## Error Handling
 

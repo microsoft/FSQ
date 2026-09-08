@@ -10,7 +10,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from fsq_agent.adapters.coding_agent import OpenAIAgentsRuntime
+from fsq_agent.adapters.coding_agent import DefaultCodingAgentRuntime
 from fsq_agent.adapters.coding_agent._harness_tools import HarnessToolAdapter
 from fsq_agent.agent._pre_plan import build_pre_plan_input
 from fsq_agent.agent._prompt import PromptModelBuilder, PromptRenderer
@@ -19,6 +19,7 @@ from fsq_agent.agent_engine import AgentEvent, AgentRequest, AgentResult, Engine
 from fsq_agent.config import Settings
 from fsq_agent.models import (
     AgentFinalOutput,
+    AgentRuntimeSettings,
     GoalPrePlan,
     HarnessActionResult,
     HarnessArtifactRef,
@@ -26,7 +27,6 @@ from fsq_agent.models import (
     HarnessFunctionSchema,
     KnowledgeBundle,
     LocalToolOutputSettings,
-    OpenAIAgentsSettings,
     OutputSettings,
     RunnerStepResult,
     RuntimeSecretSettings,
@@ -189,20 +189,20 @@ class _FakeEngine:
         return AgentResult(final_output=AgentFinalOutput(status="success", summary="Done."))
 
 
-def _patch_runtime_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
-    import fsq_agent.adapters.coding_agent._openai_runtime as runtime_module
+def _patch_runtime_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    import fsq_agent.adapters.coding_agent._runtime as runtime_module
 
     _FakeEngine.requests = []
     monkeypatch.setattr(runtime_module, "build_model_provider_session", lambda _settings: _FakeProviderSession())
     monkeypatch.setattr(runtime_module, "create_agent_engine", _FakeEngine)
 
 
-def _test_request(runtime: OpenAIAgentsRuntime, run_id: str = "") -> AgentRequest:
+def _test_request(runtime: DefaultCodingAgentRuntime, run_id: str = "") -> AgentRequest:
     return runtime._build_request(name="test", instructions="instructions", model_input="test", tools=[], output_type=AgentFinalOutput, run_id=run_id)
 
 
-def _azure_openai_settings(*, api_key: str = "dummy") -> OpenAIAgentsSettings:
-    settings = OpenAIAgentsSettings(provider="azure_openai")
+def _azure_openai_settings(*, api_key: str = "dummy") -> AgentRuntimeSettings:
+    settings = AgentRuntimeSettings(provider="azure_openai")
     settings.base_url = "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
     settings.model = "gpt-5.4"
     settings.api_key = api_key
@@ -211,8 +211,8 @@ def _azure_openai_settings(*, api_key: str = "dummy") -> OpenAIAgentsSettings:
 
 @pytest.mark.asyncio
 async def test_runtime_failure_returns_failed_step() -> None:
-    settings = Settings(openai_agents=_azure_openai_settings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory(), lambda _run_id: _FailingHarness())
+    settings = Settings(agent_runtime=_azure_openai_settings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory(), lambda _run_id: _FailingHarness())
     task = Task(
         id="runtime-failure",
         name="Runtime Failure",
@@ -223,14 +223,17 @@ async def test_runtime_failure_returns_failed_step() -> None:
     results = await runtime.run_task(task, KnowledgeBundle(), [], "runtime-failure-2026-05-09_00-00-00")
 
     assert results[0].status == "failed"
-    assert results[0].tool_name == "openai_agents.runner"
+    assert results[0].tool_name == "agent_runtime.runner"
+    assert results[0].tool_output["failure_category"] == "agent_runtime_error"
+    assert results[0].tool_output["failure_reason"] == "agent_runtime_error"
+    assert results[0].actual_outcome == "Agent runtime execution failed before producing structured verification output."
     assert "Harness action-space discovery failed" in str(results[0].error)
 
 
 @pytest.mark.asyncio
 async def test_runtime_emits_startup_events_before_main_planning(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_runtime_sdk(monkeypatch)
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
+    _patch_runtime_engine(monkeypatch)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
     task = Task(id="startup", name="Startup", description="Run startup.")
     events: list[Any] = []
 
@@ -246,7 +249,7 @@ async def test_runtime_emits_startup_events_before_main_planning(monkeypatch: py
         "Harness setup completed",
         "Tool setup started",
         "Tool setup completed",
-        "SDK agent ready",
+        "Agent runtime ready",
         "Planning started",
     ]
     for title in expected_titles:
@@ -264,9 +267,9 @@ async def test_runtime_emits_startup_events_before_main_planning(monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_runtime_routes_three_agent_flows_through_neutral_engine(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_runtime_sdk(monkeypatch)
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
-    task = Task(id="explicit-model-settings", name="Model Settings", description="Run with stable SDK settings.")
+    _patch_runtime_engine(monkeypatch)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
+    task = Task(id="explicit-model-settings", name="Model Settings", description="Run with stable runtime settings.")
 
     await runtime.run_pre_plan("Open the app.", KnowledgeBundle(), [], "explicit-model-settings-run")
     await runtime.run_task(task, KnowledgeBundle(), [], "explicit-model-settings-run")
@@ -285,12 +288,12 @@ async def test_runtime_routes_three_agent_flows_through_neutral_engine(monkeypat
 
 @pytest.mark.asyncio
 async def test_runtime_harness_construction_failure_is_visible(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_runtime_sdk(monkeypatch)
+    _patch_runtime_engine(monkeypatch)
 
     def fail_harness(_run_id: str) -> _FakeHarness:
         raise RuntimeError("device connect failed")
 
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), fail_harness)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), fail_harness)
     events: list[Any] = []
 
     results = await runtime.run_task(Task(id="failure", description="Fail startup."), KnowledgeBundle(), [], "failure-run", events.append)
@@ -300,7 +303,7 @@ async def test_runtime_harness_construction_failure_is_visible(monkeypatch: pyte
     titles = [event.title for event in events]
     assert "Harness setup started" in titles
     assert "Harness setup completed" not in titles
-    assert titles[-1] == "SDK run failed"
+    assert titles[-1] == "Agent run failed"
 
 
 @pytest.mark.asyncio
@@ -313,9 +316,9 @@ async def test_runtime_cleanup_failure_preserves_original_failed_result(monkeypa
         async def run(self, model, request, *, on_event=None):
             raise EngineError("incomplete", "Primary model failure", reason="content_filter")
 
-    _patch_runtime_sdk(monkeypatch)
-    monkeypatch.setattr("fsq_agent.adapters.coding_agent._openai_runtime.build_model_provider_session", lambda settings: FailedCloseSession())
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory, engine=FailedEngine())
+    _patch_runtime_engine(monkeypatch)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.build_model_provider_session", lambda settings: FailedCloseSession())
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory, engine=FailedEngine())
 
     results = await runtime.run_task(Task(id="failure", description="Fail run"), KnowledgeBundle(), [], "failed-cleanup-run")
 
@@ -348,11 +351,11 @@ async def test_runtime_cleanup_preserves_primary_outcome_with_real_session(monke
                 raise primary
             return await super().run(model, request, on_event=on_event)
 
-    settings = Settings(openai_agents=_azure_openai_settings())
+    settings = Settings(agent_runtime=_azure_openai_settings())
     monkeypatch.setattr("fsq_agent.providers._session.create_model_provider", lambda **kwargs: ControlledProvider())
     session = build_model_provider_session(settings)
-    monkeypatch.setattr("fsq_agent.adapters.coding_agent._openai_runtime.build_model_provider_session", lambda configured: session)
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory(), _fake_harness_factory, engine=ControlledEngine())
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.build_model_provider_session", lambda configured: session)
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory(), _fake_harness_factory, engine=ControlledEngine())
     task = Task(id="failure-precedence", description="Verify failure precedence")
 
     async def invoke_operation():
@@ -383,14 +386,14 @@ async def test_runtime_cleanup_preserves_primary_outcome_with_real_session(monke
 
 @pytest.mark.asyncio
 async def test_runtime_harness_construction_timeout_is_visible(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_runtime_sdk(monkeypatch)
+    _patch_runtime_engine(monkeypatch)
 
     def slow_harness(_run_id: str) -> _FakeHarness:
         time.sleep(2)
         return _FakeHarness()
 
-    settings = Settings(agent={"step_timeout_seconds": 1}, openai_agents=_azure_openai_settings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory(), slow_harness)
+    settings = Settings(agent={"step_timeout_seconds": 1}, agent_runtime=_azure_openai_settings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory(), slow_harness)
     events: list[Any] = []
 
     results = await runtime.run_task(Task(id="timeout", description="Timeout startup."), KnowledgeBundle(), [], "timeout-run", events.append)
@@ -400,7 +403,7 @@ async def test_runtime_harness_construction_timeout_is_visible(monkeypatch: pyte
     titles = [event.title for event in events]
     assert "Harness setup started" in titles
     assert "Harness setup completed" not in titles
-    assert titles[-1] == "SDK run failed"
+    assert titles[-1] == "Agent run failed"
 
 
 def test_runtime_harness_timeout_does_not_wait_for_worker_shutdown() -> None:
@@ -408,8 +411,8 @@ def test_runtime_harness_timeout_does_not_wait_for_worker_shutdown() -> None:
         time.sleep(3)
         return _FakeHarness()
 
-    settings = Settings(agent={"step_timeout_seconds": 1}, openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory(), slow_harness)
+    settings = Settings(agent={"step_timeout_seconds": 1}, agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory(), slow_harness)
 
     async def run_timeout() -> None:
         with pytest.raises(TimeoutError, match="Harness setup timed out after 1 seconds"):
@@ -422,20 +425,20 @@ def test_runtime_harness_timeout_does_not_wait_for_worker_shutdown() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_classifies_sdk_content_filter_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_runtime_classifies_engine_content_filter_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
     class _ContentFilterEngine:
         async def run(self, model, request, *, on_event=None):
             raise EngineError("incomplete", "Model response incomplete.", reason="content_filter")
 
-    _patch_runtime_sdk(monkeypatch)
-    monkeypatch.setattr("fsq_agent.adapters.coding_agent._openai_runtime.create_agent_engine", _ContentFilterEngine)
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
+    _patch_runtime_engine(monkeypatch)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.create_agent_engine", _ContentFilterEngine)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
     events: list[Any] = []
 
     results = await runtime.run_task(Task(id="content-filter", description="Trigger content filter."), KnowledgeBundle(), [], "content-filter-run", events.append)
 
     assert results[0].status == "failed"
-    assert results[0].actual_outcome == "OpenAI Agents SDK run ended with an incomplete provider response due to content filtering."
+    assert results[0].actual_outcome == "Agent runtime execution ended with an incomplete provider response due to content filtering."
     assert results[0].tool_output["failure_category"] == "provider_content_filter"
     assert events[-1].type == "run_failed"
     assert events[-1].payload["failure_category"] == "provider_content_filter"
@@ -449,7 +452,7 @@ def test_runtime_builds_configured_web_harness(monkeypatch: pytest.MonkeyPatch, 
         def __init__(self, **kwargs: Any) -> None:
             calls["driver"] = kwargs
 
-    import fsq_agent.adapters.coding_agent._openai_runtime as runtime_module
+    import fsq_agent.adapters.coding_agent._runtime as runtime_module
 
     monkeypatch.setattr("fsq_agent.drivers._factory.PlaywrightWebDriver", _FakeWebDriver)
     monkeypatch.setattr(runtime_module, "build_ai_assertion_evaluator", lambda _settings: "ai-evaluator")
@@ -468,11 +471,11 @@ def test_runtime_builds_configured_web_harness(monkeypatch: pytest.MonkeyPatch, 
             },
         },
         output={"root_dir": tmp_path / "output"},
-        openai_agents=OpenAIAgentsSettings(),
+        agent_runtime=AgentRuntimeSettings(),
     )
     settings.harness.web.browser_executable_path = chrome_path
     settings.output.runs_dir = tmp_path / "runs"
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
     payload = runtime._harness_setup_payload()
     harness = runtime._build_harness("web-run")
@@ -506,7 +509,7 @@ def test_runtime_builds_configured_macos_harness(monkeypatch: pytest.MonkeyPatch
         def __init__(self, **kwargs: Any) -> None:
             calls["driver"] = kwargs
 
-    import fsq_agent.adapters.coding_agent._openai_runtime as runtime_module
+    import fsq_agent.adapters.coding_agent._runtime as runtime_module
 
     monkeypatch.setattr("fsq_agent.drivers._factory.AppiumMac2Driver", _FakeMacOSDriver)
     monkeypatch.setattr(runtime_module, "build_ai_assertion_evaluator", lambda _settings: "ai-evaluator")
@@ -521,12 +524,12 @@ def test_runtime_builds_configured_macos_harness(monkeypatch: pytest.MonkeyPatch
             },
         },
         output={"root_dir": tmp_path / "output"},
-        openai_agents=OpenAIAgentsSettings(),
+        agent_runtime=AgentRuntimeSettings(),
     )
     settings.harness.macos.appium_server_url = "http://127.0.0.1:4723"
     settings.harness.macos.bundle_id = "com.example.MacApp"
     settings.output.runs_dir = tmp_path / "runs"
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
     payload = runtime._harness_setup_payload()
     harness = runtime._build_harness("mac-run")
@@ -556,8 +559,8 @@ def test_runtime_builds_configured_macos_harness(monkeypatch: pytest.MonkeyPatch
 
 
 def test_runtime_builds_step_results_from_structured_pre_plan() -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     final_output = """
 {
     "status": "failed",
@@ -594,8 +597,8 @@ def test_runtime_builds_step_results_from_structured_pre_plan() -> None:
 
 
 def test_runtime_task_input_uses_goal_only_verification_contract() -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     task = Task(id="derive", name="Derive", description="Open the page and verify it loads.")
 
     task_input = runtime._build_task_input(task)
@@ -611,10 +614,10 @@ def test_runtime_task_input_includes_runtime_secret_names_and_warnings() -> None
     runtime_secrets.set_values({"TEST_ACCOUNT_EMAIL": "user@example.com"})
     runtime_secrets.allowed_env_names.append("TEST_ACCOUNT_PASSWORD")
     settings = Settings(
-        openai_agents=OpenAIAgentsSettings(),
+        agent_runtime=AgentRuntimeSettings(),
         runtime_secrets=runtime_secrets,
     )
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     task = Task(id="login", name="Login", description="Sign in.")
 
     task_input = runtime._build_task_input(task)
@@ -689,8 +692,8 @@ def test_pre_plan_input_includes_loaded_skills() -> None:
 
 
 def test_runtime_pre_plan_tool_summary_uses_active_platform_registry() -> None:
-    settings = Settings(harness={"platform": "android"}, openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(harness={"platform": "android"}, agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
     tools = runtime._pre_plan_tool_summary()
 
@@ -703,8 +706,8 @@ def test_runtime_pre_plan_tool_summary_uses_active_platform_registry() -> None:
 
 
 def test_runtime_instructions_exclude_loader_diagnostics() -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     knowledge = KnowledgeBundle(items={"project.md": "Use Edge account guidance."}, warnings=["missing optional knowledge"])
     skills = [SkillBundle(name="automation-basics", kind="markdown", instructions="Use semantic actions.")]
 
@@ -717,7 +720,7 @@ def test_runtime_instructions_exclude_loader_diagnostics() -> None:
     assert "Use Edge account guidance." in instructions
     assert "Use semantic actions." in instructions
     assert "Final output JSON Schema:" not in instructions
-    assert "AgentFinalOutput structured output required by the SDK" in instructions
+    assert "AgentFinalOutput structured output required by the agent runtime" in instructions
 
 
 def test_runtime_instructions_use_configured_prompt_templates(tmp_path: Path) -> None:
@@ -732,14 +735,14 @@ def test_runtime_instructions_use_configured_prompt_templates(tmp_path: Path) ->
         encoding="utf-8",
     )
     settings = Settings(
-        openai_agents=OpenAIAgentsSettings(
+        agent_runtime=AgentRuntimeSettings(
             prompt={
                 "agent_template_path": agent_template,
                 "task_template_path": task_template,
             },
         )
     )
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     knowledge = KnowledgeBundle(items={"k": "v"})
 
     instructions = runtime._build_instructions(knowledge, [])
@@ -751,8 +754,8 @@ def test_runtime_instructions_use_configured_prompt_templates(tmp_path: Path) ->
 
 
 def test_runtime_instructions_include_knowledge_index_content() -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     knowledge = KnowledgeBundle(items={"project.md": "Use Other ways to sign in, then choose password sign-in."})
 
     instructions = runtime._build_instructions(knowledge, [])
@@ -763,7 +766,7 @@ def test_runtime_instructions_include_knowledge_index_content() -> None:
 
 
 def test_prompt_model_builder_and_renderer_use_templates() -> None:
-    settings = OpenAIAgentsSettings().prompt
+    settings = AgentRuntimeSettings().prompt
     builder = PromptModelBuilder(settings)
     renderer = PromptRenderer(settings)
 
@@ -782,14 +785,14 @@ def test_prompt_model_builder_and_renderer_use_templates() -> None:
     assert "Done." in rendered_task
 
 
-def test_openai_agents_settings_rejects_obsolete_custom_instruction_fields(tmp_path: Path) -> None:
+def test_agent_runtime_settings_rejects_obsolete_custom_instruction_fields(tmp_path: Path) -> None:
     custom_instructions = tmp_path / "custom-instructions.md"
 
     with pytest.raises(ValueError, match="custom_instructions"):
-        OpenAIAgentsSettings(prompt={"custom_instructions": ["Custom."]})
+        AgentRuntimeSettings(prompt={"custom_instructions": ["Custom."]})
 
     with pytest.raises(ValueError, match="custom_instructions_path"):
-        OpenAIAgentsSettings(prompt={"custom_instructions_path": custom_instructions})
+        AgentRuntimeSettings(prompt={"custom_instructions_path": custom_instructions})
 
 
 def test_prompt_renderer_injects_model_into_configured_jinja_templates(tmp_path: Path) -> None:
@@ -797,7 +800,7 @@ def test_prompt_renderer_injects_model_into_configured_jinja_templates(tmp_path:
     task_template = tmp_path / "task.j2"
     agent_template.write_text("{{ variables.prefix }}{% for skill in skills %} {{ skill.name }}={{ skill.instructions }}{% endfor %}", encoding="utf-8")
     task_template.write_text("Task {{ task.id }} {{ task.variables.prefix }}", encoding="utf-8")
-    settings = OpenAIAgentsSettings(
+    settings = AgentRuntimeSettings(
         prompt={
             "agent_template_path": agent_template,
             "task_template_path": task_template,
@@ -1066,7 +1069,7 @@ async def test_harness_tool_adapter_surfaces_artifact_capture_failure() -> None:
 
 
 def test_runtime_tool_origin_recognizes_platform_tools() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory(), _fake_harness_factory)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory(), _fake_harness_factory)
     runtime._agent_tool_names = {"read_file"}
     runtime._harness_tool_names = {"tap_on"}
 
@@ -1077,7 +1080,7 @@ def test_runtime_tool_origin_recognizes_platform_tools() -> None:
 
 
 def test_runtime_tool_output_payload_preserves_runner_evidence_fields() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
     output = json.dumps(
         {
             "tool_name": "tap_on",
@@ -1104,7 +1107,7 @@ def test_runtime_tool_output_payload_preserves_runner_evidence_fields() -> None:
 
 
 def test_runtime_tool_output_payload_adds_agent_tool_fields() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
     runtime._agent_tool_names = {"search_artifact"}
     output = json.dumps(
         {
@@ -1131,10 +1134,10 @@ def test_runtime_tool_output_payload_adds_agent_tool_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_uses_sdk_stream_events_for_agent_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_runtime_sdk(monkeypatch)
+async def test_runtime_uses_engine_events_for_agent_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_runtime_engine(monkeypatch)
     tool_factory = _CapturingToolFactory()
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), tool_factory, _fake_harness_factory)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), tool_factory, _fake_harness_factory)
     task = Task(id="agent-tools", name="Agent Tools", description="Run with AgentTools.")
 
     await runtime.run_task(task, KnowledgeBundle(), [], "agent-tools-run", event_sink=lambda _event: None)
@@ -1145,7 +1148,7 @@ async def test_runtime_uses_sdk_stream_events_for_agent_tools(monkeypatch: pytes
 
 
 def test_runtime_stream_tool_output_preserves_tool_name_from_started_event() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
     started = AgentEvent(kind="tool_called", tool_name="read_knowledge_page", call_id="call-1", arguments={"page_id": "edge_android_new_tab_page", "file": None})
     completed = AgentEvent(kind="tool_output", call_id="call-1", output='{"ok":true,"page_id":"edge_android_new_tab_page","duration_ms":123}')
 
@@ -1159,8 +1162,8 @@ def test_runtime_stream_tool_output_preserves_tool_name_from_started_event() -> 
     assert completed_event.duration_ms == 123
 
 
-def test_runtime_stream_message_output_uses_text_not_sdk_object_repr() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
+def test_runtime_stream_message_output_uses_text_not_engine_object_repr() -> None:
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
     event = AgentEvent(kind="message", text='{"schema_version":"task_run_v1","status":"success"}')
 
     run_event = runtime._map_stream_event(event, "run-1", "task")
@@ -1170,7 +1173,7 @@ def test_runtime_stream_message_output_uses_text_not_sdk_object_repr() -> None:
 
 
 def test_runtime_stream_omits_empty_reasoning_summary() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
     event = AgentEvent(kind="reasoning_summary")
 
     assert runtime._map_stream_event(event, "run-1", "task") is None
@@ -1204,7 +1207,7 @@ def test_verification_evidence_builder_uses_text_only_after_runner_visual_assert
                     "errors": [],
                 }
             ),
-            tool_name="openai_agents.runner",
+            tool_name="agent_runtime.runner",
         )
     ]
 
@@ -1246,8 +1249,8 @@ def test_verification_evidence_builder_does_not_attach_images_from_paths(tmp_pat
 
 def test_runtime_builds_neutral_request_with_tool_output_trimming(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
     request = _test_request(runtime)
 
@@ -1259,22 +1262,22 @@ def test_runtime_builds_neutral_request_with_tool_output_trimming(monkeypatch: p
 
 def test_runtime_builds_run_config_enables_sdk_tracing_with_openai_export_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "trace-key")
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
     assert _test_request(runtime).tracing_enabled is True
 
 
 def test_runtime_builds_run_config_respects_explicit_tracing_disable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "trace-key")
-    settings = Settings(openai_agents=OpenAIAgentsSettings(tracing_enabled=False))
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings(tracing_enabled=False))
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
     assert _test_request(runtime).tracing_enabled is False
 
 
 def test_provider_session_preserves_azure_connection_values_for_neutral_access() -> None:
-    settings = Settings(openai_agents=_azure_openai_settings(api_key="azure-key"))
+    settings = Settings(agent_runtime=_azure_openai_settings(api_key="azure-key"))
 
     session = build_model_provider_session(settings)
     assert session.client_config.api_key == "azure-key"
@@ -1284,8 +1287,8 @@ def test_provider_session_preserves_azure_connection_values_for_neutral_access()
 
 
 def test_runtime_tool_count_filter_keeps_small_recent_outputs_and_trims_large_outputs() -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings())
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings())
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime).tool_output_filter
     old_output = "old-output " * 4000
     recent_output = "recent-output " * 4000
@@ -1304,20 +1307,25 @@ def test_runtime_tool_count_filter_keeps_small_recent_outputs_and_trims_large_ou
     assert filtered[7].startswith("[Trimmed historical read_file output")
 
 
-def test_runtime_tool_count_filter_writes_artifact_for_trimmed_history(tmp_path: Path) -> None:
-    openai_settings = OpenAIAgentsSettings()
-    openai_settings.local_tool_output = LocalToolOutputSettings(recent_full_output_count=0)
+@pytest.mark.parametrize(("tool_name", "artifact_label"), [("harness_source", "harness_source"), ("", "runtime_tool")])
+def test_runtime_tool_count_filter_writes_artifact_for_trimmed_history(tmp_path: Path, tool_name: str, artifact_label: str) -> None:
+    runtime_settings = AgentRuntimeSettings()
+    runtime_settings.local_tool_output = LocalToolOutputSettings(recent_full_output_count=0)
     output_settings = OutputSettings()
     output_settings.runs_dir = tmp_path / "runs"
-    settings = Settings(openai_agents=openai_settings, output=output_settings)
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=runtime_settings, output=output_settings)
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
-    entries = (ToolOutputEntry(1, "1", "harness_source", 1, "<node>" * 7000),)
+    entries = (ToolOutputEntry(1, "1", tool_name, 1, "<node>" * 7000),)
 
     filtered = input_filter(entries)
 
     assert "Artifact path:" in filtered[1]
-    assert list((tmp_path / "runs" / "run-1" / "artifacts" / "tools").glob("*.json"))
+    artifacts = list((tmp_path / "runs" / "run-1" / "artifacts" / "tools").glob("*.json"))
+    assert [artifact.name for artifact in artifacts] == [f"000001-{artifact_label}.json"]
+    payload = json.loads(artifacts[0].read_text(encoding="utf-8"))
+    assert payload["tool_name"] == artifact_label
+    assert payload["content"] == entries[0].output
 
 
 async def test_file_helper_context_filter_preserves_complete_artifact(tmp_path: Path) -> None:
@@ -1353,8 +1361,8 @@ async def test_file_helper_context_filter_preserves_complete_artifact(tmp_path: 
 def test_runtime_input_filter_trims_recent_large_ui_snapshot_to_artifact(tmp_path: Path) -> None:
     output_settings = OutputSettings()
     output_settings.runs_dir = tmp_path / "runs"
-    settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings(), output=output_settings)
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     snapshot_output = json.dumps(
         {
@@ -1374,7 +1382,7 @@ def test_runtime_input_filter_trims_recent_large_ui_snapshot_to_artifact(tmp_pat
 
 
 def test_runtime_preview_redacts_wrapped_sensitive_tool_output() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
     output = json.dumps(
         {
             "tool_name": "secret_debug_tool",
@@ -1402,9 +1410,9 @@ def test_runtime_preview_redacts_wrapped_sensitive_tool_output() -> None:
 def test_runtime_redacts_configured_secret_values_from_final_output() -> None:
     runtime_secrets = RuntimeSecretSettings()
     runtime_secrets.set_values({"TEST_ACCOUNT_PASSWORD": "super-secret"})
-    runtime = OpenAIAgentsRuntime(
+    runtime = DefaultCodingAgentRuntime(
         Settings(
-            openai_agents=OpenAIAgentsSettings(),
+            agent_runtime=AgentRuntimeSettings(),
             runtime_secrets=runtime_secrets,
         ),
         _EmptyToolFactory(),
@@ -1425,9 +1433,9 @@ def test_runtime_redacts_configured_secret_values_from_final_output() -> None:
 def test_runtime_redacts_configured_secret_values_from_tool_arguments() -> None:
     runtime_secrets = RuntimeSecretSettings()
     runtime_secrets.set_values({"TEST_ACCOUNT_PASSWORD": "super-secret"})
-    runtime = OpenAIAgentsRuntime(
+    runtime = DefaultCodingAgentRuntime(
         Settings(
-            openai_agents=OpenAIAgentsSettings(),
+            agent_runtime=AgentRuntimeSettings(),
             runtime_secrets=runtime_secrets,
         ),
         _EmptyToolFactory(),
@@ -1440,7 +1448,7 @@ def test_runtime_redacts_configured_secret_values_from_tool_arguments() -> None:
 
 
 def test_runtime_preserves_keyboard_key_arguments_for_recording() -> None:
-    runtime = OpenAIAgentsRuntime(Settings(), _EmptyToolFactory())
+    runtime = DefaultCodingAgentRuntime(Settings(), _EmptyToolFactory())
     event = AgentEvent(kind="tool_called", tool_name="press_key", call_id="keyboard-1", arguments={"key": "Enter", "modifiers": ["COMMAND"]})
     recorded = runtime._map_stream_event(event, "run-1", "task-1")
     assert recorded.tool_arguments == {"key": "Enter", "modifiers": ["COMMAND"]}
@@ -1460,8 +1468,8 @@ def test_runtime_input_filter_leaves_plain_screenshot_outputs_text_only(tmp_path
     screenshot_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
     output_settings = OutputSettings(root_dir=output_root)
     output_settings.runs_dir = output_root / "runs"
-    settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings(), output=output_settings)
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     entries = (ToolOutputEntry(1, "img", "harness_screenshot", 1, f"Screenshot saved successfully to: {screenshot_path}"),)
 
@@ -1478,8 +1486,8 @@ def test_runtime_input_filter_does_not_attach_submitted_visual_assertion_image(t
     screenshot_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
     output_settings = OutputSettings(root_dir=output_root)
     output_settings.runs_dir = output_root / "runs"
-    settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings(), output=output_settings)
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     output = json.dumps(
         {
@@ -1505,8 +1513,8 @@ def test_runtime_input_filter_rejects_screenshot_images_outside_output_root(tmp_
     screenshot_path.write_bytes(b"\x89PNG\r\n\x1a\nimage")
     output_settings = OutputSettings(root_dir=output_root)
     output_settings.runs_dir = output_root / "runs"
-    settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
-    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
+    settings = Settings(agent_runtime=AgentRuntimeSettings(), output=output_settings)
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     output = json.dumps({"type": "visual_assertion_submission", "assertion_id": "key-action-7", "prompt": "Verify the logo is visible.", "screenshot_path": str(screenshot_path)})
     entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", 1, output),)

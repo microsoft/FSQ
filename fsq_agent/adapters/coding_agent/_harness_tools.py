@@ -107,7 +107,7 @@ class HarnessToolAdapter:
                 )
                 result = self.runner.run_step(run_id=self.run_id, step=step)
                 return self._format_runner_result(schema, step, result, int((time.perf_counter() - started) * 1000))
-            # SDK tool transport must convert arbitrary capability failures into structured results.
+            # Tool transport must convert arbitrary capability failures into structured results.
             except Exception as exc:  # noqa: BLE001
                 return self._format_failure(schema, exc, int((time.perf_counter() - started) * 1000))
 

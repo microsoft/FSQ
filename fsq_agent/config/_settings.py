@@ -7,12 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fsq_agent.models import (
     AgentContextSettings,
+    AgentRuntimeSettings,
     AgentSettings,
     CaseLifecycleSettings,
     CaseSettings,
     ExecutionSettings,
     HarnessSettings,
-    OpenAIAgentsSettings,
     OutputSettings,
     RuntimeSecretSettings,
     SkillConfig,
@@ -24,7 +24,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     agent: AgentSettings = Field(default_factory=AgentSettings)
-    openai_agents: OpenAIAgentsSettings = Field(default_factory=OpenAIAgentsSettings)
+    agent_runtime: AgentRuntimeSettings = Field(default_factory=AgentRuntimeSettings)
     harness: HarnessSettings = Field(default_factory=HarnessSettings)
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
     case_lifecycle: CaseLifecycleSettings = Field(default_factory=CaseLifecycleSettings, alias="caseLifecycle")

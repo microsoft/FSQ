@@ -12,7 +12,7 @@ class ModelProviderFactory:
         self.settings = settings
 
     def build_session(self) -> ModelProviderSession:
-        provider = self.settings.openai_agents.provider
+        provider = self.settings.agent_runtime.provider
         if provider == "github_copilot":
             return ModelProviderSession(build_github_copilot_client_config(self.settings))
         if provider == "azure_openai":
@@ -22,7 +22,7 @@ class ModelProviderFactory:
         raise ConfigurationError("Model Provider is not configured. Add a Provider in Control Plane Config.")
 
     def refresh_session(self) -> ModelProviderSession:
-        provider = self.settings.openai_agents.provider
+        provider = self.settings.agent_runtime.provider
         if provider == "github_copilot":
             return ModelProviderSession(refresh_github_copilot_client_config(self.settings))
         return ModelProviderSession(build_azure_openai_client_config(self.settings))

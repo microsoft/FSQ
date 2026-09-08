@@ -10,7 +10,7 @@ import pytest
 
 from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.config import Settings
-from fsq_agent.models import ConfigurationError, OpenAIAgentsSettings
+from fsq_agent.models import AgentRuntimeSettings, ConfigurationError
 from fsq_agent.providers import _github_copilot as copilot
 from fsq_agent.providers import (
     build_model_provider_session,
@@ -43,11 +43,11 @@ def _github_settings(
     github_token: dict[str, object] | None = None,
     provider_token: dict[str, object] | None = None,
 ) -> Settings:
-    settings = Settings(openai_agents=OpenAIAgentsSettings(provider="github_copilot"))
-    settings.openai_agents.model = "gpt-5.5"
-    settings.openai_agents.github_token = github_token
-    settings.openai_agents.provider_token = provider_token
-    settings.openai_agents.user_config_root = tmp_path
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider="github_copilot"))
+    settings.agent_runtime.model = "gpt-5.5"
+    settings.agent_runtime.github_token = github_token
+    settings.agent_runtime.provider_token = provider_token
+    settings.agent_runtime.user_config_root = tmp_path
     return settings
 
 

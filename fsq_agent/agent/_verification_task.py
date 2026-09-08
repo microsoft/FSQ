@@ -71,7 +71,7 @@ class VerificationEvidenceBuilder:
         return bundle.model_dump_json(indent=2)
 
     def _agent_claims(self, results: list[StepResult]) -> dict[str, Any] | None:
-        runner_steps = [step for step in results if step.tool_name == "openai_agents.runner"]
+        runner_steps = [step for step in results if step.tool_name == "agent_runtime.runner"]
         if not runner_steps:
             return None
         raw_output = runner_steps[-1].tool_output or runner_steps[-1].actual_outcome

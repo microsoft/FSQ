@@ -6,6 +6,7 @@ import pytest
 from fsq_agent import models
 from fsq_agent.models import (
     AgentFinalOutput,
+    AgentRuntimeSettings,
     AgentTaskInput,
     AndroidInputTextParams,
     AndroidSwipeParams,
@@ -17,7 +18,6 @@ from fsq_agent.models import (
     MacOSKillAppParams,
     MacOSLaunchAppParams,
     MacOSPressKeyParams,
-    OpenAIAgentsSettings,
     PageKnowledgeIndex,
     PageKnowledgePage,
     SkillConfig,
@@ -84,8 +84,8 @@ def test_agent_task_input_wraps_task_contract() -> None:
     assert task_input.verification_goal == "Verify that doing the thing is complete."
 
 
-def test_openai_agents_settings_defaults_to_safe_offline_mode() -> None:
-    settings = OpenAIAgentsSettings()
+def test_agent_runtime_settings_defaults_to_safe_offline_mode() -> None:
+    settings = AgentRuntimeSettings()
 
     assert settings.provider is None
     assert settings.model == ""

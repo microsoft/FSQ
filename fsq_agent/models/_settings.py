@@ -232,7 +232,7 @@ class ExecutionSettings(BaseModel):
     post_action_delay_seconds: PostActionDelaySettings = Field(default_factory=PostActionDelaySettings)
 
 
-class OpenAIAgentPromptConfig(BaseModel):
+class AgentPromptConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_template_path: Path | None = None
@@ -240,13 +240,13 @@ class OpenAIAgentPromptConfig(BaseModel):
     variables: dict[str, Any] = Field(default_factory=dict)
 
 
-class OpenAIAgentsSettings(BaseModel):
+class AgentRuntimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: Literal["azure_openai", "github_copilot"] | None = None
     max_turns: int = Field(default=50, ge=1)
     tracing_enabled: bool = True
-    prompt: OpenAIAgentPromptConfig = Field(default_factory=OpenAIAgentPromptConfig)
+    prompt: AgentPromptConfig = Field(default_factory=AgentPromptConfig)
     _base_url: str = PrivateAttr(default="")
     _model: str = PrivateAttr(default="")
     _api_key: str = PrivateAttr(default="")

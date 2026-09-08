@@ -7,7 +7,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateError
 
-from fsq_agent.models import AgentTaskInput, ConfigurationError, KnowledgeBundle, OpenAIAgentPromptConfig, SkillBundle, Task
+from fsq_agent.models import AgentPromptConfig, AgentTaskInput, ConfigurationError, KnowledgeBundle, SkillBundle, Task
 
 _DEFAULT_TEMPLATE_DIR = Path(__file__).parent / "templates"
 _DEFAULT_AGENT_TEMPLATE = _DEFAULT_TEMPLATE_DIR / "agent_instructions.j2"
@@ -46,7 +46,7 @@ class TaskPromptModel:
 
 
 class PromptModelBuilder:
-    def __init__(self, settings: OpenAIAgentPromptConfig) -> None:
+    def __init__(self, settings: AgentPromptConfig) -> None:
         self.settings = settings
 
     def build_agent_prompt(self, knowledge: KnowledgeBundle, skills: list[SkillBundle]) -> AgentPromptModel:
@@ -97,7 +97,7 @@ class PromptModelBuilder:
 
 
 class PromptRenderer:
-    def __init__(self, settings: OpenAIAgentPromptConfig) -> None:
+    def __init__(self, settings: AgentPromptConfig) -> None:
         self.settings = settings
 
     def render_agent_prompt(self, model: AgentPromptModel) -> str:

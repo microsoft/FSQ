@@ -8,6 +8,12 @@ All notable changes are documented here. FSQ follows Semantic Versioning after p
 
 - Initial open-source release preparation.
 
+### Changed
+
+- FSQ business runtime and settings use SDK-neutral names: `DefaultCodingAgentRuntime`, `AgentRuntimeSettings`, `AgentPromptConfig`, and `agent_runtime`. Custom Python integrations and low-level runtime YAML must use the canonical names; the old SDK-prefixed exports and configuration key are not aliases.
+- New dynamic Run provenance uses `agent_runtime.runner` and `agent_runtime.verifier`, with `agent_runtime_error` for generic runtime failures. External scripts matching old output strings need to adopt the new values. The actual OpenAI SDK backend and supplier identifiers are unchanged.
+- Existing local data from v0.1.0 and later retains its original formats, labels, contents, and artifact paths. This naming update requires no Workspace reinitialization, configuration edits, or reauthentication; historical queries do not rewrite authoritative data.
+
 ### Removed
 
 - Removed the legacy Playground browser application, standalone HTTP server, Python APIs, and packaged frontend assets. Use `fsq ui` for the supported Control Plane browser workflows; raw YAML dynamic execution, lifecycle-hook editing, completed-Run loading, and automatic Goal Case publication are not carried forward.

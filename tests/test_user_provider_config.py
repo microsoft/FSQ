@@ -49,7 +49,7 @@ def _runtime_config(tmp_path: Path) -> Path:
         f"""
 workspace:
   root_dir: {tmp_path.as_posix()}/workspace
-openai_agents:
+agent_runtime:
   max_turns: 40
 """,
         encoding="utf-8",
@@ -302,10 +302,10 @@ def test_runtime_load_ignores_provider_environment_and_refreshes_only_provider(
 
     settings = load_settings(config_path, user_config_root=user_root)
 
-    assert settings.openai_agents.provider is None
-    assert settings.openai_agents.model == ""
-    assert settings.openai_agents.base_url == ""
-    assert settings.openai_agents.api_key == ""
+    assert settings.agent_runtime.provider is None
+    assert settings.agent_runtime.model == ""
+    assert settings.agent_runtime.base_url == ""
+    assert settings.agent_runtime.api_key == ""
     with pytest.raises(ConfigurationError, match="not configured"):
         validate_provider_settings(settings)
 
@@ -318,9 +318,9 @@ def test_runtime_load_ignores_provider_environment_and_refreshes_only_provider(
     refreshed = refresh_provider_settings(settings, user_config_root=user_root)
 
     assert refreshed is not settings
-    assert refreshed.openai_agents.provider == "azure_openai"
-    assert refreshed.openai_agents.model == "saved-model"
-    assert refreshed.openai_agents.base_url == "https://saved.example.openai.azure.com/openai/v1/"
-    assert refreshed.openai_agents.api_key == "saved-key"
-    assert refreshed.openai_agents.max_turns == 40
+    assert refreshed.agent_runtime.provider == "azure_openai"
+    assert refreshed.agent_runtime.model == "saved-model"
+    assert refreshed.agent_runtime.base_url == "https://saved.example.openai.azure.com/openai/v1/"
+    assert refreshed.agent_runtime.api_key == "saved-key"
+    assert refreshed.agent_runtime.max_turns == 40
     assert refreshed.workspace.root_dir == settings.workspace.root_dir

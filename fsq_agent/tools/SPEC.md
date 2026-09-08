@@ -63,7 +63,7 @@ This module does not expose `wait_ms`, `get_runtime_secret`, runtime-secret reso
 
 ## Error Handling
 
-During SDK-managed runs, recoverable AgentTool failures return model-visible structured error JSON so the agent can retry or report failure. Invalid configuration, duplicate tool names, invalid tool names, malformed arguments, path traversal, attempts to read or write outside allowed roots, artifact bounds violations, and malformed outputs raise or normalize to `ToolExecutionError` from `models` depending on whether the failure happens during construction or invocation.
+During agent-engine-managed runs, recoverable AgentTool failures return model-visible structured error JSON so the agent can retry or report failure. Invalid configuration, duplicate tool names, invalid tool names, malformed arguments, path traversal, attempts to read or write outside allowed roots, artifact bounds violations, and malformed outputs raise or normalize to `ToolExecutionError` from `models` depending on whether the failure happens during construction or invocation.
 
 AgentTool outputs may be persisted to run-local tool artifacts when they exceed configured inline limits. AgentTool artifacts must stay under the current run directory and bounded read/search helpers must enforce maximum response sizes.
 
@@ -81,6 +81,7 @@ AgentTool events must use an AgentTool-specific origin such as `agent_tool`. Rec
 - AgentTools do not use the `capabilities` decorator layer because they are not executable FSQ capabilities and must not enter strict registries. Any decorated compatibility path must be hidden behind compatibility shims and must not be exposed as current AgentTool behavior.
 - File operation tools treat the selected workspace platform's cases/knowledge and resolved preset skill resources as read-only inputs. They write generated files only under the current run's artifact directory, which is a direct-child run below the resolved platform run root.
 - Artifact read tools only resolve paths inside the current run directory and enforce bounded search/slice results so artifact recovery cannot reintroduce unbounded context growth.
+- Artifact filenames use the supplied tool label at creation. Reads, searches, and slices resolve the saved artifact path and preserve existing file contents; they never derive an old file's name from the current runtime's fallback label or rename historical files.
 - Local CLI and shell execution remain out of scope. Command execution requires an explicitly scoped capability with its own SPEC update.
 - `publish_progress` is not an AgentTool. Runtime progress is emitted directly by `agent` as `RunEvent` values so user-visible status does not consume a model tool call or become confused with external capabilities.
 - `submit_visual_assertion` is not an AgentTool. Platform `assertWithAI` is a backend-owned PlatformTool exposed by the active platform capability surface and evaluated through an injected provider-backed evaluator.

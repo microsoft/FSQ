@@ -138,7 +138,7 @@ def test_dynamic_agent_readiness_builds_static_inputs_without_runtime_session(tm
     prompt.agent_template_path.write_text("{{ private_knowledge }} {{ skills }}", encoding="utf-8")
     settings = SimpleNamespace(
         harness=SimpleNamespace(platform="web"),
-        openai_agents=SimpleNamespace(prompt=prompt, local_tool_output=None),
+        agent_runtime=SimpleNamespace(prompt=prompt, local_tool_output=None),
         agent_context=SimpleNamespace(knowledge=SimpleNamespace(root_dir=tmp_path, skills=SimpleNamespace(dir=tmp_path), pre_plan=SimpleNamespace(dir=None))),
         cases=SimpleNamespace(dir=tmp_path),
         output=SimpleNamespace(root_dir=tmp_path, runs_dir=tmp_path),

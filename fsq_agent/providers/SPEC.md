@@ -70,7 +70,7 @@ Provider readiness is independent from Workspace platform Target/Runtime diagnos
 
 - Provider construction belongs in `providers`, not `agent`, because the main runner, pre-planner, verifier, and platform AI assertion evaluator need the same Azure/Copilot behavior.
 - `providers` may depend on `config` because it consumes resolved `Settings`, but `config` must not depend on `providers`.
-- The resolved `openai_agents.provider` and provider model are the provider/model source for AI assertions. There is no separate AI assertion model override.
+- The resolved `agent_runtime.provider` and provider model are the provider/model source for AI assertions. There is no separate AI assertion model override.
 - All configured providers use neutral model access with the non-empty model stored in the user-provider record. There is no default provider or fixed GitHub model; the private engine backend owns the Responses protocol.
 - GitHub keeps the existing explicit OAuth scopes, token exchange, plan detection, plan-specific endpoints, Copilot headers, and expiration behavior, but token files live under `~/.fsq/auth`. Runtime surfaces never start device authentication.
 - Azure endpoint, model/deployment name, and API key come from the resolved user-provider snapshot, not fixed environment variables.

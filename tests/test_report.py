@@ -52,7 +52,7 @@ def _steps() -> list[StepResult]:
             step_id=2,
             status="success",
             actual_outcome='{"status":"failed","summary":"Back failed","pre_plan":[{"step_id":1,"action":"Press Back","success_criteria":["Back is pressed"],"status":"failed"}],"plan_updates":["Back payload failed"],"satisfied_criteria":[],"unmet_criteria":["Back is pressed"],"evidence":[],"errors":["Back failed"]}',
-            tool_name="openai_agents.runner",
+            tool_name="agent_runtime.runner",
         ),
     ]
 
@@ -104,7 +104,7 @@ def test_report_generator_redacts_configured_secret_values(tmp_path: Path) -> No
         ),
         encoding="utf-8",
     )
-    steps = [StepResult(step_id=1, status="success", actual_outcome="used super-secret", tool_name="openai_agents.runner")]
+    steps = [StepResult(step_id=1, status="success", actual_outcome="used super-secret", tool_name="agent_runtime.runner")]
     verification = VerificationResult(status="success", summary="super-secret hidden")
 
     ReportGenerator(tmp_path, secret_values=("super-secret",)).generate("run-secret", _task(), steps, verification)
@@ -240,9 +240,9 @@ def test_report_generator_classifies_provider_content_filter(tmp_path: Path) -> 
         StepResult(
             step_id=1,
             status="failed",
-            actual_outcome="OpenAI Agents SDK run ended with an incomplete provider response due to content filtering.",
+            actual_outcome="Agent runtime execution ended with an incomplete provider response due to content filtering.",
             error=("Responses stream ended with terminal event `response.incomplete`. status=incomplete; incomplete_details=IncompleteDetails(reason='content_filter')."),
-            tool_name="openai_agents.runner",
+            tool_name="agent_runtime.runner",
             tool_output={"failure_category": "provider_content_filter", "failure_reason": "content_filter"},
         )
     ]

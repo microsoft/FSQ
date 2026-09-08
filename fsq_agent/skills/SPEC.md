@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Load configured automation skills from local Markdown files, directories, or inline descriptive bundles. Provide only complete skill instructions and file metadata to the OpenAI Agents SDK runtime without coupling skill loading to private knowledge storage or granting command execution authority.
+Load configured automation skills from local Markdown files, directories, or inline descriptive bundles. Provide only complete skill instructions and file metadata to the SDK-neutral agent runtime without coupling skill loading to private knowledge storage or granting command execution authority.
 
 ## Dependencies
 
@@ -20,6 +20,16 @@ Current `__init__.py` exports via `__all__`:
 - `__init__.py`: Public exports only.
 - `_loader.py`: Skill discovery, Markdown rendering, and inline bundle loading.
 - `SPEC.md`: Module design.
+
+## Python Architecture
+
+- Architecture level: 2 Simple Package.
+- Public API: `SkillLoader` and `SkillBundle` exported from `__init__.py`.
+- Internal modules: `_loader.py` owns private discovery and loading mechanics.
+- Domain boundaries: complete advisory instruction loading and operational diagnostics, not execution or user-file migration.
+- Boundary models: `SkillConfig` and `SkillBundle` from `models`.
+- Dependency direction: depends on `models`, never agent implementations or SDK packages.
+- Rationale: bounded instruction loading needs a simple package, not orchestration or persistence layers.
 
 ## Error Handling
 
