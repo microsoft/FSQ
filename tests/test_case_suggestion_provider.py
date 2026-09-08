@@ -1,12 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from types import SimpleNamespace
-
 import pytest
 
+from fsq_agent.agent_engine import ModelRequest, ModelResult
+from fsq_agent.ai_services import CaseSuggestionAnalysis, CaseSuggestionAnalyzer
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers import CaseSuggestionAnalyzer
 
 
 class _Session:
@@ -18,9 +17,9 @@ class _Session:
         self.calls = []
         self.closed = False
 
-    def invoke_responses_sync(self, **kwargs):
-        self.calls.append(kwargs)
-        return SimpleNamespace(output_text=self.output)
+    def complete_sync(self, request: ModelRequest) -> ModelResult:
+        self.calls.append(request)
+        return ModelResult(text=self.output)
 
     def close_sync(self) -> None:
         self.closed = True
@@ -38,7 +37,8 @@ def test_case_suggestion_analyzer_makes_one_tool_free_request_and_closes_session
     assert result.summary == "Improve target"
     assert result.suggestions == ({"kind": "target", "message": "Use semantic text"},)
     assert len(session.calls) == 1
-    assert set(session.calls[0]) == {"input"}
+    assert isinstance(session.calls[0], ModelRequest)
+    assert session.calls[0].instructions is None
     assert session.closed is True
 
 
@@ -68,3 +68,12 @@ def test_case_suggestion_analyzer_rejects_blank_suggestion_fields(suggestion: di
         CaseSuggestionAnalyzer(session).analyze(parsed_case={"config": {}, "commands": []}, execution_report={})
 
     assert session.closed is True
+
+
+def test_suggestion_result_snapshots_and_freezes_entries() -> None:
+    source = {"kind": "target", "message": "Use the search field"}
+    result = CaseSuggestionAnalysis(summary="Improve target", suggestions=(source,))
+    source["message"] = "Changed after construction"
+    assert result.suggestions[0]["message"] == "Use the search field"
+    with pytest.raises(TypeError):
+        result.suggestions[0]["message"] = "Caller mutation"

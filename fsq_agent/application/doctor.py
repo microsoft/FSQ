@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fsq_agent.agent import check_dynamic_agent_readiness
+from fsq_agent.ai_services import check_case_suggestion_readiness
 from fsq_agent.application.contracts import (
     ApplicationError,
     ApplicationErrorCategory,
@@ -20,7 +21,7 @@ from fsq_agent.application.contracts import (
 from fsq_agent.config import inspect_registered_workspace, list_workspace_registry, load_workspace_platform_settings, validate_strict_core_settings
 from fsq_agent.core import CapabilityDefinitionFactory, CapabilityRegistry, CommonPlatformTools
 from fsq_agent.environments import PlatformRuntimeService
-from fsq_agent.providers import check_case_suggestion_readiness, check_provider_readiness
+from fsq_agent.providers import check_provider_readiness
 
 _PLATFORMS = ("android", "web", "windows", "macos")
 _CHECK_ORDER = ("configuration", "runtime", "target_configuration", "target_availability", "strict_core", "provider", "suggestion_analyzer", "dynamic_agent")

@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.config import Settings
 from fsq_agent.models import ConfigurationError, OpenAIAgentsSettings
 from fsq_agent.providers import _github_copilot as copilot
 from fsq_agent.providers import (
-    build_ai_assertion_evaluator,
     build_model_provider_session,
     prepare_model_provider_session,
     refresh_model_provider_session,

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from fsq_agent.application import ApplicationError, ApplicationErrorCode, CaseCreateRequest, create_case
+from fsq_agent.config import Settings
 from fsq_agent.execution import DynamicExecutionResult, RecordingResult
 from fsq_agent.models import ReportArtifact, Task, TaskResult, VerificationResult
 
@@ -17,11 +18,22 @@ class _FakeAgent:
         self.result = result
         self.task: Task | None = None
         self.event_sink: Any = None
+        self.run_id: str | None = None
 
-    async def run(self, task: Task, event_sink=None) -> TaskResult:
+    async def run(self, task: Task, event_sink=None, *, run_id: str) -> TaskResult:
         self.task = task
         self.event_sink = event_sink
-        return self.result
+        self.run_id = run_id
+        report = self.result.report.model_copy(update={"run_id": run_id, "path": self.result.report.path.parent.parent / run_id / "report.md"})
+        return self.result.model_copy(update={"report": report})
+
+
+def _settings(root: Path) -> Settings:
+    settings = Settings()
+    settings.workspace.root_dir = root
+    settings.harness.platform = "web"
+    settings.output.runs_dir = root / "runs"
+    return settings
 
 
 def _task_result(tmp_path: Path) -> TaskResult:
@@ -38,7 +50,7 @@ def _task_result(tmp_path: Path) -> TaskResult:
 async def test_create_case_builds_goal_task_and_delegates_to_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workspace = tmp_path
     monkeypatch.setattr("fsq_agent.application.cases.require_initialized_workspace", lambda _request: type("Workspace", (), {"workspace": workspace})())
-    settings = object()
+    settings = _settings(tmp_path)
     loaded: list[tuple[str, Path]] = []
     agent = _FakeAgent(_task_result(tmp_path))
 
@@ -54,9 +66,10 @@ async def test_create_case_builds_goal_task_and_delegates_to_agent(tmp_path: Pat
     assert agent.task.name == "Verify product search"
     assert agent.task.planning_reference_kind == "goal"
     assert agent.task.planning_reference_text == "Verify product search"
-    assert result.run_id == "run-1"
+    assert result.run_id == agent.run_id
+    assert result.run_id.startswith("verify-product-search-")
     assert result.status == "success"
-    assert result.report_path == tmp_path / "runs" / "run-1" / "report.md"
+    assert result.report_path == tmp_path / "runs" / result.run_id / "report.md"
     assert result.candidate_case_path is None
 
 
@@ -70,7 +83,7 @@ async def test_create_case_forwards_transport_neutral_event_sink(tmp_path: Path,
     await create_case(
         CaseCreateRequest(current_directory=tmp_path, platform="web", goal="Verify product search"),
         event_sink=sink,
-        settings_loader=lambda _platform, _path: object(),
+        settings_loader=lambda _platform, _path: _settings(tmp_path),
         agent_factory=lambda _settings: agent,
     )
 

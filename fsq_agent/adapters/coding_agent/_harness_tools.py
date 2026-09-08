@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from fsq_agent._capability_bootstrap import build_capability_registry
+from fsq_agent.agent_engine import ToolBinding, ToolCall, ToolInputFailure
 from fsq_agent.core import HarnessInterface, RuntimeSecretStore, StepRunner
 from fsq_agent.models import CapabilityDefinition, ConfigurationError, ExecutableStep, HarnessFunctionSchema, HarnessPlatform, PostActionDelaySettings, RunnerStepResult
 
@@ -41,14 +42,15 @@ class HarnessToolAdapter:
     def tool_names(self) -> set[str]:
         return set(self.schemas_by_name)
 
-    def build_tools(self, function_tool_cls: Any) -> list[Any]:
+    def build_tools(self) -> list[ToolBinding]:
         return [
-            function_tool_cls(
+            ToolBinding(
                 name=schema.name,
                 description=schema.description or f"Run platform action {schema.name} through the active harness.",
-                params_json_schema=schema.params_json_schema,
-                strict_json_schema=True,
-                on_invoke_tool=self._handler_for(schema),
+                parameters_schema=schema.params_json_schema,
+                strict=True,
+                invoke=self._handler_for(schema),
+                on_invalid_input=self._invalid_input_handler_for(schema),
             )
             for schema in self.schemas
         ]
@@ -72,11 +74,17 @@ class HarnessToolAdapter:
             names.add(schema.name)
         return schemas
 
+    def _invalid_input_handler_for(self, schema: HarnessFunctionSchema):
+        async def reject(failure: ToolInputFailure) -> str:
+            return self._format_failure(schema, ValueError(failure.message), 0)
+
+        return reject
+
     def _handler_for(self, schema: HarnessFunctionSchema):
-        async def invoke(_ctx: Any, args: str) -> str:
+        async def invoke(call: ToolCall) -> str:
             started = time.perf_counter()
             try:
-                params = self._parse_args(args)
+                params = call.arguments
                 action_name = self._capability_name(schema)
                 step = ExecutableStep(
                     step_id=f"agent-{schema.name}-{next(self._counter)}",
@@ -104,14 +112,6 @@ class HarnessToolAdapter:
                 return self._format_failure(schema, exc, int((time.perf_counter() - started) * 1000))
 
         return invoke
-
-    def _parse_args(self, args: str) -> dict[str, Any]:
-        if not args:
-            return {}
-        payload = json.loads(args)
-        if not isinstance(payload, dict):
-            raise TypeError("Harness tool arguments must be a JSON object.")
-        return payload
 
     def _capability_name(self, schema: HarnessFunctionSchema) -> str:
         value = schema.metadata.get("capability_name")

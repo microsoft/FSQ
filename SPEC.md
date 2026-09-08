@@ -10,7 +10,7 @@ Root `SPEC.md` and module `SPEC.md` files are the current factual baseline for i
 
 fsq-agent separates dynamic-only helper tools from recordable execution capabilities.
 
-- AgentTools are OpenAI Agents SDK helper tools used only during dynamic execution. They include scoped file reads/writes and bounded run-artifact search/slice helpers. AgentTools are not strict replay capabilities, are not registered in FSQ capability registries, and are never recorded into generated strict YAML.
+- AgentTools are SDK-neutral helper tools used only during dynamic execution through `agent_engine`. They include scoped file reads/writes and bounded run-artifact search/slice helpers. AgentTools are not strict replay capabilities, are not registered in FSQ capability registries, and are never recorded into generated strict YAML.
 - CommonTools are recordable platform-default execution capabilities inherited by every active platform. The active CommonTool is `wait_ms`/`waitMs`. Runtime-secret credential input is represented on text-entry PlatformTools with `textType: runtimeSecret` and is resolved by execution core before driver invocation, not by an LLM-facing secret-fetch tool.
 - PlatformTools are recordable active-platform capabilities. They include concrete backend driver actions, including backend-owned assertions such as `assert_with_ai`.
 
@@ -44,11 +44,23 @@ Goal-based Case creation uses pre-plan as the input-understanding boundary befor
 
 Existing-Case testing parses the Case through FSQ rather than treating YAML as untyped planning text. Suggestion-enabled testing first completes the same single deterministic execution as ordinary Case testing, then gives the parsed Case and bounded persisted execution facts to a read-only AI analysis that cannot invoke Harness, Driver, Core capabilities, or other UI actions. The analysis preserves the authoritative execution status and facts, keeps source steps immutable, and writes suggestions and any candidate Case only inside that Run directory.
 
+`DynamicExecutionService` owns dynamic Run allocation and authoritative metadata transitions. It supplies an explicit `run_id` to `FsqAgent.run`; Agent performs planning, execution, verification, business event emission, and report generation without importing Execution or allocating/updating Run metadata. Execution finalizes success/failure/inconclusive results and cancellation/error paths, then coordinates optional recording without creating another Run.
+
+## Model And Agent Boundary
+
+`agent_engine` owns independently reusable model/provider/agent-execution protocols and neutral input, output, tool, event, filter, and error contracts. Its private implementation uses the pinned OpenAI Agents SDK and OpenAI client. SDK objects, Responses message shapes, SDK exceptions, and concrete constructor injection do not cross into FSQ business code.
+
+All six inference paths use this boundary: pre-plan, main execution, and verification call `AgentEngine.run`; visual assertions, connection testing, and Case suggestions call tool-free `Model.complete`. The private backend owns SDK Runner continuation and single-request SDK `Model.get_response` invocation without a second tool loop or extra semantic retries.
+
+`providers` owns FSQ supplier authentication, token refresh/cache policy, model discovery/filtering, configured access, and connection testing. It supplies explicit connection values and owns neutral provider scopes, not concrete inference clients. `ai_services` owns assertion/suggestion prompts, input preparation, result parsing, factories, and suggestion readiness. `adapters.coding_agent` binds FSQ policies and tools to neutral execution and maps events/results back into existing business contracts. Core receives evaluators through its existing injected protocol.
+
+The engine has no dependency on FSQ business packages or storage. Public inference contracts do not include mandatory authentication methods, GPT-specific high-level model settings, server-managed conversation identifiers, or vendor transcript passthrough. Existing provider support, configuration, CLI/HTTP, persistence, and business verdict behavior are unchanged.
+
 ## Runtime Configuration Defaults
 
 Except while creating an unregistered Workspace, the exact CLI current directory is a registered workspace root using the canonical `.fsq/config/config.<platform>.yaml`, `.fsq/runs/<platform>/`, `cases/<platform>/`, and `knowledge/<platform>/` layout. CLI does not create or accept `.fsq-agent-workspace` markers, search parents, or auto-initialize. For a new name, `fsq init` treats the current directory as the selected directory: an empty directory becomes the Workspace root, while a non-empty directory receives a new `<selected-directory>/<workspace-name>` child. For an existing registered name, initialization uses its stored root independently of the process current directory. All other CLI commands require the exact registered root, and platform operations require the selected platform. Control Plane uses the same Application and Config-owned root-selection and registry rules while retaining explicit browser workspace selection independent of its startup directory.
 
-Default local LLM runs use GitHub Copilot provider authentication with Copilot model `gpt-5.5` and tracing enabled. Provider selection and credentials are managed by the Provider configuration surface rather than workspace initialization. Repository-owned platform YAML presets are package-owned files under `fsq_agent/config/`; the sibling `config.example.yaml` is reference-only. Reusable preset skills are tracked package resources under `fsq_agent/resources/skills/`. Source checkouts and installed distributions resolve the same package-owned preset and skill files. Workspace platform configuration owns local target identity and private runtime-secret values. A Web target always names a browser channel and may omit its executable path so Application can discover exactly one compatible host executable before Driver readiness or workspace mutation.
+LLM access has no default provider or fixed model. Config resolves the explicitly selected Azure OpenAI or GitHub Copilot provider, model, and credentials from the user-level configuration/auth store under `~/.fsq`, not workspace YAML, `.env`, or process provider environment variables. Tracing is requested by default but exports only with a configured OpenAI export key, with sensitive tracing disabled. Repository-owned platform YAML presets are package-owned files under `fsq_agent/config/`; the sibling `config.example.yaml` is reference-only. Reusable preset skills are tracked package resources under `fsq_agent/resources/skills/`. Source checkouts and installed distributions resolve the same package-owned preset and skill files. Workspace platform configuration owns local target identity and private runtime-secret values. A Web target always names a browser channel and may omit its executable path so Application can discover exactly one compatible host executable before Driver readiness or workspace mutation.
 
 The local workspace setup entry is `fsq init --platform android|web|windows|macos` with the selected platform's target options and optional `--name`. It creates an unregistered Workspace from the current selected directory or initializes and updates exactly one platform at the stored root of an existing registered name. It does not configure Providers or create legacy workspace markers.
 
@@ -74,7 +86,7 @@ Shared platform rules:
 - Public CLI entry points select the active platform with `--platform android|web|windows|macos` where platform context is needed; config loading maps that platform id to the corresponding repository-owned `config.<platform>.yaml` preset before validation. Public CLI commands do not expose workspace selection and use the exact registered current directory with canonical `.fsq` platform configuration. Provider configuration is separate from `fsq init`.
 - Entry layers build a platform-selected capability registry: inherited CommonTool capabilities plus only the active platform's PlatformTool capabilities.
 - `StepRunner`, `StepSequenceRunner`, evidence, recording, report generation, and FSQ parsing stay platform-neutral and consume capability metadata rather than platform action-name branches.
-- Repository-owned platform YAML presets own stable platform defaults and policy; environment variables own provider selection, required operator-provided values, local paths, local server URLs, target identifiers, credentials, and other machine-specific values. Current compatibility inputs for older YAML-owned local paths must be explicit in module SPECs, and examples use the env-owned shape.
+- Repository-owned platform YAML presets own stable platform defaults and policy. Provider selection, model, and credentials come only from the user configuration/auth store. Config and the relevant platform contracts define target/path sources and explicitly supported environment exceptions; there is no blanket environment override or Provider fallback.
 - Platform-specific behavior belongs in platform parameter models, action catalogs, harnesses, drivers, config blocks, and configured skill Markdown.
 
 Android platform block:
@@ -130,8 +142,10 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 | models | fsq_agent/models/SPEC.md | Owns shared domain models, platform-runtime status facts, FSQ case and lifecycle hook metadata/settings models, capability metadata/registry contracts, invocation/result contracts, replay reference models, and exceptions. |
 | capabilities | fsq_agent/capabilities/SPEC.md | Owns neutral capability declaration decorators, catalog-backed platform action validation, and metadata discovery helpers used by `core` recordable capabilities. |
 | config | fsq_agent/config/SPEC.md | Loads and validates env/YAML runtime, provider, harness/driver/platform-tool, tracing, execution post-action delay, strict case lifecycle hook settings, strict replay secret, agent context, AgentTool output, CommonTool secret, and workspace configuration. |
-| providers | fsq_agent/providers/SPEC.md | Builds shared Azure OpenAI and GitHub Copilot provider sessions for agent runs, verifier/pre-planner calls, and provider-backed AI assertion evaluators. |
-| tools | fsq_agent/tools/SPEC.md | Provides dynamic-only AgentTool providers, scoped file helpers, bounded artifact lookup helpers, and the OpenAI Agents SDK AgentTool adapter. |
+| providers | fsq_agent/providers/SPEC.md | Owns Azure/Copilot supplier authentication, token and model-selection policy, connection testing, and configured neutral model access. |
+| agent_engine | fsq_agent/agent_engine/SPEC.md | Owns reusable model/provider/agent protocols, neutral inference contracts, and the private SDK backend. |
+| ai_services | fsq_agent/ai_services/SPEC.md | Owns visual assertion and completed-Case suggestion business services over neutral model calls. |
+| tools | fsq_agent/tools/SPEC.md | Provides dynamic-only AgentTool providers, scoped file/artifact helpers, and neutral agent-engine tool bindings. |
 | observation | fsq_agent/observation/SPEC.md | Persists run event timelines; screenshots, UI trees, and other observations are represented by platform evidence artifacts or AgentTool artifact refs. |
 | knowledge | fsq_agent/knowledge/SPEC.md | Loads project-specific application knowledge and task-referenced knowledge assets. |
 | case_dsl | fsq_agent/case_dsl/SPEC.md | Canonically loads and validates FSQ AI Test DSL Cases and converts deterministic commands into executable steps. |
@@ -145,11 +159,11 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 | core.interfaces | fsq_agent/core/interfaces/SPEC.md | Owns public platform-neutral protocols and stable driver/harness factory boundaries. |
 | drivers | fsq_agent/drivers/SPEC.md | Owns concrete Android, Web, Windows, and macOS automation backends behind Core interfaces. |
 | harnesses | fsq_agent/harnesses/SPEC.md | Owns concrete runtime gateways that combine CommonTools, injected drivers, runtime context, and evidence services. |
-| agent | fsq_agent/agent/SPEC.md | Orchestrates dynamic goal/reference execution through OpenAI Agents SDK, AgentTool exposure, active-platform capability exposure, verification, replayable event metadata, and report generation. |
+| agent | fsq_agent/agent/SPEC.md | Orchestrates dynamic goal/reference execution through injected neutral runtimes, planning and verification policy, and safe event persistence. |
 | execution | fsq_agent/execution/SPEC.md | Coordinates transport-neutral dynamic and deterministic runs, Case lifecycle ordering, cancellation/teardown, and Run-local candidate Case recording. |
 | application | fsq_agent/application/SPEC.md | Provides transport-neutral Workspace, Case, Run, Provider, and Environment operations through resource-owned modules, with shared Request, Result, Event, and Error contracts organized under `application/contracts`. |
 | adapters | fsq_agent/adapters/SPEC.md | Owns CLI, Control Plane, and coding-agent external protocol adaptation while depending inward on Application and public runtime contracts. |
-| adapters.coding_agent | fsq_agent/adapters/coding_agent/SPEC.md | Implements Agent runtime protocols through OpenAI Agents SDK tool, session, stream, and result adaptation. |
+| adapters.coding_agent | fsq_agent/adapters/coding_agent/SPEC.md | Assembles FSQ requests/tools/policy above agent_engine and adapts neutral events/results to Agent runtime contracts. |
 | control_plane | fsq_agent/control_plane/SPEC.md | Adapts Application operations to local HTTP/SSE/static delivery, cancellation transport, and browser evidence projection. |
 | cli | fsq_agent/cli/SPEC.md | Adapts the public `fsq` command tree to Application operations with human, JSON, and JSONL output and stable exit categories. |
 | frontend | frontend/SPEC.md | Owns the repository npm/Vite workspace, browser dependency and build policy, generated-asset boundary, and navigation to independently owned frontend application modules. |
@@ -183,6 +197,7 @@ flowchart TD
     Application --> Environments[environments]
     Application --> Config[config]
     Application --> Providers[providers]
+    Application --> AIServices[ai_services]
     Application --> Models[models]
     Application --> Report[report]
     Agent --> Core[core]
@@ -196,6 +211,8 @@ flowchart TD
     Agent --> Report[report]
     CodingAgent --> Agent
     CodingAgent --> Providers
+    CodingAgent --> AIServices
+    CodingAgent --> AgentEngine[agent_engine]
     CodingAgent --> Core
     CodingAgent --> Tools
     Execution --> Agent
@@ -208,7 +225,15 @@ flowchart TD
     Config --> Models
     Providers --> Config
     Providers --> Models
+    Providers --> AgentEngine
+    AIServices --> Providers
+    AIServices --> Config
+    AIServices --> Models
+    AIServices --> AgentEngine
+    AgentEngine --> SDK[private OpenAI Agents SDK backend]
     Tools --> Models
+    Tools --> AgentEngine
+    ControlPlane --> AIServices
     Observation --> Models
     Knowledge --> Models
     CaseDSL --> Models
@@ -246,13 +271,13 @@ flowchart TD
 - PyPI publication is defined by `.github/workflows/release.yml`. It is manually dispatched, defaults to build-and-verify without publication, and requires an explicit publish input plus the `pypi` GitHub environment before upload. The workflow runs the repository's complete Python quality/tests, frontend typecheck/tests/build, distribution checks, and clean installed-package smoke checks for the dispatched commit before publishing the exact verified distribution artifact. The publish job uses PyPI Trusted Publishing through GitHub OIDC with only `id-token: write` and `contents: read`; the repository stores no PyPI API token. GitHub environment protection and the PyPI Trusted Publisher binding are external release prerequisites that must be independently verified before a real publication.
 - Python public API boundary optimization is incremental. When a Python module SPEC adopts the stricter boundary, public exports should be limited to interfaces/protocols, abstract classes, stable service classes that are themselves the public contract, and approved factory classes. Concrete implementation-selection classes such as platform harnesses, platform backends, and provider adapters should sit behind public protocols/factories unless the module SPEC records a named exception with allowed importers, rationale, and revisit condition. Function-style helpers, decorators, and discovery utilities require the same SPEC-visible exception policy.
 - Internal Python implementation files are prefixed with `_`.
-- Shared data structures and exceptions live only in the `models` module. Capability declaration decorators, catalog-backed platform validation, and decorated-method discovery live only in the `capabilities` module.
+- Shared FSQ domain data structures and exceptions live in `models`. Independently reusable inference contracts and errors belong to `agent_engine` and must not depend on FSQ business types; immutable service-specific suggestion results belong to `ai_services`. Capability declaration decorators, catalog-backed platform validation, and decorated-method discovery live only in `capabilities`.
 - Module imports must follow the DAG in the architecture diagram.
 - Transport implementation and package data live under `adapters`. The installed scripts target `fsq_agent.adapters.cli:main`. Legacy `fsq_agent.cli` and `fsq_agent.control_plane` packages preserve only their documented public entry symbols as compatibility exports; old private transport submodule paths are unsupported and absent.
 - Package-root execution helpers and old Agent SDK implementation paths are absent. Repository code imports canonical `execution`, `adapters.coding_agent`, `case_dsl`, Drivers, Harnesses, Environments, and public Core subpackages directly.
 - Package-private composition helpers at the `fsq_agent` package root may compose public module APIs for shared entry-layer capability bootstrap, registry-metadata-based provider requirement detection, strict lifecycle orchestration, and dynamic-run recording used by CLI and Control Plane. Provider requirement detection compares the active platform registry with and without provider-backed capabilities and resolves executable steps through the registry snapshot rather than branching on action names. These helpers must remain private, must not expose public module contracts, and must not be imported by `models`, `capabilities`, `tools`, `fsq`, `core`, `providers`, or `report`.
 - `capabilities` may import `models` only among project modules. It must not import `tools`, `core`, `agent`, `cli`, `fsq`, `providers`, `report`, SDK objects, concrete drivers, or backend runtime types.
-- Provider construction lives in `providers`; `core` must use provider-neutral protocols and must not import provider/runtime modules.
+- Supplier-configured provider scopes are constructed by `providers`; concrete inference clients and SDK objects are private to `agent_engine`. `core` uses provider-neutral evaluator protocols and must not import provider/runtime/business-service modules.
 - Dynamic-only local helper utilities live as AgentTools in `tools`; recordable CommonTool and PlatformTool capabilities live in `core`, with CommonTool bodies in platform tool providers and backend PlatformTool bodies on concrete drivers. CommonTools and PlatformTools declare executable metadata through `capabilities`. All recordable capabilities must be registered before strict YAML parsing or SDK capability exposure, and platform registries must contain only inherited CommonTools plus the active platform's PlatformTools. AgentTools must not be registered for strict replay.
 - Replay, sensitivity, evidence, and tool-origin behavior must come from capability metadata and normalized `StepRunner` results, not hard-coded tool-name sets.
 - New platforms or capability groups reuse shared capability declaration and registry contracts unless the project specification defines a changed shared contract.
@@ -260,7 +285,7 @@ flowchart TD
 ## Python Architecture Rules
 
 - Use the lowest architecture level that keeps the module clear, testable, and changeable.
-- `models`, `capabilities`, `tools`, `case_dsl`, `report`, `knowledge`, `skills`, `config`, `providers`, and `observation` default to Level 2 Simple Package unless a module SPEC records a stronger need.
+- `models`, `capabilities`, `tools`, `case_dsl`, `report`, `knowledge`, `skills`, `config`, `providers`, `agent_engine`, `ai_services`, and `observation` use Level 2 Simple Package unless a module SPEC records a stronger need.
 - `core`, `agent`, `execution`, `application`, `adapters`, `cli`, and `control_plane` use Level 3 because they coordinate execution flows, external SDKs, harnesses, providers, persistence, shared application operations, or transport entry points.
 - Public APIs must be exported from module `__init__.py` files, and internal implementation modules must remain private across module boundaries. Modules that have adopted the stricter public API boundary must not export concrete implementation-selection classes, helper functions, decorators, or discovery utilities unless their module SPEC records an explicit exception. Public factories should own construction/selection of private implementations when a caller only needs a protocol or service contract.
 - Do not introduce Repository, Unit of Work, Clean Architecture, or DDD patterns unless a confirmed SPEC records the concrete reason.

@@ -12,9 +12,9 @@ from fsq_agent.models import ConfigurationError
 class ProviderClientConfig:
     provider: str
     model: str
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
-    default_headers: dict[str, str] = field(default_factory=dict)
+    default_headers: dict[str, str] = field(default_factory=dict, repr=False)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

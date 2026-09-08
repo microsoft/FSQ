@@ -6,7 +6,7 @@ Provide the shared, transport-neutral Application layer used by the FSQ CLI, Con
 
 ## Dependencies
 
-Application may consume public APIs from `models`, `config`, `providers`, `agent`, `execution`, `case_dsl`, `environments`, `core`, and `report`. It must not import adapters, frontend code, Click, HTTP/SSE frameworks, terminal rendering, or concrete UI types. Lower-level modules must not import `application`.
+Application may consume public APIs from `models`, `config`, `providers`, `ai_services`, `agent`, `execution`, `case_dsl`, `environments`, `core`, and `report`. It must not import adapters, SDK objects, frontend code, Click, HTTP/SSE frameworks, terminal rendering, or concrete UI types. Lower-level modules must not import `application`.
 
 ## Public Interface
 
@@ -41,6 +41,8 @@ New `run.json` uses schema `fsq.run/v1` and validates Workspace name, platform, 
 Application owns cross-module orchestration, shared request validation, workspace enforcement, operation-level event production, and consistent results/errors for all adapters. It delegates authoritative behavior to existing modules:
 
 - `agent` owns AI planning, model/tool orchestration, and dynamic verification.
+- `ai_services` owns visual assertion and read-only Case suggestion policy, service factories, and suggestion readiness; Application composes these services without SDK/model protocol knowledge.
+- `providers` owns supplier authentication/configured access and readiness; it does not own assertion or suggestion business logic.
 - `execution` owns complete dynamic/deterministic run coordination, Case lifecycle semantics, cancellation/teardown ordering, and candidate Case recording.
 - `case_dsl` owns Case DSL parsing, validation, and canonical deterministic-step adaptation.
 - `environments` owns host support, read-only runtime readiness, and Web executable discovery.
@@ -71,7 +73,7 @@ Application owns the transport-neutral workspace initialization, platform readin
 
 Application's Doctor operation accepts the exact current directory and returns immutable `DoctorResult`, `DoctorWorkspaceSummary`, `DoctorPlatformResult`, fixed `DoctorChecks`, fixed `DoctorCommands`, and `DoctorStatusDetail` contracts. Detail status is `ready`, `unavailable`, `error`, or `not_applicable`; platform and overall status is `ready`, `partial`, or `unavailable`. Platforms are diagnosed in Android, Web, Windows, macOS order and only identifiable configured platforms are returned. An identifiable damaged platform produces a configuration error detail without aborting other platforms; an untrustworthy registry, root mapping, or platform inventory raises a Workspace/configuration Application Error.
 
-Doctor delegates component facts through public Config, Environments, Providers, Agent, and Core boundaries, isolates unexpected component exceptions into safe error details, derives command verdicts from a fixed dependency matrix, and returns ordered exact-deduplicated actions. Ordinary `case test` requires configuration, Runtime, Target configuration/availability, and Strict Core readiness. `case test --suggest` additionally requires Provider and suggestion-analyzer readiness. `case create` additionally requires Provider and dynamic-Agent readiness. Doctor does not inspect a particular Case and therefore does not promise readiness for Case-specific syntax, runtime-secret, nested-Case, or `assertWithAI` requirements.
+Doctor delegates component facts through public Config, Environments, Providers, AI Services, Agent, and Core boundaries, isolates unexpected component exceptions into safe error details, derives command verdicts from a fixed dependency matrix, and returns ordered exact-deduplicated actions. Ordinary `case test` requires configuration, Runtime, Target configuration/availability, and Strict Core readiness. `case test --suggest` additionally requires Provider and AI Services suggestion-analyzer readiness. `case create` additionally requires Provider and dynamic-Agent readiness. Doctor does not inspect a particular Case and therefore does not promise readiness for Case-specific syntax, runtime-secret, nested-Case, or `assertWithAI` requirements.
 
 ## Python Architecture
 

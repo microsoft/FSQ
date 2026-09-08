@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 
 import pytest
-from agents.strict_schema import ensure_strict_json_schema
 
 from fsq_agent import models
 from fsq_agent.models import (
@@ -174,7 +173,6 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
     assert "session creation" in macos_launch_schema["properties"]["arguments"]["description"]
     assert "configured bundle id" in macos_launch_schema["properties"]["bundle_id"]["description"]
     assert "environment" not in macos_launch_schema["properties"]
-    assert ensure_strict_json_schema(macos_launch_schema)
     assert "retain" in macos_kill_schema["properties"]["close_session"]["description"]
     assert "Enter" in macos_press_key_schema["properties"]["key"]["description"]
     assert "COMMAND" in macos_press_key_schema["properties"]["modifiers"]["description"]

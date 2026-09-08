@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from fsq_agent.ai_services import build_case_suggestion_analyzer
 from fsq_agent.application.contracts import (
     ApplicationError,
     ApplicationErrorCategory,
@@ -21,11 +22,10 @@ from fsq_agent.application.workspace import require_initialized_workspace
 from fsq_agent.config import Settings, load_workspace_platform_settings
 from fsq_agent.execution import DynamicExecutionRequest, DynamicExecutionService
 from fsq_agent.models import Task, TaskResult
-from fsq_agent.providers import build_case_suggestion_analyzer
 
 
 class _Agent(Protocol):
-    async def run(self, task: Task, event_sink: CaseCreateEventSink | None = None) -> TaskResult: ...
+    async def run(self, task: Task, event_sink: CaseCreateEventSink | None = None, *, run_id: str) -> TaskResult: ...
 
 
 SettingsLoader = Callable[[Path, str], Settings]

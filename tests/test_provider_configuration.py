@@ -3,11 +3,11 @@
 
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fsq_agent.agent_engine import ModelRequest, ModelResult
 from fsq_agent.config import (
     Settings,
     activate_github_copilot_provider,
@@ -226,7 +226,7 @@ def test_connection_test_uses_saved_provider_and_always_closes_session(tmp_path:
     session = MagicMock()
     session.provider = "azure_openai"
     session.model = "saved-model"
-    session.invoke_responses_sync.return_value = SimpleNamespace(output_text="FSQ_OK")
+    session.complete_sync.return_value = ModelResult(text="FSQ_OK")
 
     with patch("fsq_agent.providers._connection_test.build_model_provider_session", return_value=session):
         result = test_model_provider_connection(user_config_root=user_root)
@@ -234,5 +234,5 @@ def test_connection_test_uses_saved_provider_and_always_closes_session(tmp_path:
     assert result.provider == "azure_openai"
     assert result.model == "saved-model"
     assert result.duration_seconds >= 0
-    assert session.invoke_responses_sync.call_args.kwargs == {"input": "Reply with FSQ_OK."}
+    session.complete_sync.assert_called_once_with(ModelRequest(input="Reply with FSQ_OK."))
     session.close_sync.assert_called_once_with()

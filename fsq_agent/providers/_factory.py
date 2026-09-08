@@ -2,9 +2,7 @@
 # Licensed under the MIT License.
 
 from fsq_agent.config import Settings
-from fsq_agent.providers._ai_assertion import AIAssertionEvaluator
 from fsq_agent.providers._azure_openai import build_azure_openai_client_config
-from fsq_agent.providers._case_suggestion import CaseSuggestionAnalyzer
 from fsq_agent.providers._github_copilot import build_github_copilot_client_config, refresh_github_copilot_client_config
 from fsq_agent.providers._session import ModelProviderSession
 
@@ -29,9 +27,6 @@ class ModelProviderFactory:
             return ModelProviderSession(refresh_github_copilot_client_config(self.settings))
         return ModelProviderSession(build_azure_openai_client_config(self.settings))
 
-    def build_ai_assertion_evaluator(self) -> AIAssertionEvaluator:
-        return AIAssertionEvaluator(self.build_session())
-
 
 def build_model_provider_session(settings: Settings) -> ModelProviderSession:
     return ModelProviderFactory(settings).build_session()
@@ -45,14 +40,6 @@ def refresh_model_provider_session(settings: Settings) -> ModelProviderSession:
     return ModelProviderFactory(settings).refresh_session()
 
 
-def build_ai_assertion_evaluator(settings: Settings) -> AIAssertionEvaluator:
-    return ModelProviderFactory(settings).build_ai_assertion_evaluator()
-
-
-def build_case_suggestion_analyzer(settings: Settings) -> CaseSuggestionAnalyzer:
-    return CaseSuggestionAnalyzer(ModelProviderFactory(settings).build_session())
-
-
 def check_provider_readiness(settings: Settings) -> tuple[bool, str, str]:
     session = None
     try:
@@ -63,16 +50,3 @@ def check_provider_readiness(settings: Settings) -> tuple[bool, str, str]:
         if session is not None:
             session.close_sync()
     return True, "Model Provider is ready for non-interactive use.", ""
-
-
-def check_case_suggestion_readiness(settings: Settings) -> tuple[bool, str, str]:
-    session = None
-    try:
-        session = ModelProviderFactory(settings).build_session()
-        CaseSuggestionAnalyzer(session)
-    except Exception:  # noqa: BLE001 - readiness returns a safe unavailable result.
-        return False, "Case suggestion analysis is unavailable.", "Run fsq providers configure for the selected Provider."
-    finally:
-        if session is not None:
-            session.close_sync()
-    return True, "Case suggestion analysis is ready.", ""

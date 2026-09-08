@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
+from fsq_agent.agent_engine import EngineError, ModelRequest, ModelResult
 from fsq_agent.config import Settings, refresh_provider_settings, validate_provider_settings
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers._factory import build_model_provider_session
@@ -32,7 +33,7 @@ def test_model_provider_connection(
     session = build_model_provider_session(settings)
     started_at = perf_counter()
     try:
-        response = session.invoke_responses_sync(input=CONNECTION_TEST_PROMPT)
+        response = session.complete_sync(ModelRequest(input=CONNECTION_TEST_PROMPT))
         _require_output_text(response)
         return ProviderConnectionTestResult(
             provider=session.provider,
@@ -47,14 +48,14 @@ def test_model_provider_connection(
         session.close_sync()
 
 
-def _require_output_text(response: Any) -> None:
-    output_text = getattr(response, "output_text", None)
+def _require_output_text(response: ModelResult) -> None:
+    output_text = response.text
     if not isinstance(output_text, str) or not output_text.strip():
         raise ConfigurationError("Provider connection test returned an empty model response.")
 
 
 def _connection_error(exc: Exception) -> ConfigurationError:
-    status_code = getattr(exc, "status_code", None)
+    status_code = exc.status_code if isinstance(exc, EngineError) else None
     if status_code in {401, 403}:
         message = "Provider authentication failed. Check the saved credentials."
     elif status_code == 404:
@@ -63,7 +64,7 @@ def _connection_error(exc: Exception) -> ConfigurationError:
         message = "The provider rate limit was reached. Try again later."
     elif isinstance(status_code, int) and status_code >= 500:
         message = "The provider is temporarily unavailable. Try again later."
-    elif isinstance(exc, TimeoutError):
+    elif isinstance(exc, TimeoutError) or (isinstance(exc, EngineError) and exc.category == "timeout"):
         message = "The provider connection test timed out."
     else:
         message = "The provider connection test failed."

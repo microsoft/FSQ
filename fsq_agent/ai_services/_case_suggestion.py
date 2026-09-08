@@ -1,19 +1,30 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
-from typing import Any
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any
 
+from fsq_agent.agent_engine import ModelRequest
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers._session import ModelProviderSession
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from fsq_agent.providers import ModelProviderSession
 
 
 @dataclass(frozen=True)
 class CaseSuggestionAnalysis:
     summary: str
-    suggestions: tuple[dict[str, str], ...]
+    suggestions: tuple[Mapping[str, str], ...]
     candidate_case_yaml: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "suggestions", tuple(MappingProxyType(dict(item)) for item in self.suggestions))
 
 
 class CaseSuggestionAnalyzer:
@@ -24,8 +35,8 @@ class CaseSuggestionAnalyzer:
 
     def analyze(self, *, parsed_case: dict[str, Any], execution_report: dict[str, Any]) -> CaseSuggestionAnalysis:
         try:
-            response = self._session.invoke_responses_sync(input=_analysis_input(parsed_case, execution_report))
-            payload = _parse_json_object(_response_text(response))
+            response = self._session.complete_sync(ModelRequest(input=_analysis_input(parsed_case, execution_report)))
+            payload = _parse_json_object(response.text)
             return _validate_analysis(payload)
         finally:
             self._session.close_sync()
@@ -40,13 +51,6 @@ def _analysis_input(parsed_case: dict[str, Any], execution_report: dict[str, Any
         f"PARSED_CASE:\n{json.dumps(parsed_case, ensure_ascii=False, default=str)}"
         f"\n\nEXECUTION_REPORT:\n{json.dumps(execution_report, ensure_ascii=False, default=str)}"
     )
-
-
-def _response_text(response: Any) -> str:
-    value = response.get("output_text") if isinstance(response, dict) else getattr(response, "output_text", None)
-    if isinstance(value, str):
-        return value
-    return str(response)
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:

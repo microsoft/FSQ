@@ -6,7 +6,6 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -16,6 +15,7 @@ from fsq_agent.adapters.coding_agent._harness_tools import HarnessToolAdapter
 from fsq_agent.agent._pre_plan import build_pre_plan_input
 from fsq_agent.agent._prompt import PromptModelBuilder, PromptRenderer
 from fsq_agent.agent._verification_task import VerificationEvidenceBuilder
+from fsq_agent.agent_engine import AgentEvent, AgentRequest, AgentResult, EngineError, ModelRequest, ModelResult, ToolCall, ToolInputFailure, ToolOutputEntry, ToolOutputTrimSettings
 from fsq_agent.config import Settings
 from fsq_agent.models import (
     AgentFinalOutput,
@@ -51,15 +51,6 @@ class _CapturingToolFactory:
     def build_tools(self, *_args: Any, **kwargs: Any) -> list[Any]:
         self.kwargs = kwargs
         return []
-
-
-class _FakeFunctionTool:
-    def __init__(self, **kwargs: Any) -> None:
-        self.name = kwargs["name"]
-        self.description = kwargs["description"]
-        self.params_json_schema = kwargs["params_json_schema"]
-        self.strict_json_schema = kwargs.get("strict_json_schema", True)
-        self.on_invoke_tool = kwargs["on_invoke_tool"]
 
 
 class _FakeHarness:
@@ -176,62 +167,38 @@ def _fake_harness_factory(_run_id: str) -> _FakeHarness:
 
 
 class _FakeProviderSession:
-    def create_agents_provider(self, **_kwargs: Any) -> str:
-        return "provider"
+    def get_model(self):
+        return _FakeModel()
 
     async def close(self) -> None:
         return None
 
 
-class _FakeAgent:
-    instances: ClassVar[list["_FakeAgent"]] = []
-
-    def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
-        self.instances.append(self)
+class _FakeModel:
+    async def complete(self, request: ModelRequest) -> ModelResult:
+        raise AssertionError("Agent runtime must not bypass the engine")
 
 
-class _FakeRunConfig:
-    def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
+class _FakeEngine:
+    requests: ClassVar[list[AgentRequest]] = []
 
-
-class _FakeToolOutputTrimmer:
-    def __init__(self, **kwargs: Any) -> None:
-        self.kwargs = kwargs
-
-
-class _FakeRunResult:
-    def __init__(self, final_output: Any | None = None) -> None:
-        self.final_output = final_output or AgentFinalOutput(status="success", summary="Done.")
-
-    async def stream_events(self) -> Any:
-        if False:
-            yield None
-
-
-class _FakeRunner:
-    @staticmethod
-    def run_streamed(agent: _FakeAgent, *_args: Any, **_kwargs: Any) -> _FakeRunResult:
-        if agent.kwargs.get("output_type") is GoalPrePlan:
-            return _FakeRunResult(GoalPrePlan(goal="Open the app.", verification_goal="The app is open."))
-        return _FakeRunResult()
+    async def run(self, model, request: AgentRequest, *, on_event=None) -> AgentResult:
+        self.requests.append(request)
+        if request.output is not None and request.output.name == "GoalPrePlan":
+            return AgentResult(final_output=GoalPrePlan(goal="Open the app.", verification_goal="The app is open."))
+        return AgentResult(final_output=AgentFinalOutput(status="success", summary="Done."))
 
 
 def _patch_runtime_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
-    import agents
-    import agents.extensions
-
     import fsq_agent.adapters.coding_agent._openai_runtime as runtime_module
 
-    _FakeAgent.instances = []
+    _FakeEngine.requests = []
     monkeypatch.setattr(runtime_module, "build_model_provider_session", lambda _settings: _FakeProviderSession())
-    monkeypatch.setattr(agents, "Agent", _FakeAgent)
-    monkeypatch.setattr(agents, "FunctionTool", _FakeFunctionTool)
-    monkeypatch.setattr(agents, "RunConfig", _FakeRunConfig)
-    monkeypatch.setattr(agents, "Runner", _FakeRunner)
-    monkeypatch.setattr(agents, "set_tracing_disabled", lambda _disabled: None)
-    monkeypatch.setattr(agents.extensions, "ToolOutputTrimmer", _FakeToolOutputTrimmer)
+    monkeypatch.setattr(runtime_module, "create_agent_engine", _FakeEngine)
+
+
+def _test_request(runtime: OpenAIAgentsRuntime, run_id: str = "") -> AgentRequest:
+    return runtime._build_request(name="test", instructions="instructions", model_input="test", tools=[], output_type=AgentFinalOutput, run_id=run_id)
 
 
 def _azure_openai_settings(*, api_key: str = "dummy") -> OpenAIAgentsSettings:
@@ -296,9 +263,7 @@ async def test_runtime_emits_startup_events_before_main_planning(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_runtime_constructs_sdk_agents_with_explicit_medium_model_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from agents.model_settings import ModelSettings
-
+async def test_runtime_routes_three_agent_flows_through_neutral_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_runtime_sdk(monkeypatch)
     runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
     task = Task(id="explicit-model-settings", name="Model Settings", description="Run with stable SDK settings.")
@@ -307,17 +272,15 @@ async def test_runtime_constructs_sdk_agents_with_explicit_medium_model_settings
     await runtime.run_task(task, KnowledgeBundle(), [], "explicit-model-settings-run")
     await runtime.run_verification(task, [], "explicit-model-settings-run", None)
 
-    assert [agent.kwargs["name"] for agent in _FakeAgent.instances] == [
+    assert [request.name for request in _FakeEngine.requests] == [
         "fsq-agent pre-planner",
         "fsq-agent",
         "fsq-agent verifier",
     ]
-    for agent in _FakeAgent.instances:
-        model_settings = agent.kwargs["model_settings"]
-        assert isinstance(model_settings, ModelSettings)
-        assert model_settings.reasoning is not None
-        assert model_settings.reasoning.effort == "medium"
-        assert model_settings.verbosity == "medium"
+    assert [request.output.name for request in _FakeEngine.requests] == ["GoalPrePlan", "AgentFinalOutput", "AgentFinalOutput"]
+    assert all(request.stream for request in _FakeEngine.requests)
+    assert len(_FakeEngine.requests[0].tools) == 2
+    assert _FakeEngine.requests[-1].tools == ()
 
 
 @pytest.mark.asyncio
@@ -338,6 +301,84 @@ async def test_runtime_harness_construction_failure_is_visible(monkeypatch: pyte
     assert "Harness setup started" in titles
     assert "Harness setup completed" not in titles
     assert titles[-1] == "SDK run failed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_cleanup_failure_preserves_original_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailedCloseSession(_FakeProviderSession):
+        async def close(self) -> None:
+            raise EngineError("cleanup", "Secondary cleanup failure")
+
+    class FailedEngine:
+        async def run(self, model, request, *, on_event=None):
+            raise EngineError("incomplete", "Primary model failure", reason="content_filter")
+
+    _patch_runtime_sdk(monkeypatch)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._openai_runtime.build_model_provider_session", lambda settings: FailedCloseSession())
+    runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory, engine=FailedEngine())
+
+    results = await runtime.run_task(Task(id="failure", description="Fail run"), KnowledgeBundle(), [], "failed-cleanup-run")
+
+    assert results[0].status == "failed"
+    assert results[0].error == "Primary model failure"
+    assert results[0].tool_output["failure_category"] == "provider_content_filter"
+
+
+@pytest.mark.parametrize("operation", ["run_task", "run_pre_plan", "run_verification"])
+@pytest.mark.parametrize("outcome", ["failure", "cancelled", "success"])
+@pytest.mark.parametrize("cleanup_cancelled", [False, True])
+async def test_runtime_cleanup_preserves_primary_outcome_with_real_session(monkeypatch: pytest.MonkeyPatch, operation: str, outcome: str, cleanup_cancelled: bool) -> None:
+    from fsq_agent.models import PlanningError
+
+    primary = asyncio.CancelledError("Primary cancellation") if outcome == "cancelled" else EngineError("incomplete", "Primary model failure", reason="content_filter")
+    cleanup_error = asyncio.CancelledError("Secondary cleanup cancellation") if cleanup_cancelled else EngineError("cleanup", "Secondary cleanup failure")
+    closed = []
+
+    class ControlledProvider:
+        def get_model(self, model_name: str):
+            return _FakeModel()
+
+        async def aclose(self) -> None:
+            closed.append(True)
+            raise cleanup_error
+
+    class ControlledEngine(_FakeEngine):
+        async def run(self, model, request, *, on_event=None):
+            if outcome != "success":
+                raise primary
+            return await super().run(model, request, on_event=on_event)
+
+    settings = Settings(openai_agents=_azure_openai_settings())
+    monkeypatch.setattr("fsq_agent.providers._session.create_model_provider", lambda **kwargs: ControlledProvider())
+    session = build_model_provider_session(settings)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._openai_runtime.build_model_provider_session", lambda configured: session)
+    runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory(), _fake_harness_factory, engine=ControlledEngine())
+    task = Task(id="failure-precedence", description="Verify failure precedence")
+
+    async def invoke_operation():
+        if operation == "run_pre_plan":
+            return await runtime.run_pre_plan("Plan task", KnowledgeBundle(), [], "precedence-run")
+        if operation == "run_verification":
+            return await runtime.run_verification(task, [], "precedence-run", None)
+        return await runtime.run_task(task, KnowledgeBundle(), [], "precedence-run")
+
+    if outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError) as failure:
+            await invoke_operation()
+        assert failure.value is primary
+    elif outcome == "success":
+        with pytest.raises(type(cleanup_error)) as failure:
+            await invoke_operation()
+        assert failure.value is cleanup_error
+    elif operation == "run_pre_plan":
+        with pytest.raises(PlanningError) as failure:
+            await invoke_operation()
+        assert failure.value.__cause__ is primary
+    else:
+        results = await invoke_operation()
+        assert results[0].status == "failed"
+        assert results[0].error == "Primary model failure"
+    assert closed == [True]
 
 
 @pytest.mark.asyncio
@@ -382,20 +423,12 @@ def test_runtime_harness_timeout_does_not_wait_for_worker_shutdown() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_classifies_sdk_content_filter_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
-    import agents
-
-    class _ContentFilterRunResult:
-        async def stream_events(self) -> Any:
-            raise RuntimeError("Responses stream ended with terminal event `response.incomplete`. status=incomplete; incomplete_details=IncompleteDetails(reason='content_filter').")
-            yield None
-
-    class _ContentFilterRunner:
-        @staticmethod
-        def run_streamed(_agent: _FakeAgent, *_args: Any, **_kwargs: Any) -> _ContentFilterRunResult:
-            return _ContentFilterRunResult()
+    class _ContentFilterEngine:
+        async def run(self, model, request, *, on_event=None):
+            raise EngineError("incomplete", "Model response incomplete.", reason="content_filter")
 
     _patch_runtime_sdk(monkeypatch)
-    monkeypatch.setattr(agents, "Runner", _ContentFilterRunner)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._openai_runtime.create_agent_engine", _ContentFilterEngine)
     runtime = OpenAIAgentsRuntime(Settings(openai_agents=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
     events: list[Any] = []
 
@@ -814,8 +847,8 @@ async def test_harness_tool_adapter_delegates_to_step_runner(monkeypatch: pytest
     harness = _DirectInvokeForbiddenHarness()
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"target": "Downloads"}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Downloads"}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "passed"
@@ -837,8 +870,8 @@ async def test_harness_tool_adapter_applies_evidence_policy_to_mutating_action()
     harness = _FakeHarness()
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"target": "Downloads"}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Downloads"}, call_id="call-1"))
 
     payload = json.loads(output)
     assert tools[0].name == "tap_on"
@@ -871,8 +904,8 @@ async def test_harness_tool_adapter_outputs_tap_at_safe_replay_params() -> None:
     harness = _FakeHarness(tool_name="tap_at", driver_method="tap_at", fsq_action_name="tapAt", screen_size=(1080, 2400))
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"point": {"x": 100, "y": 200}}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"point": {"x": 100, "y": 200}}, call_id="call-1"))
 
     payload = json.loads(output)
     expected = {"point": {"x": 100, "y": 200}, "reference_screen_size": {"width": 1080, "height": 2400}}
@@ -885,15 +918,13 @@ def test_harness_tool_adapter_uses_default_strict_schema_for_capability_tools() 
     harness = _FakeHarness(tool_name="perform_actions", driver_method="perform_actions", fsq_action_name="performActions")
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
+    tools = adapter.build_tools()
 
     assert tools[0].name == "perform_actions"
-    assert tools[0].strict_json_schema is True
+    assert tools[0].strict is True
 
 
-def test_harness_tool_adapter_builds_macos_tools_with_real_strict_schema() -> None:
-    from agents import FunctionTool
-
+def test_harness_tool_adapter_builds_macos_bindings_with_strict_schema_requirement() -> None:
     from fsq_agent.core.harness._appium_mac2_driver import AppiumMac2Driver
     from fsq_agent.core.harness._macos import MacOSHarness
 
@@ -907,11 +938,11 @@ def test_harness_tool_adapter_builds_macos_tools_with_real_strict_schema() -> No
     )
     adapter = HarnessToolAdapter(harness, run_id="macos-schema-run", platform="macos")
 
-    tools = adapter.build_tools(FunctionTool)
+    tools = adapter.build_tools()
 
     assert {tool.name for tool in tools} == {schema.name for schema in adapter.schemas}
     assert "assert_with_ai" in {tool.name for tool in tools}
-    assert all(tool.strict_json_schema for tool in tools)
+    assert all(tool.strict for tool in tools)
 
 
 def test_harness_tool_adapter_preserves_capability_parameter_schema() -> None:
@@ -921,12 +952,26 @@ def test_harness_tool_adapter_preserves_capability_parameter_schema() -> None:
     schema["description"] = "Tool parameter description."
     schema["properties"]["target"]["description"] = "Target description."
 
-    [tool] = adapter.build_tools(_FakeFunctionTool)
+    [tool] = adapter.build_tools()
 
-    assert tool.params_json_schema is schema
-    assert tool.params_json_schema["description"] == "Tool parameter description."
-    assert tool.params_json_schema["properties"]["target"]["description"] == "Target description."
-    assert tool.strict_json_schema is True
+    assert tool.parameters_schema is schema
+    assert tool.parameters_schema["description"] == "Tool parameter description."
+    assert tool.parameters_schema["properties"]["target"]["description"] == "Target description."
+    assert tool.strict is True
+
+
+async def test_invalid_harness_input_keeps_failure_provenance_without_actions() -> None:
+    harness = _FakeHarness()
+    adapter = HarnessToolAdapter(harness, run_id="run-1")
+    tool = adapter.build_tools()[0]
+    output = await tool.on_invalid_input(ToolInputFailure(name=tool.name, call_id="invalid-action", message="Tool arguments must be a JSON object."))
+    payload = json.loads(output)
+    assert payload["status"] == "failed"
+    assert payload["capability_name"] == "tap_on"
+    assert payload["platform"] == "android"
+    assert payload["artifact_refs"] == []
+    assert payload["error_message"] == "Tool arguments must be a JSON object."
+    assert harness.calls == []
 
 
 @pytest.mark.asyncio
@@ -938,8 +983,8 @@ async def test_harness_tool_adapter_keeps_default_evidence_policy_for_assertion_
     )
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"target": "Downloads"}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Downloads"}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "passed"
@@ -962,8 +1007,8 @@ async def test_harness_tool_adapter_uses_step_kind_for_effective_evidence_policy
     harness = _FakeHarness()
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"target": "Downloads"}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Downloads"}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "passed"
@@ -986,8 +1031,8 @@ async def test_harness_tool_adapter_uses_web_platform_registry_for_evidence_poli
     harness = _FakeWebHarness()
     adapter = HarnessToolAdapter(harness, run_id="run-1", platform="web")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"target": "Search"}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Search"}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "passed"
@@ -1008,8 +1053,8 @@ async def test_harness_tool_adapter_surfaces_artifact_capture_failure() -> None:
     harness = _FailingCaptureHarness()
     adapter = HarnessToolAdapter(harness, run_id="run-1")
 
-    tools = adapter.build_tools(_FakeFunctionTool)
-    output = await tools[0].on_invoke_tool(None, json.dumps({"target": "Downloads"}))
+    tools = adapter.build_tools()
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Downloads"}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "failed"
@@ -1101,22 +1146,8 @@ async def test_runtime_uses_sdk_stream_events_for_agent_tools(monkeypatch: pytes
 
 def test_runtime_stream_tool_output_preserves_tool_name_from_started_event() -> None:
     runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
-    started = SimpleNamespace(
-        type="run_item_stream_event",
-        name="tool_called",
-        item=SimpleNamespace(
-            raw_item=SimpleNamespace(
-                name="read_knowledge_page",
-                call_id="call-1",
-                arguments='{"page_id":"edge_android_new_tab_page","file":null}',
-            )
-        ),
-    )
-    completed = SimpleNamespace(
-        type="run_item_stream_event",
-        name="tool_output",
-        item=SimpleNamespace(raw_item=SimpleNamespace(call_id="call-1"), output='{"ok":true,"page_id":"edge_android_new_tab_page","duration_ms":123}'),
-    )
+    started = AgentEvent(kind="tool_called", tool_name="read_knowledge_page", call_id="call-1", arguments={"page_id": "edge_android_new_tab_page", "file": None})
+    completed = AgentEvent(kind="tool_output", call_id="call-1", output='{"ok":true,"page_id":"edge_android_new_tab_page","duration_ms":123}')
 
     start_event = runtime._map_stream_event(started, "run-1", "pre-plan")
     completed_event = runtime._map_stream_event(completed, "run-1", "pre-plan")
@@ -1130,11 +1161,7 @@ def test_runtime_stream_tool_output_preserves_tool_name_from_started_event() -> 
 
 def test_runtime_stream_message_output_uses_text_not_sdk_object_repr() -> None:
     runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
-    event = SimpleNamespace(
-        type="run_item_stream_event",
-        name="message_output_created",
-        item=SimpleNamespace(raw_item=SimpleNamespace(content=[SimpleNamespace(text='{"schema_version":"task_run_v1","status":"success"}')])),
-    )
+    event = AgentEvent(kind="message", text='{"schema_version":"task_run_v1","status":"success"}')
 
     run_event = runtime._map_stream_event(event, "run-1", "task")
 
@@ -1144,11 +1171,7 @@ def test_runtime_stream_message_output_uses_text_not_sdk_object_repr() -> None:
 
 def test_runtime_stream_omits_empty_reasoning_summary() -> None:
     runtime = OpenAIAgentsRuntime(Settings(openai_agents=OpenAIAgentsSettings()), _EmptyToolFactory())
-    event = SimpleNamespace(
-        type="run_item_stream_event",
-        name="reasoning_item_created",
-        item=SimpleNamespace(raw_item=SimpleNamespace(summary=[])),
-    )
+    event = AgentEvent(kind="reasoning_summary")
 
     assert runtime._map_stream_event(event, "run-1", "task") is None
 
@@ -1221,196 +1244,118 @@ def test_verification_evidence_builder_does_not_attach_images_from_paths(tmp_pat
     assert "visual_artifacts" not in model_input
 
 
-def test_runtime_builds_run_config_with_tool_output_trimmer(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
+def test_runtime_builds_neutral_request_with_tool_output_trimming(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     settings = Settings(openai_agents=OpenAIAgentsSettings())
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
 
-    run_config = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider")
+    request = _test_request(runtime)
 
-    assert run_config.kwargs["model_provider"] == "provider"
-    assert run_config.kwargs["tracing_disabled"] is True
-    input_filter = run_config.kwargs["call_model_input_filter"]
+    assert request.tracing_enabled is False
+    input_filter = request.tool_output_filter
     assert input_filter.recent_tool_outputs == 3
-    assert input_filter.sdk_filter.kwargs == {
-        "recent_turns": 2,
-        "max_output_chars": 30000,
-        "preview_chars": 1000,
-        "trimmable_tools": None,
-    }
+    assert request.trimming == ToolOutputTrimSettings(recent_turns=2, max_output_chars=30000, preview_chars=1000)
 
 
 def test_runtime_builds_run_config_enables_sdk_tracing_with_openai_export_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
     monkeypatch.setenv("OPENAI_API_KEY", "trace-key")
     settings = Settings(openai_agents=OpenAIAgentsSettings())
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
 
-    run_config = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider")
-
-    assert run_config.kwargs["tracing_disabled"] is False
+    assert _test_request(runtime).tracing_enabled is True
 
 
 def test_runtime_builds_run_config_respects_explicit_tracing_disable(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
     monkeypatch.setenv("OPENAI_API_KEY", "trace-key")
     settings = Settings(openai_agents=OpenAIAgentsSettings(tracing_enabled=False))
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
 
-    run_config = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider")
-
-    assert run_config.kwargs["tracing_disabled"] is True
+    assert _test_request(runtime).tracing_enabled is False
 
 
-def test_provider_session_builds_azure_openai_agents_provider() -> None:
-    class _AsyncOpenAI:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _OpenAIProvider:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
+def test_provider_session_preserves_azure_connection_values_for_neutral_access() -> None:
     settings = Settings(openai_agents=_azure_openai_settings(api_key="azure-key"))
 
     session = build_model_provider_session(settings)
-    provider = session.create_agents_provider(openai_provider_type=_OpenAIProvider, async_openai_type=_AsyncOpenAI)
-
-    assert provider.kwargs["use_responses"] is True
-    assert provider.kwargs["openai_client"].kwargs == {
-        "api_key": "azure-key",
-        "base_url": "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/",
-        "default_headers": None,
-    }
+    assert session.client_config.api_key == "azure-key"
+    assert session.client_config.base_url == "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
+    assert session.client_config.default_headers == {}
+    assert not hasattr(session, "create_agents_provider")
 
 
 def test_runtime_tool_count_filter_keeps_small_recent_outputs_and_trims_large_outputs() -> None:
-    from types import SimpleNamespace
-
-    from agents.run_config import ModelInputData
-
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __call__(self, data: Any) -> Any:
-            return data.model_data
-
     settings = Settings(openai_agents=OpenAIAgentsSettings())
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
-    input_filter = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider").kwargs["call_model_input_filter"]
+    input_filter = _test_request(runtime).tool_output_filter
     old_output = "old-output " * 4000
     recent_output = "recent-output " * 4000
-    data = SimpleNamespace(
-        model_data=ModelInputData(
-            input=[
-                {"type": "function_call", "call_id": "1", "name": "read_file"},
-                {"type": "function_call_output", "call_id": "1", "output": old_output},
-                {"type": "function_call", "call_id": "2", "name": "read_file"},
-                {"type": "function_call_output", "call_id": "2", "output": "recent 1"},
-                {"type": "function_call", "call_id": "3", "name": "read_file"},
-                {"type": "function_call_output", "call_id": "3", "output": "recent 2"},
-                {"type": "function_call", "call_id": "4", "name": "read_file"},
-                {"type": "function_call_output", "call_id": "4", "output": recent_output},
-            ],
-            instructions="instructions",
-        )
+    entries = (
+        ToolOutputEntry(1, "1", "read_file", 1, old_output),
+        ToolOutputEntry(3, "2", "read_file", 1, "recent 1"),
+        ToolOutputEntry(5, "3", "read_file", 1, "recent 2"),
+        ToolOutputEntry(7, "4", "read_file", 1, recent_output),
     )
 
-    filtered = input_filter(data)
+    filtered = input_filter(entries)
 
-    assert filtered.input[1]["output"].startswith("[Trimmed historical read_file output")
-    assert filtered.input[3]["output"] == "recent 1"
-    assert filtered.input[5]["output"] == "recent 2"
-    assert filtered.input[7]["output"].startswith("[Trimmed historical read_file output")
+    assert filtered[1].startswith("[Trimmed historical read_file output")
+    assert 3 not in filtered
+    assert 5 not in filtered
+    assert filtered[7].startswith("[Trimmed historical read_file output")
 
 
 def test_runtime_tool_count_filter_writes_artifact_for_trimmed_history(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from agents.run_config import ModelInputData
-
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __call__(self, data: Any) -> Any:
-            return data.model_data
-
     openai_settings = OpenAIAgentsSettings()
     openai_settings.local_tool_output = LocalToolOutputSettings(recent_full_output_count=0)
     output_settings = OutputSettings()
     output_settings.runs_dir = tmp_path / "runs"
     settings = Settings(openai_agents=openai_settings, output=output_settings)
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
-    input_filter = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider", run_id="run-1").kwargs["call_model_input_filter"]
-    data = SimpleNamespace(
-        model_data=ModelInputData(
-            input=[
-                {"type": "function_call", "call_id": "1", "name": "harness_source"},
-                {"type": "function_call_output", "call_id": "1", "output": "<node>" * 7000},
-            ],
-            instructions="instructions",
-        )
-    )
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
+    entries = (ToolOutputEntry(1, "1", "harness_source", 1, "<node>" * 7000),)
 
-    filtered = input_filter(data)
+    filtered = input_filter(entries)
 
-    assert "Artifact path:" in filtered.input[1]["output"]
+    assert "Artifact path:" in filtered[1]
     assert list((tmp_path / "runs" / "run-1" / "artifacts" / "tools").glob("*.json"))
 
 
+async def test_file_helper_context_filter_preserves_complete_artifact(tmp_path: Path) -> None:
+    from fsq_agent.adapters.coding_agent import create_coding_agent_runtime
+    from fsq_agent.agent_engine import ToolCall
+
+    settings = Settings()
+    settings.output.runs_dir = tmp_path / "runs"
+    settings.agent_context.knowledge.root_dir = tmp_path / "knowledge"
+    settings.agent_context.knowledge.root_dir.mkdir()
+    content = "x" * 40000 + "TAIL"
+    (settings.agent_context.knowledge.root_dir / "large.txt").write_text(content, encoding="utf-8")
+    runtime = create_coding_agent_runtime(settings)
+    tools = runtime.tool_factory.build_tools(run_id="run-1", task_id="task-1")
+    read_tool = next(tool for tool in tools if tool.name == "read_file")
+    search_tool = next(tool for tool in tools if tool.name == "search_artifact")
+    output = await read_tool.invoke(ToolCall(name="read_file", arguments={"path": "large.txt"}, call_id="large-read"))
+    payload = json.loads(output)
+    artifact_path = Path(payload["artifact"]["path"])
+    original_artifact = await asyncio.to_thread(artifact_path.read_text, encoding="utf-8")
+    assert payload["model_output"] == "artifact_reference"
+    assert json.loads(json.loads(original_artifact)["content"])["output"] == content
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
+
+    input_filter((ToolOutputEntry(1, "large-read", "read_file", 1, output),))
+
+    assert await asyncio.to_thread(artifact_path.read_text, encoding="utf-8") == original_artifact
+    recovery = json.loads(await search_tool.invoke(ToolCall(name="search_artifact", arguments={"artifact_path": str(artifact_path), "query": "TAIL", "max_matches": 1}, call_id="recover-tail")))
+    assert recovery["result"]["output"]["matches"]
+    assert "TAIL" in recovery["result"]["output"]["matches"][0]["preview"]
+
+
 def test_runtime_input_filter_trims_recent_large_ui_snapshot_to_artifact(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from agents.run_config import ModelInputData
-
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __call__(self, data: Any) -> Any:
-            return data.model_data
-
     output_settings = OutputSettings()
     output_settings.runs_dir = tmp_path / "runs"
     settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
-    input_filter = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider", run_id="run-1").kwargs["call_model_input_filter"]
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     snapshot_output = json.dumps(
         {
             "tool_name": "ui_snapshot",
@@ -1418,21 +1363,13 @@ def test_runtime_input_filter_trims_recent_large_ui_snapshot_to_artifact(tmp_pat
             "result": {"output": {"xml": '<node password="false">' + ("visible text " * 5000) + "</node>"}},
         }
     )
-    data = SimpleNamespace(
-        model_data=ModelInputData(
-            input=[
-                {"type": "function_call", "call_id": "snapshot", "name": "ui_snapshot"},
-                {"type": "function_call_output", "call_id": "snapshot", "output": snapshot_output},
-            ],
-            instructions="instructions",
-        )
-    )
+    entries = (ToolOutputEntry(1, "snapshot", "ui_snapshot", 1, snapshot_output),)
 
-    filtered = input_filter(data)
+    filtered = input_filter(entries)
 
-    assert filtered.input[1]["output"].startswith("[Trimmed historical ui_snapshot output")
-    assert "Artifact path:" in filtered.input[1]["output"]
-    assert len(filtered.input[1]["output"]) < len(snapshot_output)
+    assert filtered[1].startswith("[Trimmed historical ui_snapshot output")
+    assert "Artifact path:" in filtered[1]
+    assert len(filtered[1]) < len(snapshot_output)
     assert list((tmp_path / "runs" / "run-1" / "artifacts" / "tools").glob("*.json"))
 
 
@@ -1495,29 +1432,27 @@ def test_runtime_redacts_configured_secret_values_from_tool_arguments() -> None:
         ),
         _EmptyToolFactory(),
     )
-    item = type("Item", (), {"raw_item": {"arguments": {"text": "super-secret", "target": "Password"}}})()
+    event = AgentEvent(kind="tool_called", tool_name="text_type", call_id="call-1", arguments={"text": "super-secret", "target": "Password"})
 
-    arguments = runtime._tool_arguments(item)
+    run_event = runtime._map_stream_event(event, "run-1", "task-1")
 
-    assert arguments == {"text": "***", "target": "Password"}
+    assert run_event.tool_arguments == {"text": "***", "target": "Password"}
+
+
+def test_runtime_preserves_keyboard_key_arguments_for_recording() -> None:
+    runtime = OpenAIAgentsRuntime(Settings(), _EmptyToolFactory())
+    event = AgentEvent(kind="tool_called", tool_name="press_key", call_id="keyboard-1", arguments={"key": "Enter", "modifiers": ["COMMAND"]})
+    recorded = runtime._map_stream_event(event, "run-1", "task-1")
+    assert recorded.tool_arguments == {"key": "Enter", "modifiers": ["COMMAND"]}
+    assert runtime._redact({"apiKey": "credential-value", "private_key": "private-value", "authorization": "bearer-value", "key": "Escape"}) == {
+        "apiKey": "***",
+        "private_key": "***",
+        "authorization": "***",
+        "key": "Escape",
+    }
 
 
 def test_runtime_input_filter_leaves_plain_screenshot_outputs_text_only(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from agents.run_config import ModelInputData
-
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __call__(self, data: Any) -> Any:
-            return data.model_data
-
     output_root = tmp_path / "output"
     screenshots_dir = output_root / "harness-screenshots"
     screenshots_dir.mkdir(parents=True)
@@ -1527,42 +1462,15 @@ def test_runtime_input_filter_leaves_plain_screenshot_outputs_text_only(tmp_path
     output_settings.runs_dir = output_root / "runs"
     settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
-    input_filter = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider", run_id="run-1").kwargs["call_model_input_filter"]
-    data = SimpleNamespace(
-        model_data=ModelInputData(
-            input=[
-                {"type": "function_call", "call_id": "img", "name": "harness_screenshot"},
-                {
-                    "type": "function_call_output",
-                    "call_id": "img",
-                    "output": f"Screenshot saved successfully to: {screenshot_path}",
-                },
-            ],
-            instructions="instructions",
-        )
-    )
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
+    entries = (ToolOutputEntry(1, "img", "harness_screenshot", 1, f"Screenshot saved successfully to: {screenshot_path}"),)
 
-    filtered = input_filter(data)
+    filtered = input_filter(entries)
 
-    assert filtered.input == data.model_data.input
+    assert filtered == {}
 
 
 def test_runtime_input_filter_does_not_attach_submitted_visual_assertion_image(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from agents.run_config import ModelInputData
-
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __call__(self, data: Any) -> Any:
-            return data.model_data
-
     output_root = tmp_path / "output"
     screenshots_dir = output_root / "harness-screenshots"
     screenshots_dir.mkdir(parents=True)
@@ -1572,7 +1480,7 @@ def test_runtime_input_filter_does_not_attach_submitted_visual_assertion_image(t
     output_settings.runs_dir = output_root / "runs"
     settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
-    input_filter = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider", run_id="run-1").kwargs["call_model_input_filter"]
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     output = json.dumps(
         {
             "type": "visual_assertion_submission",
@@ -1581,38 +1489,14 @@ def test_runtime_input_filter_does_not_attach_submitted_visual_assertion_image(t
             "screenshot_path": str(screenshot_path),
         }
     )
-    data = SimpleNamespace(
-        model_data=ModelInputData(
-            input=[
-                {"type": "function_call", "call_id": "visual", "name": "submit_visual_assertion"},
-                {"type": "function_call_output", "call_id": "visual", "output": output},
-            ],
-            instructions="instructions",
-        )
-    )
+    entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", 1, output),)
 
-    filtered = input_filter(data)
+    filtered = input_filter(entries)
 
-    assert filtered.input[1]["output"] == output
-    assert len(filtered.input) == 2
+    assert filtered == {}
 
 
 def test_runtime_input_filter_rejects_screenshot_images_outside_output_root(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
-    from agents.run_config import ModelInputData
-
-    class _RunConfig:
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
-
-    class _ToolOutputTrimmer:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def __call__(self, data: Any) -> Any:
-            return data.model_data
-
     output_root = tmp_path / "output"
     output_root.mkdir()
     outside_root = tmp_path / "outside"
@@ -1623,31 +1507,13 @@ def test_runtime_input_filter_rejects_screenshot_images_outside_output_root(tmp_
     output_settings.runs_dir = output_root / "runs"
     settings = Settings(openai_agents=OpenAIAgentsSettings(), output=output_settings)
     runtime = OpenAIAgentsRuntime(settings, _EmptyToolFactory())
-    input_filter = runtime._build_run_config(_RunConfig, _ToolOutputTrimmer, provider="provider", run_id="run-1").kwargs["call_model_input_filter"]
-    data = SimpleNamespace(
-        model_data=ModelInputData(
-            input=[
-                {"type": "function_call", "call_id": "visual", "name": "submit_visual_assertion"},
-                {
-                    "type": "function_call_output",
-                    "call_id": "visual",
-                    "output": json.dumps(
-                        {
-                            "type": "visual_assertion_submission",
-                            "assertion_id": "key-action-7",
-                            "prompt": "Verify the logo is visible.",
-                            "screenshot_path": str(screenshot_path),
-                        }
-                    ),
-                },
-            ],
-            instructions="instructions",
-        )
-    )
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
+    output = json.dumps({"type": "visual_assertion_submission", "assertion_id": "key-action-7", "prompt": "Verify the logo is visible.", "screenshot_path": str(screenshot_path)})
+    entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", 1, output),)
 
-    filtered = input_filter(data)
+    filtered = input_filter(entries)
 
-    assert filtered.input == data.model_data.input
+    assert filtered == {}
 
 
 def test_coding_agent_adapter_does_not_import_agent_private_modules() -> None:

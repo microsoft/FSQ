@@ -539,22 +539,20 @@ async def test_explore_execution_delegates_to_agent_and_records_without_changing
     state = ControlPlaneState()
     request_id = state.reserve(workspace_name="checkout", platform="android", target_id="device", mode="explore", source={"goal": "Verify it"})
     prepared = type("Prepared", (), {"settings": settings, "request_id": request_id, "goal": "Verify it"})()
-    run_dir = settings.output.runs_dir / "run-1"
-    run_dir.mkdir(parents=True)
-    report_path = run_dir / "report.md"
-    report_path.write_text("report", encoding="utf-8")
     captured: dict[str, object] = {}
 
     class FakeAgent:
-        async def run(self, task, event_sink=None):
+        async def run(self, task, event_sink=None, *, run_id: str):
             captured["task"] = task
-            event_sink(RunEvent(run_id="run-1", task_id=task.id, type="run_started", title="Started"))
+            report_path = settings.output.runs_dir / run_id / "report.md"
+            report_path.write_text("report", encoding="utf-8")
+            event_sink(RunEvent(run_id=run_id, task_id=task.id, type="run_started", title="Started"))
             return TaskResult(
                 task_id=task.id,
                 status="failed",
                 steps=[],
                 verification=VerificationResult(status="failed", summary="Expected failure"),
-                report=ReportArtifact(run_id="run-1", path=report_path),
+                report=ReportArtifact(run_id=run_id, path=report_path),
             )
 
     monkeypatch.setattr(
@@ -1336,13 +1334,12 @@ def test_server_actual_http_run_paths_sse_evidence_and_cancellation(tmp_path: Pa
     monkeypatch.setattr("fsq_agent.adapters.control_plane._execution.RecordingService.record", lambda _self, **_kwargs: None)
 
     class FakeAgent:
-        async def run(self, task, event_sink=None):
-            run_id = f"explore-{task.id}"
+        async def run(self, task, event_sink=None, *, run_id: str):
             event_sink(RunEvent(run_id=run_id, task_id=task.id, type="run_started", title="Explore started"))
             if "cancel" in task.description.casefold():
                 await asyncio.Event().wait()
             run_dir = settings.output.runs_dir / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            assert (run_dir / "run.json").is_file()
             report = run_dir / "report.md"
             report.write_text("report", encoding="utf-8")
             return TaskResult(

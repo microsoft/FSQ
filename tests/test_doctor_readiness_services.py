@@ -5,8 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fsq_agent.agent import check_dynamic_agent_readiness
+from fsq_agent.ai_services import check_case_suggestion_readiness
 from fsq_agent.environments import PlatformRuntimeService
-from fsq_agent.providers import check_case_suggestion_readiness, check_provider_readiness
+from fsq_agent.providers import check_provider_readiness
 
 
 class _Session:
@@ -16,7 +17,7 @@ class _Session:
     def close_sync(self) -> None:
         self.closed = True
 
-    def invoke_responses_sync(self, **_kwargs):
+    def complete_sync(self, request):
         raise AssertionError("Doctor readiness must not send model inference")
 
 
@@ -32,7 +33,7 @@ def test_provider_readiness_constructs_and_closes_without_inference(monkeypatch)
 
 def test_suggestion_readiness_constructs_analyzer_and_closes_without_inference(monkeypatch) -> None:
     session = _Session()
-    monkeypatch.setattr("fsq_agent.providers._factory.ModelProviderFactory.build_session", lambda _self: session)
+    monkeypatch.setattr("fsq_agent.ai_services._factory.build_model_provider_session", lambda _settings: session)
 
     ready, _, _ = check_case_suggestion_readiness(object())
 

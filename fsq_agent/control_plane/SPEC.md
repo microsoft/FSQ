@@ -15,7 +15,8 @@ The module is an entry-layer application. Shared workspace initialization, targe
 - `agent`: Runs Explore tasks through `FsqAgent` and emits existing safe `RunEvent` values.
 - `fsq`: Discovers and validates strict cases through `FsqCaseLoader` and adapts validated commands through the active registry snapshot.
 - `core`: Supplies shared Android device discovery, builds active platform harnesses through public factories, and executes canonical strict steps through the shared runner/evidence contracts.
-- `providers`: Uses non-interactive provider preparation for readiness, observable GitHub device authorization/model discovery/selected-model activation for Config, live connection testing, and public AI-assertion evaluator construction where Explore or authored `assertWithAI` requires a provider.
+- `providers`: Uses non-interactive provider preparation for readiness, observable GitHub device authorization/model discovery/selected-model activation for Config, and live connection testing.
+- `ai_services`: Supplies public AI-assertion evaluator construction where Explore or authored `assertWithAI` requires a provider; the injected Core evaluator contract is unchanged.
 - `report`: Uses existing report generation and report-artifact contracts.
 - External dependencies: Python standard-library HTTP, threading, subprocess, path, MIME, JSON, base64, and browser-opening facilities. Optional platform backend dependencies remain lazy runtime concerns of their owning modules.
 

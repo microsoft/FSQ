@@ -5,10 +5,12 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
-from typing import Protocol
+from typing import Never, Protocol
 
 from fsq_agent._capability_bootstrap import build_capability_registry, provider_required_capability_names, steps_require_provider
+from fsq_agent.ai_services import CaseSuggestionAnalysis, build_ai_assertion_evaluator
 from fsq_agent.application.contracts import (
     ApplicationError,
     ApplicationErrorCategory,
@@ -23,7 +25,6 @@ from fsq_agent.config import Settings, list_workspace_registry, load_workspace_p
 from fsq_agent.core import ArtifactStore, HarnessFactory, RuntimeSecretStore
 from fsq_agent.execution import RunArtifactIndex, RunResultSummary, RunSource, RunStepCounts, allocate_run, collect_strict_lifecycle_cases, run_strict_lifecycle_case, transition_run
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers import CaseSuggestionAnalysis, build_ai_assertion_evaluator
 
 _MAX_FACT_ITEMS = 100
 _MAX_FACT_STRING = 2_000
@@ -118,8 +119,14 @@ def execute_case_test(
             _raise_source_modified()
         status, summary = _report_status(artifact.path)
         metadata = transition_run(run_dir, metadata, "finalizing")
-        suggestion_path = None
-        candidate_case_path = None
+        counts = _report_step_counts(artifact.path)
+    except BaseException:
+        _best_effort_terminal(run_dir, metadata, "error")
+        raise
+    suggestion_path = None
+    candidate_case_path = None
+    analysis_error: BaseException | None = None
+    try:
         if request.suggest:
             if suggestion_analyzer_factory is None:
                 _raise_suggestion_not_configured(run_id, artifact.path)
@@ -139,8 +146,10 @@ def execute_case_test(
                 execution_summary=summary,
                 analysis=analysis,
             )
-        result_status = "success" if status == "passed" else "failed"
-        counts = _report_step_counts(artifact.path)
+    except BaseException as error:  # noqa: BLE001 - finalize completed execution before propagating analysis failure.
+        analysis_error = error
+    result_status = "success" if status == "passed" else "failed"
+    try:
         transition_run(
             run_dir,
             metadata,
@@ -155,20 +164,15 @@ def execute_case_test(
                 candidate_case=candidate_case_path.name if candidate_case_path else None,
             ),
         )
-    except ApplicationError:
-        _best_effort_terminal(run_dir, metadata, "success" if locals().get("status") == "passed" else "failed")
-        raise
-    except Exception as exc:
+    except BaseException:
+        if analysis_error is not None:
+            with suppress(BaseException):
+                _best_effort_terminal(run_dir, metadata, result_status)
+            _raise_analysis_error(analysis_error, run_id, artifact.path)
         _best_effort_terminal(run_dir, metadata, "error")
-        if request.suggest and "artifact" in locals():
-            raise ApplicationError(
-                code=ApplicationErrorCode.CASE_SUGGESTION_FAILED,
-                category=ApplicationErrorCategory.UNAVAILABLE,
-                message="Case suggestion analysis failed.",
-                action="The completed Run is preserved. Check Provider readiness and retry suggestion analysis.",
-                details={"run_id": run_id, "report_path": str(artifact.path)},
-            ) from exc
         raise
+    if analysis_error is not None:
+        _raise_analysis_error(analysis_error, run_id, artifact.path)
     return CaseTestResult(
         run_id=run_id,
         status=result_status,
@@ -179,6 +183,18 @@ def execute_case_test(
         candidate_case_path=candidate_case_path,
         warnings=["case.suffix_deprecated: rename this Case to *.fsq.yaml"] if case_path.name.endswith(".codex.yaml") else [],
     )
+
+
+def _raise_analysis_error(error: BaseException, run_id: str, report_path: Path) -> Never:
+    if not isinstance(error, Exception) or isinstance(error, ApplicationError):
+        raise error
+    raise ApplicationError(
+        code=ApplicationErrorCode.CASE_SUGGESTION_FAILED,
+        category=ApplicationErrorCategory.UNAVAILABLE,
+        message="Case suggestion analysis failed.",
+        action="The completed Run is preserved. Check Provider readiness and retry suggestion analysis.",
+        details={"run_id": run_id, "report_path": str(report_path)},
+    ) from error
 
 
 def _resolve_case_path(value: Path, cases_dir: Path, current_directory: Path) -> Path:
@@ -306,7 +322,7 @@ def _write_analysis_artifacts(
                 "execution_status": execution_status,
                 "execution_summary": execution_summary,
                 "analysis_summary": analysis.summary,
-                "suggestions": list(analysis.suggestions),
+                "suggestions": [dict(item) for item in analysis.suggestions],
                 "candidate_case_path": str(candidate_path) if candidate_path else None,
                 "candidate_case_status": candidate_status,
             },

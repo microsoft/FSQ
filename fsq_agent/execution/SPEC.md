@@ -19,7 +19,7 @@ Execution may receive provider-backed evaluators, registries, harnesses, cancell
 
 The package exports its supported services and result contracts through `execution.__init__`:
 
-- `DynamicExecutionService`: Coordinates one dynamic Goal or raw-reference task through the supplied Agent runtime, event sink, cancellation boundary, report generation, and optional recording policy.
+- `DynamicExecutionService`: Allocates one Run identity and initial metadata, coordinates a dynamic Goal/reference task through the supplied Agent, and owns metadata state transitions, cancellation/failure finalization, report coordination, and optional recording. Its Agent collaborator accepts `run(task, event_sink=None, *, run_id: str)` and returns `TaskResult` for that supplied Run identity.
 - `DeterministicExecutionService`: Coordinates one parsed deterministic Case through the supplied registry, runtime-secret store, harness, Core runners, evidence recorder, cancellation boundary, and report generator.
 - `LifecycleExecutionService`: Collects contained nested Cases and executes configuration-level and Case-level start/complete hooks plus the main Case with deterministic ordering and recursion protection.
 - `RecordingService`: Converts normalized replayable capability results and persisted safe events into one Run-local candidate `*.fsq.yaml` recording and optionally publishes a validated Goal recording to an explicitly supplied contained destination. For valid and draft Goal recordings, generated Case metadata uses the originating Run id as `name` and normalized `planning_reference_text` as `description`, falling back to the Task name when that Goal reference is absent or blank. Non-Goal recordings retain their existing metadata derivation. The service and immutable `RecordingResult` are the complete public recording boundary; mutable recorder state and function-style recorder helpers are private implementation details.
@@ -27,6 +27,10 @@ The package exports its supported services and result contracts through `executi
 - Run lifecycle operations allocate a collision-resistant Workspace-wide ID, atomically create its direct platform directory, write `fsq.run/v1` metadata before actions, advance monotonic active states, and atomically finalize one immutable terminal state. Allocation checks every configured platform and retries a collision at most five times.
 
 Public services accept already resolved Workspace/platform settings and explicit collaborators. They return normalized results and safe artifact references; adapters alone map them to CLI output or HTTP/SSE state.
+
+Dynamic execution checks cancellation before allocation, calls the shared `allocate_run`, advances metadata to `running`, and passes the allocated ID to the Agent. Agent returns its planning/execution/verification/report result without allocating a Run or changing metadata. Execution rejects a result whose report Run ID differs from the supplied ID, advances `finalizing`, and persists the authoritative terminal status and artifact index. Recording remains subsequent optional work that cannot rewrite the completed task verdict.
+
+Cancellation from the asynchronous task or the explicit cancellation callback is recorded as `cancelled` when a Run exists; other execution failures are recorded as `error`. Failure-finalization errors never replace the original exception. Cancellation detected before allocation produces no Run. Metadata allocation/writes fail before invoking the Agent when initial persistence is unavailable; a finalization-only failure remains an infrastructure error with produced evidence preserved.
 
 Execution services are imported from `fsq_agent.execution`. Package-root `_strict_lifecycle` and `_strict_case_recording` compatibility modules are absent.
 
@@ -67,6 +71,7 @@ Initial metadata failure prevents external actions and removes only an empty req
 
 - Dynamic and deterministic execution semantics are transport-neutral and have one canonical implementation.
 - Run query, aggregation, filtering, historical inference, and HTML generation remain outside Execution. All execution entry points use the same Execution-owned Run allocation and metadata lifecycle rather than constructing IDs in adapters.
+- Dynamic Run identity and metadata state are owned exclusively by `DynamicExecutionService` and the shared Run operations. Agent receives an explicit Run ID and never imports Execution. Business timeline events and report generation remain in Agent; optional recording/report callbacks do not allocate a second Run.
 - Lifecycle hooks are metadata around a Case, not synthetic Case commands. Authored order is preserved, nested `runCase` paths remain contained below the selected platform Case root, and recursive chains fail before infinite execution.
 - Trailing teardown steps and completion hooks remain eligible after an earlier blocking normal-step failure.
 - Recording consumes final normalized capability results rather than low-level progress events as execution truth. It records only replayable non-observation facts allowed by capability metadata and never invents setup, cleanup, or browser lifecycle commands.

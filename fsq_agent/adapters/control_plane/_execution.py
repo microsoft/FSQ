@@ -14,6 +14,7 @@ from typing import Any, Never
 from fsq_agent._capability_bootstrap import steps_require_provider
 from fsq_agent.adapters.coding_agent import create_coding_agent_runtime
 from fsq_agent.agent import FsqAgent
+from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.case_dsl import FsqCaseLoader, FsqExecutableStepAdapter
 from fsq_agent.config import Settings, validate_runtime_settings, validate_strict_core_settings, workspace_revision
 from fsq_agent.core import ArtifactStore, EvidenceRecorder, HarnessFactory, RuntimeSecretStore
@@ -33,7 +34,6 @@ from fsq_agent.execution import (
     transition_run,
 )
 from fsq_agent.models import ExecutableStep, FsqCase, RunnerEvent, RunnerStepResult, Task
-from fsq_agent.providers import build_ai_assertion_evaluator
 
 from ._cases import build_strict_registry_context, resolve_case
 from ._evidence import EvidenceProjection, configured_secret_values, safe_exception_message

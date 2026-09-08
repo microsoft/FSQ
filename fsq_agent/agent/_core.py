@@ -4,6 +4,7 @@
 import inspect
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -66,27 +67,13 @@ class FsqAgent:
     def _runtime_secret_values(settings: Settings) -> tuple[str, ...]:
         return tuple(sorted(set(settings.runtime_secrets.private_values().values()), key=len, reverse=True))
 
-    async def run(self, task: Task, event_sink: RunEventSink | None = None) -> TaskResult:
-        from fsq_agent.execution import RunArtifactIndex, RunResultSummary, RunRuntime, RunSource, allocate_run, transition_run
-
+    async def run(self, task: Task, event_sink: RunEventSink | None = None, *, run_id: str) -> TaskResult:
+        if not run_id.strip() or run_id in {".", ".."} or any(character in run_id for character in "/\\:\x00") or Path(run_id).name != run_id:
+            raise ValueError("Run ID must be a nonempty single path component.")
         started = time.perf_counter()
-        workspace_root = self.settings.workspace.root_dir or Path(self.settings.output.runs_dir).parent.parent.parent
-        workspace_name = _workspace_name(Path(workspace_root))
-        metadata = allocate_run(
-            workspace=Path(workspace_root),
-            workspace_name=workspace_name,
-            platform=self.settings.harness.platform,
-            source_id=task.id,
-            mode="explore",
-            source=RunSource(kind="goal", goal_summary=task.name[:200]),
-            platform_runs_dir=Path(self.settings.output.runs_dir),
-        )
-        run_id = metadata.run_id
-        run_dir = Path(self.settings.output.runs_dir) / run_id
-        metadata = transition_run(run_dir, metadata, "running")
-        emitter = RunEventEmitter(self.event_logger, event_sink)
-        await emitter.emit(RunEvent(run_id=run_id, task_id=task.id, type="run_started", title="Run started", message=task.name))
+        emitter = RunEventEmitter(self.event_logger, event_sink, secret_values=self._runtime_secret_values(self.settings))
         try:
+            await emitter.emit(RunEvent(run_id=run_id, task_id=task.id, type="run_started", title="Run started", message=task.name))
             knowledge = self.knowledge_loader.load_for_task(task)
             skills = self.skill_loader.load(self.settings.skills)
             await emitter.emit(
@@ -107,7 +94,6 @@ class FsqAgent:
             results.extend(await self.runtime.run_verification(task, results, run_id, events_path, emitter.emit))
             verification = await self.verifier.verify(task, results, events_path=events_path)
             report = self.reporter.generate(run_id, task, results, verification)
-            metadata = transition_run(run_dir, metadata, "finalizing")
             duration_ms = int((time.perf_counter() - started) * 1000)
             result = TaskResult(
                 task_id=task.id,
@@ -128,34 +114,21 @@ class FsqAgent:
                     payload={"status": verification.status, "report_path": str(report.path)},
                 )
             )
-            transition_run(
-                run_dir,
-                metadata,
-                result.status if result.status in {"success", "failed", "inconclusive"} else "error",
-                result=RunResultSummary(summary=verification.summary),
-                runtime=RunRuntime(provider=self.settings.openai_agents.provider, model=self.settings.openai_agents.model),
-                artifacts=RunArtifactIndex(
-                    report=report.path.with_suffix(".json").name,
-                    report_markdown=report.path.name,
-                    events="events.jsonl",
-                    evidence_manifest=report.evidence_manifest_path.name if report.evidence_manifest_path else None,
-                ),
-            )
         except BaseException as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             message = str(exc) or exc.__class__.__name__
-            await emitter.emit(
-                RunEvent(
-                    run_id=run_id,
-                    task_id=task.id,
-                    type="run_failed",
-                    title="Run failed",
-                    message=message,
-                    duration_ms=duration_ms,
-                    payload={"exception_type": exc.__class__.__name__},
+            with suppress(BaseException):
+                await emitter.emit(
+                    RunEvent(
+                        run_id=run_id,
+                        task_id=task.id,
+                        type="run_failed",
+                        title="Run failed",
+                        message=message,
+                        duration_ms=duration_ms,
+                        payload={"exception_type": exc.__class__.__name__},
+                    )
                 )
-            )
-            _best_effort_fail_run(run_dir, metadata, transition_run)
             raise
         else:
             return result
@@ -267,18 +240,3 @@ class FsqAgent:
 
     def _usable_text(self, value: str | None) -> bool:
         return bool(value and value.strip())
-
-
-def _best_effort_fail_run(run_dir, metadata, transition) -> None:
-    try:
-        transition(run_dir, metadata, "error")
-    except Exception:  # noqa: BLE001, S110 - preserve the original execution failure.
-        pass
-
-
-def _workspace_name(workspace_root: Path) -> str:
-    from fsq_agent.config import list_workspace_registry
-
-    resolved = workspace_root.resolve()
-    entry = next((item for item in list_workspace_registry() if item.root_path.resolve() == resolved), None)
-    return entry.name if entry is not None else workspace_root.name
