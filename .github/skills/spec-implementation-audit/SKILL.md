@@ -27,6 +27,15 @@ root SPEC.md + relevant module SPEC.md files + actual diff
 
 Tests, lint, keyword scans, and implementation summaries are auxiliary evidence only. They do not replace diff-based SPEC audit.
 
+## Audit Modes
+
+- Round 1 uses `audit_mode=full`: run the complete scope and procedure below with all existing checks.
+- Round 2 and later use `audit_mode=repair-only`: audit only the repairs for the previous round's findings. Carry every unresolved earlier finding forward in that previous-round report so none is dropped.
+
+A repair-only pass reads the previous independent report, its audited snapshot, the complete repair delta, and the SPEC clauses and implementation paths needed to judge those repairs. It does not rebuild the full applicable-item inventory, re-read unchanged parts of the original diff, or search for unrelated new issues. Retain unaffected passing verdicts only when their evidence remains unchanged.
+
+Do not automatically restart a full audit. Changes outside the previous findings' repair scope require an explicit scope decision before they can be treated as covered.
+
 ## Independence Requirement
 
 Use a fresh reviewer or independent context whenever the platform supports it. The reviewer must not inherit the implementation agent's conversation history or rely on its self-report.
@@ -35,7 +44,8 @@ Reviewer input is limited to:
 
 - Root `SPEC.md`.
 - Relevant module `SPEC.md` files.
-- Complete worktree diff artifacts plus their identity manifest, or an exact commit range.
+- Complete diff artifacts for the declared audit mode plus their identity manifest, or an exact commit range.
+- For repair-only passes, the previous independent report, its finding IDs and audited snapshot, and the complete delta from that snapshot to the repaired snapshot.
 - SPEC delta mode: `confirmed-update` or `no-delta`.
 - Minimal navigation instructions required to locate modules and public APIs.
 - Optional verification command outputs as auxiliary evidence.
@@ -45,13 +55,13 @@ Do not provide persuasive summaries such as "this is complete" or "tests pass, s
 
 ## Audit Input Integrity
 
-For a worktree audit, validate the supplied artifact path, SHA-256, byte size, `diff --git` entry count, changed-path inventory, and any separate untracked-file artifacts before establishing the applicable-item inventory. Read the complete artifacts, not terminal output or overflow wrappers. If an artifact is missing, unreadable, truncated, wrapped, or inconsistent with its identity manifest, return `audit-blocked` without substituting a live diff or implementation summary.
+For a worktree audit, validate the supplied artifact path, SHA-256, byte size, `diff --git` entry count, changed-path inventory, and any separate untracked-file artifacts for the declared audit mode. Read the complete in-scope artifacts, not terminal output or overflow wrappers. A repair-only manifest links the previous snapshot and report to the complete repair delta and verifies that code and SPEC evidence outside that scope is unchanged; identity verification does not require re-auditing unchanged content. If required evidence is missing, unreadable, truncated, wrapped, or inconsistent with its identity manifest, return `audit-blocked` without substituting a live diff or implementation summary.
 
 Record the validated artifact identities in the audit result. The calling `spec-driven` workflow owns the post-audit comparison between these identities and a freshly regenerated worktree snapshot; the reviewer must not claim that later worktree changes are covered. For a commit-range audit, validate and report the exact immutable base and head object ids.
 
-## Complete Audit Scope
+## First-Round Complete Scope
 
-Before judging implementation, establish the complete scope for the current audit pass:
+Before judging implementation in round 1, establish the complete scope:
 
 - the root and relevant module SPEC inputs;
 - the complete current worktree diff or commit range;
@@ -59,9 +69,9 @@ Before judging implementation, establish the complete scope for the current audi
 - the complete set of applicable SPEC items;
 - the file, symbol, interface, dependency, configuration, or behavior boundaries relevant to each item;
 
-Determine this scope independently during every audit pass. Do not reuse verdicts or coverage claims from an earlier pass.
+Determine this initial scope independently. Later repair-only passes take their scope from the previous findings and repair delta rather than repeating this inventory.
 
-## Complete Audit Procedure
+## First-Round Complete Procedure
 
 1. Establish the complete applicable SPEC item inventory before assigning final verdicts, including independent validation of a no-SPEC-delta decision when applicable.
 2. Read the diff and relevant implementation path for every applicable item.
@@ -85,11 +95,11 @@ When the implementation used the no-SPEC-delta path, independently verify all of
 - Public interfaces, configuration semantics, module ownership, dependency direction, architecture level, and supported-behavior scope remain accurately described.
 - Concrete defect evidence demonstrates an implementation mismatch rather than an undocumented requirement.
 
-The implementation agent's classification, a `bugfix` label, and passing tests are not sufficient proof. If any condition is unproven, return a blocking `spec-delta-required` finding owned by SPEC/human decision. Project implementation pauses until the relevant SPEC is updated and confirmed; after reconciliation and verification, start a new complete audit.
+The implementation agent's classification, a `bugfix` label, and passing tests are not sufficient proof. If any condition is unproven, return a blocking `spec-delta-required` finding owned by SPEC/human decision. Project implementation pauses until the relevant SPEC is updated and confirmed; after reconciliation and verification, re-audit that finding in repair-only mode. A decision that extends beyond the finding's repair scope requires explicit scope confirmation, not an automatic full re-audit.
 
 ## Python Architecture Audit
 
-For Python modules, also verify:
+For Python modules, also verify the following within the declared audit mode's scope:
 
 - Public Interface in SPEC matches `__init__.py` exports, endpoints, commands, events, or documented public symbols.
 - Dependencies in SPEC match actual project imports.
@@ -102,7 +112,7 @@ For Python modules, also verify:
 
 ## Frontend Architecture Audit
 
-For frontend-owned files, also verify:
+For frontend-owned files, also verify the following within the declared audit mode's scope:
 
 - Root module navigation and parent/child frontend SPEC links match actual ownership boundaries.
 - Parent specs own workspace/build policy while child specs own application behavior, state flow, source structure, and browser integration.
@@ -127,6 +137,7 @@ Each applicable item records:
 
 Each finding records:
 
+- a stable finding ID retained across repair-only passes;
 - affected SPEC items or precise requirement references;
 - the distinct root cause;
 - blocking verdict and concrete evidence;
@@ -134,27 +145,28 @@ Each finding records:
 
 Duplicate observations of the same root cause are consolidated into one finding that may reference multiple SPEC items. Distinct root causes under one SPEC item remain distinct findings.
 
-## Repair And Full Re-Audit
+## Repair-Only Follow-Up
 
-An audit pass must finish and return its complete coverage table and finding set before any implementation repair begins. Do not interleave audit and repair.
+An audit pass must finish and return its coverage table and full finding set for the declared scope before any implementation repair begins. Do not interleave audit and repair.
 
-After a complete audit result:
+After an audit result:
 
 1. Resolve any SPEC/human-decision or verification-environment blocker that can change or prevent implementation repair.
-2. Repair every in-scope implementation-fixable blocking finding in one batch.
+2. Repair every implementation-fixable blocking finding from that result in one batch.
 3. Finish all verification affected by the complete repair batch.
-4. Start a new complete independent audit using the current SPEC inputs, complete current diff or commit range, SPEC delta mode, and neutral verification evidence.
-5. Repeat until a complete audit reports no blocking findings.
+4. Start an independent repair-only audit with the previous report, its snapshot, the complete repair delta, relevant SPEC clauses, and neutral verification evidence.
+5. Judge every previous-round finding against the actual repair and its controlling path. Keep an unfixed or partially fixed finding open. A defect in the repair that prevents the same requirement from being met also keeps that finding open.
+6. Return a verdict for every previous-round finding and carry all remaining blockers forward. Repeat repair-only passes until none remain, subject to the repair limit below.
 
-Every subsequent audit repeats the complete audit procedure. Do not reuse an earlier item verdict, restrict inspection to repaired paths, or start the next audit before the entire repair batch and its verification are complete.
+Do not reopen unrelated passing items or expand the pass into a new full audit. Unrelated discoveries are separate feedback, not automatic additions to this repair batch. If unrelated code or SPEC changes invalidate inherited evidence, pause for a scope decision rather than claiming coverage for them.
 
-Run at most two automatic repair rounds. An `audit-blocked` result does not consume a repair round because no complete finding set is available to repair. If blocking findings remain after the second repair round, or one round makes no substantive progress, return the complete current result for human decision.
+Run at most two automatic repair rounds. Switching from full to repair-only mode does not reset that limit. An `audit-blocked` result does not consume a repair round because no complete finding set is available to repair. If blocking findings remain after the second repair round, or one round makes no substantive progress, return the complete current finding status for human decision.
 
-The implementation agent may not declare findings resolved. Resolution is established only when the next complete independent audit gives every applicable item verdict `implemented`.
+The implementation agent may not declare findings resolved. Only the independent reviewer may give a repaired finding verdict `implemented`; earlier unaffected passing verdicts remain backed by the initial audit and matching evidence.
 
 ## Consolidated Synchronization Category
 
-SPEC/code synchronization is part of the applicable-item inventory, not a standalone scan. When applicable, cover:
+SPEC/code synchronization is part of the applicable-item inventory, not a standalone scan. Cover these items in the full first pass; in repair-only mode inspect only those needed to resolve previous findings:
 
 - root module navigation and dependency direction;
 - module public interfaces and exports;
@@ -164,7 +176,7 @@ SPEC/code synchronization is part of the applicable-item inventory, not a standa
 - frontend parent/child ownership, state, transport, dependency, build, and generated-output contracts;
 - current-fact SPEC hygiene.
 
-Report one consolidated synchronization and project implementation audit result.
+Report synchronization verdicts within the current audit mode's result, not as another audit pass.
 
 ## Verdicts
 
@@ -183,19 +195,25 @@ Any verdict except `implemented` is blocking unless the user explicitly accepts 
 
 ## Required Output
 
-Produce a complete item table:
+For a full first pass, produce a complete item table:
 
 ```text
 SPEC item | Boundaries | Diff evidence | Verdict | Notes
 ```
 
-Produce a complete finding table:
+For every pass, produce the complete finding table for its scope:
 
 ```text
-Affected SPEC items | Root cause | Evidence | Verdict | Repair owner
+Finding ID | Affected SPEC items | Root cause | Evidence | Verdict | Repair owner
 ```
 
-State `coverage_complete=true|false`, `spec_delta_mode=confirmed-update|no-delta`, audited SPEC inputs, and validated diff artifact identities or exact commit range. Each evidence entry must cite concrete files and, when possible, line numbers or changed symbols. If evidence is absent, say so directly.
+For repair-only passes, replace the full item inventory with a table covering every previous-round finding:
+
+```text
+Previous finding ID | Repair delta evidence | Verification evidence | Verdict | Remaining gap
+```
+
+State `audit_mode=full|repair-only`, `coverage_complete=true|false` for that mode's scope, `spec_delta_mode=confirmed-update|no-delta`, audited SPEC inputs, and validated diff artifact identities or exact commit range. A repair-only result also identifies the previous report and snapshot it extends. Do not describe scoped coverage as a new full audit. Each evidence entry must cite concrete files and, when possible, line numbers or changed symbols. If evidence is absent, say so directly.
 
 ## What Not To Accept
 
@@ -213,12 +231,12 @@ State `coverage_complete=true|false`, `spec_delta_mode=confirmed-update|no-delta
 
 Before claiming completion, state:
 
-- Which root/module `SPEC.md` files were audited.
-- Which validated diff artifact identities or exact commit range was audited.
+- Which root/module `SPEC.md` files were covered by the full first pass and any repair-only follow-ups.
+- Which validated snapshots or exact commit ranges connect the initial audit to the current implementation.
 - Which SPEC delta mode was audited and, for no-delta work, whether its classification was independently validated.
-- Whether the latest complete audit has `coverage_complete=true`.
-- Whether every applicable SPEC item has concrete evidence and verdict `implemented`.
-- Whether the latest complete audit has any blocking findings.
+- Whether the first full audit and every subsequent repair-only pass have complete coverage for their declared scopes.
+- Whether every applicable SPEC item is supported by an initial passing verdict or an independent repair verdict, with unaffected evidence unchanged.
+- Whether any unresolved blocking finding remains in the carried-forward finding set.
 - Any remaining `needs-human-decision` items accepted by the user.
 
-If the latest audit pass is incomplete, coverage is incomplete, required verification is unavailable, or blocking gaps remain, do not claim completion.
+Completion can be established by the full first pass plus the repair-only audit chain; it does not require another full audit. If a pass is incomplete, the evidence chain is broken, required verification is unavailable, or blocking gaps remain, do not claim completion.
