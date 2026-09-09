@@ -191,6 +191,7 @@ class DefaultCodingAgentRuntime:
         started = time.perf_counter()
         provider_session = None
         result = None
+        usage_event_emitted = False
         try:
             await self._emit(
                 event_sink,
@@ -319,11 +320,20 @@ class DefaultCodingAgentRuntime:
                     ),
                 )
                 result = await self._run_agent(model, request, run_id, task.id, event_sink)
+                usage_event = self._dynamic_agent_token_usage_event(result, run_id, task.id)
+                if usage_event is not None:
+                    usage_event_emitted = True
+                    await self._emit(event_sink, usage_event)
             # Engine and provider packages raise implementation-specific exceptions that become failed steps.
             except Exception as exc:  # noqa: BLE001
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 failure_metadata = _runtime_failure_metadata(exc)
                 error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
+                if result is not None and not usage_event_emitted:
+                    usage_event = self._dynamic_agent_token_usage_event(result, run_id, task.id)
+                    if usage_event is not None:
+                        usage_event_emitted = True
+                        await self._emit(event_sink, usage_event)
                 await self._emit(
                     event_sink,
                     RunEvent(
@@ -755,6 +765,32 @@ class DefaultCodingAgentRuntime:
         result = event_sink(event)
         if inspect.isawaitable(result):
             await result
+
+    def _dynamic_agent_token_usage_event(self, result: Any, run_id: str, task_id: str) -> RunEvent | None:
+        usage = getattr(result, "usage", None)
+        if usage is None:
+            return None
+        payload = {
+            "provider": self.settings.agent_runtime.provider,
+            "model": self.settings.agent_runtime.model,
+            "requests": getattr(usage, "requests", None),
+            "input_tokens": getattr(usage, "input_tokens", None),
+            "output_tokens": getattr(usage, "output_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+            "cached_input_tokens": getattr(usage, "cached_input_tokens", None),
+            "reasoning_tokens": getattr(usage, "reasoning_tokens", None),
+        }
+        reported = {key: value for key, value in payload.items() if value is not None}
+        if not any(key in reported for key in ("requests", "input_tokens", "output_tokens", "total_tokens")):
+            return None
+        return RunEvent(
+            run_id=run_id,
+            task_id=task_id,
+            type="dynamic_agent_token_usage",
+            title="Dynamic Agent token usage",
+            message="Provider usage for the Dynamic Agent main execution.",
+            payload=reported,
+        )
 
     def _tracing_disabled(self) -> bool:
         if not self.settings.agent_runtime.tracing_enabled:

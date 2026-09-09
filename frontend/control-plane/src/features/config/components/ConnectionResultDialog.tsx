@@ -1,9 +1,9 @@
 import type { ConnectionResult } from '../hooks/useProviderConfig';
 import { DialogFrame } from './DialogFrame';
 
-export function ConnectionResultDialog({ result, onClose }: { result: ConnectionResult; onClose: () => void }) {
+export function ConnectionResultDialog({ result, onClose, returnFocus }: { result: ConnectionResult; onClose: () => void; returnFocus?: HTMLElement | null }) {
   const title = result.success ? 'Connection successful' : 'Connection failed';
-  return <DialogFrame title={title} onClose={onClose}>
+  return <DialogFrame title={title} onClose={onClose} returnFocus={returnFocus}>
     {result.success ? <dl className="connection-result">
       <div><dt>Provider</dt><dd>{result.data.provider === 'azure_openai' ? 'Azure GPT' : 'GitHub Copilot GPT'}</dd></div>
       <div><dt>Model</dt><dd className="mono">{result.data.modelName}</dd></div>

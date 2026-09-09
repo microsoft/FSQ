@@ -127,7 +127,7 @@ def _find_registry_entry(name: str, user_config_root: str | Path | None = None) 
     return entry
 
 
-def inspect_registered_workspace(name: str, user_config_root: str | Path | None = None) -> WorkspaceStatus:
+def inspect_registered_workspace(name: str, user_config_root: str | Path | None = None, *, validate_target_paths: bool = True) -> WorkspaceStatus:
     entry = _find_registry_entry(name, user_config_root)
     root = entry.root_path
     if root.is_symlink() or not root.is_dir():
@@ -161,7 +161,8 @@ def inspect_registered_workspace(name: str, user_config_root: str | Path | None 
             config, _, loaded_path = load_workspace_config(root, platform)
             if config.name != entry.name or loaded_path.resolve() != config_path.resolve():
                 raise ConfigurationError("Registered workspace identity does not match its configuration.")  # noqa: TRY301
-            _validate_target_paths(config)
+            if validate_target_paths:
+                _validate_target_paths(config)
         except ConfigurationError:
             unavailable_count += 1
             platforms.append(
@@ -215,8 +216,10 @@ def load_registered_workspace(
     name: str,
     platform: str,
     user_config_root: str | Path | None = None,
+    *,
+    allow_unavailable_target: bool = False,
 ) -> WorkspaceConfig:
-    config, _ = _load_registered_workspace_snapshot(name, platform, user_config_root)
+    config, _ = _load_registered_workspace_snapshot(name, platform, user_config_root, allow_unavailable_target=allow_unavailable_target)
     return config
 
 
@@ -224,6 +227,8 @@ def _load_registered_workspace_snapshot(
     name: str,
     platform: str,
     user_config_root: str | Path | None = None,
+    *,
+    allow_unavailable_target: bool = False,
 ) -> tuple[WorkspaceConfig, str]:
     entry = _find_registry_entry(name, user_config_root)
     try:
@@ -235,7 +240,8 @@ def _load_registered_workspace_snapshot(
         ) from exc
     if workspace_root != entry.root_path.resolve() or config.name != entry.name:
         raise ConfigurationError("Registered workspace identity does not match its configuration.", context={"name": entry.name})
-    _validate_target_paths(config)
+    if not (allow_unavailable_target and platform == "macos"):
+        _validate_target_paths(config)
     return config, revision
 
 
@@ -400,7 +406,7 @@ def update_workspace_platform(
     user_config_root: str | Path | None = None,
 ) -> WorkspaceConfig:
     with _WRITE_LOCK:
-        current, current_revision = _load_registered_workspace_snapshot(name, platform, user_config_root)
+        current, current_revision = _load_registered_workspace_snapshot(name, platform, user_config_root, allow_unavailable_target=platform == "macos")
         config_path = _workspace_config_path(current.root_path, platform)
         if current_revision != expected_revision:
             raise ConfigurationError(

@@ -23,6 +23,42 @@ const workspace: WorkspaceDetail = {
 
 afterEach(() => vi.restoreAllMocks());
 
+it('renders Add platform as a compact ordered form and preserves additive submission', async () => {
+  const addedPlatform: WorkspacePlatformDetail = {
+    name: 'mobile', rootPath: workspace.rootPath, platform: 'web',
+    configPath: 'C:\\projects\\mobile\\.fsq\\config\\config.web.yaml',
+    target: { browserChannel: 'chrome', browserExecutablePath: '' }, env: {}, revision: 'sha256:web',
+  };
+  const addedWorkspace: WorkspaceDetail = {
+    ...workspace,
+    platforms: [...workspace.platforms, {
+      platform: 'web', configPath: addedPlatform.configPath, status: 'available',
+      message: 'Platform is available.', target: addedPlatform.target, env: [], revision: addedPlatform.revision,
+    }],
+  };
+  const add = vi.spyOn(controlPlaneClient, 'addWorkspacePlatform').mockResolvedValue({ workspace: addedWorkspace, platform: addedPlatform });
+  const onSaved = vi.fn();
+  const user = userEvent.setup();
+  const { container } = render(<WorkspaceForm mode="add" workspace={workspace} allowedPlatforms={['web']} onCancel={vi.fn()} onSaved={onSaved} />);
+
+  const form = container.querySelector('form');
+  const platform = screen.getByRole('combobox', { name: 'Platform' });
+  const browserChannel = screen.getByRole('combobox', { name: 'Browser channel' });
+  const environment = screen.getByText('Environment').closest('details');
+  const actions = screen.getByRole('button', { name: 'Add platform' }).closest('.cp-form-actions');
+  expect(form).toHaveClass('cp-workspace-form--add');
+  expect(screen.queryByText(/^Platform:/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Target' })).not.toBeInTheDocument();
+  expect(environment).not.toHaveAttribute('open');
+  expect(platform.compareDocumentPosition(browserChannel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(browserChannel.compareDocumentPosition(environment!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(environment!.compareDocumentPosition(actions!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  await user.click(screen.getByRole('button', { name: 'Add platform' }));
+  expect(add).toHaveBeenCalledWith('mobile', { platform: 'web', target: { browserChannel: 'chrome' }, env: {} });
+  expect(onSaved).toHaveBeenCalledWith(addedWorkspace, addedPlatform);
+});
+
 it('clears the previous target on platform change and submits the complete masked environment', async () => {
   const created: WorkspaceDetail = {
     name: 'web-check', rootPath: 'C:\\projects\\web-check', status: 'available', message: 'Workspace is available.',

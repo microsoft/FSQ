@@ -27,3 +27,12 @@ Except when creating an unregistered Workspace, Workspace commands use the exact
 Human output is for terminals. JSON produces one structured result. JSONL emits documented events and a terminal result where streaming applies. Invalid command requests use exit code 2; consume stable machine fields rather than human wording.
 
 `init` never installs Driver/Runtime packages or system prerequisites. The public CLI has no `environments` command, `providers list`, or `--install-driver` option.
+
+## Static Case formatting
+
+```bash
+fsq case format PATH [--check | --diff | --write] [--json]
+fsq case create --platform web --goal "Verify product search" --name product-search
+```
+
+`format` defaults to `--check`, works without an initialized Workspace, and uses the same validator and serializer as internal Case generation. `--diff` previews changes; `--write` validates before writing. Modes are exclusive. JSON diagnostics distinguish invalid input from formatting differences. See [Case format](case-format.md#canonical-formatting-and-static-checks) for exit codes, machine fields, and the static validation boundary. Case creation accepts an optional stable suffix-free name; publication never replaces a different existing Case.

@@ -43,7 +43,22 @@ def token_usage(usage: object) -> TokenUsage | None:
     values = [getattr(usage, name, None) for name in ("input_tokens", "output_tokens", "total_tokens")]
     if not all(type(value) is int and value >= 0 for value in values):
         return None
-    return TokenUsage(input_tokens=values[0], output_tokens=values[1], total_tokens=values[2], requests=1)
+    input_details = getattr(usage, "input_tokens_details", None)
+    output_details = getattr(usage, "output_tokens_details", None)
+    cached_input_tokens = getattr(input_details, "cached_tokens", None)
+    reasoning_tokens = getattr(output_details, "reasoning_tokens", None)
+    if type(cached_input_tokens) is not int or cached_input_tokens < 0:
+        cached_input_tokens = None
+    if type(reasoning_tokens) is not int or reasoning_tokens < 0:
+        reasoning_tokens = None
+    return TokenUsage(
+        input_tokens=values[0],
+        output_tokens=values[1],
+        total_tokens=values[2],
+        requests=1,
+        cached_input_tokens=cached_input_tokens,
+        reasoning_tokens=reasoning_tokens,
+    )
 
 
 def add_usage(total: TokenUsage | None, measured: TokenUsage | None) -> TokenUsage | None:
@@ -56,6 +71,12 @@ def add_usage(total: TokenUsage | None, measured: TokenUsage | None) -> TokenUsa
         output_tokens=total.output_tokens + measured.output_tokens,
         total_tokens=total.total_tokens + measured.total_tokens,
         requests=total.requests + measured.requests,
+        cached_input_tokens=(
+            total.cached_input_tokens + measured.cached_input_tokens
+            if total.cached_input_tokens is not None and measured.cached_input_tokens is not None
+            else None
+        ),
+        reasoning_tokens=(total.reasoning_tokens + measured.reasoning_tokens if total.reasoning_tokens is not None and measured.reasoning_tokens is not None else None),
     )
 
 

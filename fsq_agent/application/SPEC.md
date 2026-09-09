@@ -13,7 +13,7 @@ Application may consume public APIs from `models`, `config`, `providers`, `ai_se
 The package exports transport-neutral operations and their Request, Result, Event, and Error contracts through `__init__.py`. The same symbols are available from their canonical resource modules so callers may depend on the narrow boundary they use. Operations are organized by resource domain rather than exposed through one generic `execute(command)` facade:
 
 - Workspace operations support the shared workspace precondition, platform target resolution, read-only runtime readiness coordination, and workspace initialization needed by adapters.
-- Case operations support creating a Case from a Goal and testing an existing Case, including the optional suggestion policy.
+- Case operations support creating a Case from a Goal, testing an existing Case with optional suggestions, static formatting, and saving generated recordings.
 - Run operations support exact-Workspace multi-platform listing, stable detail lookup, safe structured log retrieval, historical inference, and on-demand static HTML generation.
 - Provider operations support user-level Azure OpenAI configuration, GitHub Copilot device authorization/model activation, and active-Provider readiness status. Provider inventory is not an Application operation in the first release.
 - Environment operations support listing and diagnostics.
@@ -24,7 +24,7 @@ Requests contain application inputs, Results contain operation outcomes and safe
 Canonical resource modules are:
 
 - `application.workspace`: Workspace operations.
-- `application.cases`: Case creation and testing operations.
+- `application.cases`: Case creation, testing, formatting, and generated-recording save operations.
 - `application.runs`: persisted Run query and log operations.
 - `application.providers`: Provider operations.
 - `application.environments`: Environment operations.
@@ -44,7 +44,7 @@ Application owns cross-module orchestration, shared request validation, workspac
 - `ai_services` owns visual assertion and read-only Case suggestion policy, service factories, and suggestion readiness; Application composes these services without SDK/model protocol knowledge.
 - `providers` owns supplier authentication/configured access and readiness; it does not own assertion or suggestion business logic.
 - `execution` owns complete dynamic/deterministic run coordination, Case lifecycle semantics, cancellation/teardown ordering, and candidate Case recording.
-- `case_dsl` owns Case DSL parsing, validation, and canonical deterministic-step adaptation.
+- `case_dsl` owns Case parsing, static validation, normalization, canonical serialization, and deterministic-step adaptation.
 - `environments` owns host support, read-only runtime readiness, and Web executable discovery.
 - `core` owns capability execution, runtime-secret handling, evidence policy, and Harness/Driver routing.
 - `report` owns transformation of persisted execution facts into reports and failure analysis.
@@ -52,7 +52,7 @@ Application owns cross-module orchestration, shared request validation, workspac
 
 Application must not copy, reinterpret, or fork those rules. This specification does not require `case create`, `case test`, and suggestion handling to be three independent internal Use Cases.
 
-Goal-based Case creation requests Run-local recording and supplies the selected platform Case directory as the optional publication destination. A validated successful recording is atomically published there as `<run-id>.fsq.yaml`, while the Application result exposes the authoritative Run-local candidate path. Recording or publication failure does not replace the completed dynamic execution result.
+Goal-based Case creation requests Run-local recording and supplies the selected platform Case directory as the optional publication destination. An optional `case_name` selects the stable identity; otherwise Execution derives it from platform and normalized Goal. A validated successful recording is published there as `<case-name>.fsq.yaml` with conflict-safe publication. The result exposes the authoritative Run-local candidate, stable name, published path, publication outcome, and safe warnings, including publication conflicts. Recording or publication failure does not replace the completed dynamic execution result.
 
 Case testing always performs one deterministic Execution run. When suggestion is requested, Application invokes a separate post-execution analysis through an injected read-only suggestion collaborator using the parsed source Case and bounded persisted execution facts. The collaborator receives no Harness, Driver, capability registry, or action executor, cannot rerun the Case, and cannot change the completed Run result. Application returns only Run-local suggestion and optional candidate paths produced beneath the completed Run directory; the source Case and configured Case directory remain unchanged. Suggestion-analysis failure uses stable error code `case.suggestion_failed`, preserves the completed report path in safe error details, and does not rewrite or conceal the completed deterministic execution facts.
 
@@ -71,9 +71,29 @@ For an explicit Web executable, exact compatibility uses Core's component-aware 
 
 Application owns the transport-neutral workspace initialization, platform readiness check, and Web executable discovery use cases shared by CLI and Control Plane. It does not implement or invoke package-manager commands, filesystem registry formats, browser path tables, ADB/Appium/backend protocols, or transport wording. Platform runtime services own read-only platform-specific detection; Config owns target validation and persistence. CLI and Control Plane decode inputs and project Application results/errors without reproducing this orchestration.
 
-Application's Doctor operation accepts the exact current directory and returns immutable `DoctorResult`, `DoctorWorkspaceSummary`, `DoctorPlatformResult`, fixed `DoctorChecks`, fixed `DoctorCommands`, and `DoctorStatusDetail` contracts. Detail status is `ready`, `unavailable`, `error`, or `not_applicable`; platform and overall status is `ready`, `partial`, or `unavailable`. Platforms are diagnosed in Android, Web, Windows, macOS order and only identifiable configured platforms are returned. An identifiable damaged platform produces a configuration error detail without aborting other platforms; an untrustworthy registry, root mapping, or platform inventory raises a Workspace/configuration Application Error.
+Application's Doctor operation accepts the exact current directory and returns immutable `DoctorResult`, `DoctorWorkspaceSummary`, `DoctorPlatformResult`, fixed `DoctorChecks`, fixed `DoctorCommands`, `DoctorPrerequisite`, and `DoctorStatusDetail` contracts. Detail and prerequisite status is `ready`, `unavailable`, `error`, or `not_applicable`; platform and overall status is `ready`, `partial`, or `unavailable`. Each platform result contains an ordered prerequisite tuple, empty when the platform exposes no individual prerequisite details. Platforms are diagnosed in Android, Web, Windows, macOS order and only identifiable configured platforms are returned. An identifiable damaged platform produces a configuration error detail without aborting other platforms; an untrustworthy registry, root mapping, or platform inventory raises a Workspace/configuration Application Error.
 
 Doctor delegates component facts through public Config, Environments, Providers, AI Services, Agent, and Core boundaries, isolates unexpected component exceptions into safe error details, derives command verdicts from a fixed dependency matrix, and returns ordered exact-deduplicated actions. Ordinary `case test` requires configuration, Runtime, Target configuration/availability, and Strict Core readiness. `case test --suggest` additionally requires Provider and AI Services suggestion-analyzer readiness. `case create` additionally requires Provider and dynamic-Agent readiness. Doctor does not inspect a particular Case and therefore does not promise readiness for Case-specific syntax, runtime-secret, nested-Case, or `assertWithAI` requirements.
+
+For Android and macOS, Doctor projects Environments-owned prerequisite facts without re-running host commands or interpreting backend output. The existing `target_configuration` and `target_availability` details summarize prerequisite readiness for command dependency evaluation, while the prerequisite tuple explains each independent or blocked host requirement. Actions from prerequisite details participate in the existing ordered exact-deduplicated action list. Stable prerequisite codes are preserved across Human and machine projections.
+
+Doctor requests Config inspection with target-path validation deferred to Environments. A missing or unusable application does not prevent independent host prerequisites from being reported; malformed or identity-mismatched platform documents remain configuration errors and cannot authorize target inspection.
+
+### Registered-platform diagnosis
+
+`diagnose_registered_platform` and its immutable `RegisteredPlatformDoctorRequest` are public Application exports for explicitly selected registered Workspace diagnosis. The request supplies a Workspace name and platform; an optional user-config root is a trusted composition input and is not accepted from browser requests. Application resolves the registered root through Config and returns a `DoctorResult` containing only the requested platform. It shares component checks, ordered prerequisite facts, command dependency rules, and safe errors with CLI Doctor. CLI Doctor retains its exact-current-root, all-configured-platform behavior.
+
+The public `diagnose_platform_settings` operation diagnoses already resolved settings and returns a `DoctorPlatformResult`; registered-platform diagnosis and CLI Doctor use this same implementation after establishing trustworthy configuration. Control Plane macOS run preparation uses it on the settings frozen for that execution attempt. Explore requires the `case_create` verdict; Strict requires `case_test` plus Provider readiness only when the parsed Case requires AI assertions. A browser's earlier ready response is not reusable start authority. Failure prevents Run allocation, model execution, Driver construction, and UI actions.
+
+`DoctorPrerequisite` projects the explicit, default-empty `commands` tuple from Environments facts. Application does not extract commands from explanatory prose or execute remediation. Workspace diagnosis preserves independent check results and safe repair eligibility without returning private configuration values.
+
+### Android selected-device diagnosis
+
+`RegisteredPlatformDoctorRequest` accepts an optional Android-only `target_id` as a transient exact serial. It rejects that field for other platforms, never writes it to Workspace/configuration, and applies it only to a private resolved settings copy. CLI Doctor keeps its all-platform, no-device-selection contract: one online authorized device is unambiguous; multiple online devices produce actionable selection-required diagnosis without inventing a persisted serial setting.
+
+Android platform results expose the effective selected `target_id` (or null) solely to bind device-specific diagnosis to selection. Supplied-but-missing devices do not resolve to another device. The shared readiness dependency matrix is unchanged: Explore requires Provider/dynamic-agent readiness, provider-free Strict does not, and parsed Strict AI assertions additionally require Provider readiness.
+
+Control Plane startup diagnoses the exact Android settings copy after applying the requested device and resolving the effective application identity using the same precedence as execution (Workspace app ID, then supported Case metadata fallback). Existing Strict nested/lifecycle semantics remain unchanged. Installed-app checks use that effective run app rather than a different inferred target. Startup failure occurs before Run allocation, model execution, Driver construction or UI actions. Discovery does not imply app availability. The same diagnosis operation used by CLI provides these prerequisite facts; Application adds no ADB protocol implementation.
 
 ## Python Architecture
 
@@ -87,7 +107,8 @@ Doctor delegates component facts through public Config, Environments, Providers,
 - `__init__.py`: Complete convenience exports for the public Application API.
 - `contracts/`: Canonical transport-neutral Request, Result, Event, Error, summary, and machine-record contracts grouped by resource concern.
 - `workspace.py`: Public Workspace operation boundary and private Workspace orchestration helpers.
-- `cases.py`: Public Case creation/testing operation boundary and private Case orchestration helpers.
+- `cases.py`: Public Case creation, testing, formatting, and generated-recording save boundary.
+- `_case_format.py`: Static Case file orchestration and atomic conditional formatting writes.
 - `runs.py`: Public persisted Run query/log boundary.
 - `providers.py`: Public Provider operation boundary.
 - `environments.py`: Public Environment operation boundary.
@@ -118,3 +139,15 @@ Doctor component failures do not expose exception messages, arguments, traceback
 - Doctor is a read-only Application use case; CLI presents its result but does not reproduce diagnostic or command-readiness rules.
 - Provider configuration and status are user-level Application use cases shared in persistence authority with Control Plane, require no Workspace, and never recover Provider state from `.env` or process environment.
 - The first-release Provider boundary has one active Provider and no listing, profiles, fallback chain, or transport-specific UI models.
+
+## Static Case Formatting And Generated Save
+
+`format_case`, `CaseFormatRequest`, `CaseFormatResult`, and `CaseFormatDiagnostic` are public Application contracts exported through the Case resource and package entries. Requests identify one explicit file path, its current-directory base, and check/diff/write mode. No Workspace registration, platform configuration, Provider readiness, credential resolution, or external runtime construction is required. Platform comes from Case metadata and selects the declarative capability registry, including AI assertion schemas without constructing an evaluator.
+
+The operation delegates content validation and canonical bytes to Case DSL. Cross-file lifecycle resolution and runtime checks are outside its scope and are identified as such in results. Format does not rename files, strip recording metadata, or migrate historical files. Invalid data yields field-addressable safe diagnostics and no write. Successful writes replace atomically only after validating all data, preserve file permission bits, avoid a write when bytes match, and fail if the source changed since it was read rather than knowingly overwriting concurrent edits.
+
+Results include path, mode, `valid`, `formatted`, `changed`, `needs_formatting`, diagnostics, and optional unified diff. `valid` describes static validity; `formatted` describes whether the resulting on-disk file is canonical; `changed` means this invocation actually wrote different bytes; `needs_formatting` describes the original input. Read-only noncanonical input has valid=true, formatted=false, changed=false. Successful normalization writes have valid=true, formatted=true, changed=true. Invalid input has valid=false, formatted=false, changed=false. Diagnostic fields are stable code, safe message, file, optional zero-based command index, and field path; raw rejected values are excluded.
+
+`save_recorded_case`, `CaseSaveRequest`, and `CaseSaveResult` coordinate the supplied frozen candidate/destination/platform/name through Execution's public contained publication boundary. Control Plane owns terminal-run authorization and frozen input selection; Application and Execution own saving semantics.
+
+Suggestion candidates pass shared static validation and canonical serialization before persistence, preserve the parsed source identity and description, and never gain Run provenance in their YAML. Invalid candidates remain unavailable with safe diagnostics; the completed execution result and source bytes are preserved.

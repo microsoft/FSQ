@@ -21,7 +21,7 @@ Public exports from `__init__.py`:
 - `AgentEngine`: `async run(model: Model, request: AgentRequest, *, on_event: AgentEventSink | None = None) -> AgentResult` executes one agent task, including model/tool continuation.
 - `create_model_provider`: creates a provider from explicit endpoint, credential, and optional request headers without inference or authentication operations.
 - `create_agent_engine`: creates the private local engine through the public protocol.
-- `JsonValue`, `TextContent`, `ImageContent`, `Message`, `ModelRequest`, `ModelResult`, and `TokenUsage`: neutral input/output values. Images contain bytes and MIME type; the engine does not read image files.
+- `JsonValue`, `TextContent`, `ImageContent`, `Message`, `ModelRequest`, `ModelResult`, and `TokenUsage`: neutral input/output values. `TokenUsage` carries request, input, output, and total counts plus available cached-input and reasoning-token counts without vendor objects. Images contain bytes and MIME type; the engine does not read image files.
 - `ToolCall`, `ToolInputFailure`, `ToolBinding`, and `OutputContract`: neutral tool identity/JSON-object arguments, safe invalid-input facts, tool schema/callback binding, and named output schema with validation/parser callback.
 - `AgentRequest`, `AgentResult`, `AgentEvent`, and `AgentEventSink`: execution input, validated output, semantic events, and asynchronous event delivery.
 - `ToolOutputEntry` and `ToolOutputFilter`: ordered tool-output views and restricted model-facing replacements.
@@ -86,7 +86,7 @@ Python cancellation and interruption propagate after run-local stream and tool-t
 - Context processing supplies the caller filter with ordered raw `ToolOutputEntry` values containing entry reference, call ID, name, and output. The caller returns text replacements for known integer entry IDs only. The engine has no user-turn trimming policy or trimming settings.
 - The context bridge does not reorder/drop messages, change call IDs, or expose/rebuild unrelated messages or private model state. The caller owns tool-count protection, artifact storage, previews, and sensitive-output policy.
 - Private transcript continuation preserves required opaque provider items without exposing vendor transcripts publicly or using server-managed conversation identifiers. Caller-owned inputs and schemas are not mutated.
-- Results use available provider measurements and supported completion information. Missing usage and unknown finish information remain absent or unknown rather than fabricated zero measurements or successful finishes.
+- Results use available provider measurements and supported completion information. Cached-input and reasoning-token details remain optional when the provider omits them. Missing usage and unknown finish information remain absent or unknown rather than fabricated zero measurements or successful finishes.
 
 ## Verification Scope
 

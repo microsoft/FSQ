@@ -2,9 +2,9 @@
 # Licensed under the MIT License.
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 WebBrowserChannel = Literal["chromium", "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", "msedge-canary"]
 
@@ -56,4 +56,22 @@ class PlatformRuntimeCheck(BaseModel):
     def validate_status(self) -> "PlatformRuntimeCheck":
         if self.ready != (self.status == "ready"):
             raise ValueError("platform runtime status and readiness must agree")
+        return self
+
+
+class PlatformPrerequisiteCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    identifier: str
+    code: str | None = None
+    target_id: str | None = Field(default=None, min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.:@-]+$")
+    status: Literal["ready", "unavailable", "error", "not_applicable"]
+    message: str
+    action: str | None = None
+    commands: tuple[Annotated[str, Field(min_length=1, max_length=2000)], ...] = Field(default=(), max_length=5)
+
+    @model_validator(mode="after")
+    def _selection_identity_only(self) -> "PlatformPrerequisiteCheck":
+        if self.target_id is not None and self.identifier != "device_selection":
+            raise ValueError("target_id belongs only to Android device selection.")
         return self

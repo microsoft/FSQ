@@ -26,3 +26,15 @@ New Python source files must start with:
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 ```
+
+## FSQ Case Editing
+
+Within already authorized Case edits, use the shared CLI as the format and validation authority:
+
+1. Preserve Case identity and execution semantics outside the requested change; do not add Run provenance to Case YAML.
+2. After creating or editing a Case, run `fsq case format <path> --check --json`.
+3. Repair invalid fields using structured diagnostics. Do not delete steps, weaken assertions, or invent parameters to bypass validation.
+4. For formatting-only differences, run `fsq case format <path> --write --json`, then repeat the check.
+5. Review the final Git diff against the request. Report static validation separately from actual execution tests.
+
+See [Case format reference](docs/case-format.md) for modes, exit codes, and machine fields. These instructions do not grant write authorization or change the SDD gates above.

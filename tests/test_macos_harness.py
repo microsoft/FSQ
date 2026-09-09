@@ -339,6 +339,9 @@ class FakeMacSession:
             return self.elements[locator]
         raise RuntimeError("not found")
 
+    def find_elements(self, strategy: str, locator: str) -> list[FakeMacElement]:
+        return [element for name, element in self.elements.items() if f"@name='{name}'" in locator or f"@identifier='{name}'" in locator]
+
     def activate_app(self, bundle_id: str) -> None:
         self.lifecycle_calls.append(("activate_app", bundle_id))
 
@@ -792,6 +795,7 @@ def test_appium_mac2_driver_ui_snapshot_compacts_semantic_signals() -> None:
                     "width": "80",
                     "height": "30",
                 },
+                "truncated_attributes": ["name"],
             },
             {
                 "type": "Hidden",
@@ -833,6 +837,7 @@ def test_appium_mac2_driver_ui_snapshot_compacts_included_attributes_and_text() 
                 "type": "Button",
                 "attributes": {"name": "Action", "custom": "keep"},
                 "text": long_text[:50],
+                "text_truncated": True,
             }
         ],
     }

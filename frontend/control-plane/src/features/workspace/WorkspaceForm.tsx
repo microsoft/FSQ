@@ -20,6 +20,7 @@ interface WorkspaceFormProps {
   onSaved: (workspace: WorkspaceDetail, platform?: WorkspacePlatformDetail) => void;
   onReloadLatest?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onPendingChange?: (pending: boolean) => void;
 }
 
 interface TargetDraft {
@@ -79,7 +80,9 @@ function envRecord(rows: EnvRow[]): Record<string, string> {
   return Object.fromEntries(rows.map((row) => [row.name, row.value]));
 }
 
-export function WorkspaceForm({ mode, workspace, detail, allowedPlatforms = allPlatforms, onCancel, onSaved, onReloadLatest, onDirtyChange }: WorkspaceFormProps) {
+export function WorkspaceForm({ mode, workspace, detail, allowedPlatforms = allPlatforms, onCancel, onSaved, onReloadLatest, onDirtyChange, onPendingChange }: WorkspaceFormProps) {
+  const callbacks = useRef({onDirtyChange,onPendingChange});
+  callbacks.current = {onDirtyChange,onPendingChange};
   const initialPlatform = detail?.platform ?? allowedPlatforms[0] ?? 'android';
   const initialRows = Object.entries(detail?.env ?? {}).map(([name, value], index) => ({ id: index + 1, name, value }));
   const [name, setName] = useState(detail?.name ?? workspace?.name ?? '');
@@ -110,8 +113,10 @@ export function WorkspaceForm({ mode, workspace, detail, allowedPlatforms = allP
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => () => {
     pickerRequest.current += 1;
-    onDirtyChange?.(false);
-  }, [onDirtyChange]);
+    callbacks.current.onDirtyChange?.(false);
+    callbacks.current.onPendingChange?.(false);
+  }, []);
+  useEffect(() => onPendingChange?.(pending), [pending,onPendingChange]);
 
   const chooseParentFolder = async () => {
     const request = ++pickerRequest.current;
@@ -201,6 +206,7 @@ export function WorkspaceForm({ mode, workspace, detail, allowedPlatforms = allP
     }
     setFieldError('');
     setPending(true);
+    callbacks.current.onPendingChange?.(true);
     setError(null);
     try {
       if (mode === 'create') {
@@ -219,26 +225,31 @@ export function WorkspaceForm({ mode, workspace, detail, allowedPlatforms = allP
       if (reason instanceof ControlPlaneApiError && reason.body.code !== 'workspace_conflict') firstField.current?.focus();
     } finally {
       setPending(false);
+      callbacks.current.onPendingChange?.(false);
     }
   };
 
-  const renderTarget = (draft: PlatformDraft) => draft.platform ? <section className="cp-form-section"><div><h3>Target</h3><p>Identify the local application FSQ should operate.</p></div><div className="cp-form-grid">
+  const renderTarget = (draft: PlatformDraft) => {
+    if (!draft.platform) return null;
+    const fields = <div className={mode === 'add' ? 'cp-form-grid cp-add-target' : 'cp-form-grid'}>
     {draft.platform === 'android' && <label><span>App ID</span><input ref={(element) => { if (element) draftFields.current.set(`${draft.id}:target`, element); if (mode !== 'create') firstField.current = element; }} value={draft.target.appId} onChange={(event) => updateTarget(draft.id, 'appId', event.target.value)} placeholder="com.example.app" /></label>}
     {draft.platform === 'web' && <><label><span>Browser channel</span><select value={draft.target.browserChannel} onChange={(event) => updateTarget(draft.id, 'browserChannel', event.target.value as WebBrowserChannel)}>{webChannels.map((channel) => <option key={channel.value} value={channel.value}>{channel.label}</option>)}</select></label><label className="cp-field-wide"><span>Web path <small>Optional</small></span><input aria-label="Web path" ref={(element) => { if (element) draftFields.current.set(`${draft.id}:target`, element); if (mode !== 'create') firstField.current = element; }} value={draft.target.browserExecutablePath} onChange={(event) => updateTarget(draft.id, 'browserExecutablePath', event.target.value)} placeholder="Browser executable path" /><small>Leave blank to discover the selected installed browser channel.</small></label></>}
     {draft.platform === 'windows' && <><label className="cp-field-wide"><span>App path</span><input ref={(element) => { if (element) draftFields.current.set(`${draft.id}:target`, element); if (mode !== 'create') firstField.current = element; }} value={draft.target.appPath} onChange={(event) => updateTarget(draft.id, 'appPath', event.target.value)} /></label><label><span>Window title regex <small>Optional</small></span><input value={draft.target.windowTitleRe} onChange={(event) => updateTarget(draft.id, 'windowTitleRe', event.target.value)} /></label><label><span>Launch args <small>Optional</small></span><input value={draft.target.launchArgs} onChange={(event) => updateTarget(draft.id, 'launchArgs', event.target.value)} /></label></>}
     {draft.platform === 'macos' && <><label><span>Bundle ID</span><input ref={(element) => { if (element) draftFields.current.set(`${draft.id}:target`, element); if (mode !== 'create') firstField.current = element; }} value={draft.target.bundleId} onChange={(event) => updateTarget(draft.id, 'bundleId', event.target.value)} placeholder="com.example.App" /></label><label><span>App path</span><input value={draft.target.appPath} onChange={(event) => updateTarget(draft.id, 'appPath', event.target.value)} /></label></>}
-  </div></section> : null;
+    </div>;
+    return mode === 'add' ? fields : <section className="cp-form-section"><div><h3>Target</h3><p>Identify the local application FSQ should operate.</p></div>{fields}</section>;
+  };
 
   const renderEnvironment = (draft: PlatformDraft) => draft.platform ? <details className="cp-env-disclosure" open={mode === 'edit'}><summary>Environment <span>{draft.envRows.length ? `${draft.envRows.length} configured` : 'Optional'}</span></summary><div className="cp-env-content"><p>Values remain local and are masked by default.</p>{draft.envRows.map((row) => { const visibilityLabel = `${revealed.has(row.id) ? 'Hide' : 'Show'} value for ${row.name || 'environment row'}`; return <div className="cp-env-row" key={row.id}><label><span>Name</span><input ref={(element) => { if (element) draftFields.current.set(`${draft.id}:env-name-${row.id}`, element); }} value={row.name} onChange={(event) => updateEnv(draft.id, row.id, 'name', event.target.value)} placeholder="TEST_PASSWORD" autoComplete="off" /></label><label><span>Value</span><span className="cp-secret-input"><input ref={(element) => { if (element) draftFields.current.set(`${draft.id}:env-value-${row.id}`, element); }} type={revealed.has(row.id) ? 'text' : 'password'} value={row.value} onChange={(event) => updateEnv(draft.id, row.id, 'value', event.target.value)} autoComplete="new-password" /><button type="button" aria-label={visibilityLabel} title={visibilityLabel} onClick={() => setRevealed((current) => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })}>{revealed.has(row.id) ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}</button></span></label><button className="cp-icon-button cp-delete-env" type="button" aria-label={`Delete ${row.name || 'environment row'}`} onClick={() => deleteEnv(draft.id, row.id)}><Trash2 aria-hidden="true" /></button></div>; })}<button className="button" type="button" onClick={() => addEnv(draft.id)}><Plus aria-hidden="true" />Add environment value</button></div></details> : null;
 
-  return <form className="cp-workspace-form" onSubmit={submit}>
+  return <form className={`cp-workspace-form cp-workspace-form--${mode}`} onSubmit={submit}>
     <fieldset disabled={pending}>
       <legend>{mode === 'create' ? 'Create workspace' : mode === 'add' ? 'Add platform' : `Edit ${platformLabels[detail!.platform]}`}</legend>
       {mode === 'create' ? <div className="cp-form-grid cp-form-grid--identity">
         <label><span>Workspace name</span><input ref={firstField} value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label>
         <div className="cp-selected-folder"><label><span>Selected folder</span><input value={selectedPath} placeholder="No folder selected" readOnly /></label><button ref={pickerButton} className="button" type="button" onClick={chooseParentFolder} disabled={pickerPending} aria-busy={pickerPending}>{pickerPending ? 'Choosing...' : <><FolderOpen aria-hidden="true" />Choose folder</>}</button></div>
         <label><span>Final path</span><input value={finalPath} placeholder="Select a folder to preview the workspace path" readOnly /></label>
-      </div> : <dl className="cp-workspace-immutable"><div><dt>Name</dt><dd>{detail?.name ?? workspace!.name}</dd></div><div><dt>Root</dt><dd className="mono">{detail?.rootPath ?? workspace!.rootPath}</dd></div><div><dt>Platform</dt><dd>{detail?.platform ? platformLabels[detail.platform] : singleDraft?.platform ? platformLabels[singleDraft.platform] : ''}</dd></div></dl>}
+      </div> : mode === 'edit' ? <p className="cp-form-platform-label">Platform: {platformLabels[detail!.platform]}</p> : null}
 
       {mode === 'create' && <div className="cp-platform-builder">
         <button className="button cp-add-platform" type="button" onClick={addPlatformDraft} disabled={drafts.length >= allowedPlatforms.length}><Plus aria-hidden="true" />Add platform</button>
@@ -252,7 +263,7 @@ export function WorkspaceForm({ mode, workspace, detail, allowedPlatforms = allP
           </section>;
         })}</div>
       </div>}
-      {mode === 'add' && singleDraft && <div className="cp-platform-draft-tools"><label><span>Platform</span><select aria-label="Platform" value={singleDraft.platform} onChange={(event) => changePlatform(singleDraft.id, event.target.value as PlatformId)}>{allowedPlatforms.map((platform) => <option key={platform} value={platform}>{platformLabels[platform]}</option>)}</select></label></div>}
+      {mode === 'add' && singleDraft && <div className="cp-platform-draft-tools"><label><span>Platform</span><select ref={(element) => { if (element) draftFields.current.set(`${singleDraft.id}:platform`, element); }} aria-label="Platform" value={singleDraft.platform} onChange={(event) => changePlatform(singleDraft.id, event.target.value as PlatformId)}>{allowedPlatforms.map((platform) => <option key={platform} value={platform}>{platformLabels[platform]}</option>)}</select></label></div>}
       {mode !== 'create' && singleDraft && <>{renderTarget(singleDraft)}{renderEnvironment(singleDraft)}</>}
 
       {fieldError && <p className="cp-form-error" role="alert"><AlertCircle aria-hidden="true" />{fieldError}</p>}

@@ -783,12 +783,14 @@ class MacOSPoint(BaseModel):
 class MacOSLocator(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={"description": "Structured macOS locator. Provide at least one populated locator field or point."},
+        json_schema_extra={
+            "description": "Structured macOS locator. All populated element fields constrain one unique element (AND). Use complete literal values, not clipped display text. Coordinates never bypass element constraints."
+        },
     )
 
     # Names mirror the authored macOS locator payload contract.
     accessibilityId: str | None = Field(default=None, description="macOS accessibility id to match.")  # noqa: N815
-    name: str | None = Field(default=None, description="macOS accessibility name to match.")
+    name: str | None = Field(default=None, description="Exact semantic name matching identity/name/label/value for compatibility. All additional fields still constrain the same element.")
     label: str | None = Field(default=None, description="macOS accessibility label to match.")
     value: str | None = Field(default=None, description="macOS accessibility value to match.")
     role: str | None = Field(default=None, description="macOS accessibility role to match.")
@@ -949,11 +951,33 @@ class MacOSTakeScreenshotParams(BaseModel):
     full_screen: bool | None = Field(default=None, description="When true, request a full-screen screenshot where supported.")
 
 
+class MacOSElementQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str | None = Field(default=None, max_length=1024, description="Match semantic element text only, not type names or JSON keys.")
+    match: Literal["exact", "contains"] = Field(default="contains", description="Text comparison mode.")
+    case_sensitive: bool = Field(default=False, description="Whether text matching is case-sensitive.")
+    control_type: str | None = Field(default=None, max_length=128, description="Exact backend element type.")
+    enabled: bool | None = Field(default=None, description="Required known enabled state.")
+    visible: bool | None = Field(default=None, description="Required known visibility state; missing state does not match.")
+    selected: bool | None = Field(default=None, description="Required known selection state.")
+    limit: int = Field(default=20, ge=1, le=50, description="Maximum candidates returned.")
+    offset: int = Field(default=0, ge=0, le=10000, description="Candidate offset within the same snapshot.")
+    snapshot_revision: str | None = Field(default=None, max_length=64, description="Revision returned by the initial query; required for continuation.")
+
+    @model_validator(mode="after")
+    def _require_revision(self) -> "MacOSElementQuery":
+        if self.offset and not self.snapshot_revision:
+            raise ValueError("Query continuation requires snapshot_revision.")
+        return self
+
+
 class MacOSUiSnapshotParams(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Read the current macOS accessibility tree snapshot."})
 
     max_depth: int | None = Field(default=None, ge=1, description="Optional maximum tree depth to include.")
     include_attributes: bool | None = Field(default=None, description="When true, include additional Appium element attributes where supported.")
+    query: MacOSElementQuery | None = Field(default=None, description="Return bounded semantic candidates from the full current tree instead of a depth-clipped tree.")
 
 
 class MacOSAssertVisibleParams(_MacOSTargetParams):

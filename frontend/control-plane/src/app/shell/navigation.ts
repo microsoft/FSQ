@@ -10,12 +10,11 @@ export interface NavigationItem {
 }
 
 export const CONTROL_PLANE_NAVIGATION: readonly NavigationItem[] = [
-  { id: 'overview', label: 'Overview', icon: 'overview', available: true, section: 'primary' },
-  { id: 'workspace', label: 'Workspace', icon: 'workspace', available: true, section: 'primary' },
-  { id: 'devices', label: 'Devices', icon: 'devices', available: true, section: 'primary' },
+  { id: 'overview', label: 'Home', icon: 'overview', available: true, section: 'primary' },
+  { id: 'devices', label: 'Test Runner', icon: 'devices', available: true, section: 'primary' },
   { id: 'runs', label: 'Runs', icon: 'runs', available: false, section: 'primary' },
-  { id: 'config', label: 'Config', icon: 'config', available: true, section: 'footer' },
-  { id: 'settings', label: 'Settings', icon: 'settings', available: false, section: 'footer' },
+  { id: 'workspace', label: 'Workspaces', icon: 'workspace', available: true, section: 'primary' },
+  { id: 'config', label: 'Settings', icon: 'config', available: true, section: 'footer' },
 ] as const;
 
 export interface WorkspaceNavigationItem {
@@ -24,4 +23,5 @@ export interface WorkspaceNavigationItem {
   description?: string;
   available?: boolean;
   message?: string;
+  diagnosticAvailable?: boolean;
 }

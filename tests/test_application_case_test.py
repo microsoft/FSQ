@@ -50,7 +50,8 @@ def test_case_test_rejects_invalid_case_with_stable_request_error(tmp_path: Path
 
     assert error.value.code == ApplicationErrorCode.CASE_INVALID
     assert error.value.category.value == "request_validation"
-    assert error.value.details["schemaVersion"] == "unsupported/v1"
+    assert error.value.details["field_path"] == ["schemaVersion"]
+    assert "unsupported/v1" not in str(error.value.details)
 
 
 def test_suggestion_artifacts_are_run_local_and_source_immutable(tmp_path: Path) -> None:
@@ -80,7 +81,9 @@ def test_suggestion_artifacts_are_run_local_and_source_immutable(tmp_path: Path)
     assert payload["analysis_summary"] == "Improve the target."
     assert candidate_path == run_dir / "candidate.fsq.yaml"
     assert payload["candidate_case_status"] == "available"
-    assert candidate_path.read_text(encoding="utf-8") == candidate
+    from fsq_agent.case_dsl import FsqCaseLoader
+
+    assert FsqCaseLoader().load_case(candidate_path).config.name == "Search"
     assert source.read_text(encoding="utf-8") == original
     assert not (tmp_path / "candidate.fsq.yaml").exists()
 
@@ -260,3 +263,49 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
         assert transitions[-1][0] == expected_status
         assert transitions[-1][1]["artifacts"].report_markdown == report_path.name
         assert transitions[-1][1]["result"].steps.total == 1
+
+
+def test_suggestion_cannot_introduce_run_metadata(tmp_path: Path) -> None:
+    from fsq_agent.case_dsl import FsqCaseLoader
+
+    source = tmp_path / "source.fsq.yaml"
+    source.write_text("schemaVersion: fsq.ai-test/v1\nname: stable\nplatform: web\nproperties: {owner: team}\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _, candidate = case_test_module._write_analysis_artifacts(
+        run_dir=run_dir,
+        source_case=source,
+        source_platform="web",
+        execution_status="passed",
+        execution_summary="ok",
+        analysis=CaseSuggestionAnalysis(
+            summary="suggestion",
+            suggestions=(),
+            candidate_case_yaml="schemaVersion: fsq.ai-test/v1\nname: new\nplatform: web\nproperties: {recording: {source_run_id: changing-run}}\n---\n- startBrowser: {}\n",
+        ),
+    )
+    assert candidate is not None
+    assert FsqCaseLoader().load_case(candidate).config.properties == {"owner": "team"}
+    assert "changing-run" not in candidate.read_text()
+
+
+def test_suggestion_uses_executed_metadata_after_external_edit(tmp_path: Path) -> None:
+    from fsq_agent.case_dsl import FsqCaseLoader
+
+    source = tmp_path / "source.fsq.yaml"
+    source.write_text("schemaVersion: fsq.ai-test/v1\nname: executed\nplatform: web\n")
+    parsed = FsqCaseLoader().load_case(source)
+    source.write_text("schemaVersion: fsq.ai-test/v1\nname: externally-edited\nplatform: web\n")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _, candidate = case_test_module._write_analysis_artifacts(
+        run_dir=run_dir,
+        source_case=source,
+        parsed_source=parsed,
+        source_platform="web",
+        execution_status="passed",
+        execution_summary="ok",
+        analysis=CaseSuggestionAnalysis(summary="suggestion", suggestions=(), candidate_case_yaml=source.read_text()),
+    )
+    assert FsqCaseLoader().load_case(candidate).config.name == "executed"
+    assert FsqCaseLoader().load_case(source).config.name == "externally-edited"

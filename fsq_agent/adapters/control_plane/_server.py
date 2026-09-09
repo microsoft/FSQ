@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
-import os
 import re
-import tempfile
 import time
 import webbrowser
 from dataclasses import dataclass
@@ -17,8 +15,9 @@ from threading import Thread
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from fsq_agent.application import ApplicationError, CaseSaveRequest, save_recorded_case
 from fsq_agent.case_dsl import FSQ_CASE_SUFFIX
-from fsq_agent.models import FsqAgentError
+from fsq_agent.models import ConfigurationError, FsqAgentError
 
 from ._cases import discover_cases, resolve_case
 from ._config import ConfigAPIError, get_config, map_config_exception, require_config_access, require_same_origin_write, save_azure_config, test_saved_connection
@@ -26,7 +25,7 @@ from ._directory_picker import DirectoryPicker, DirectoryPickerAPIError
 from ._evidence import EvidenceProjection, read_replay_frames, read_screenshot, read_step_artifacts, read_ui_snapshot, safe_exception_message, safe_text
 from ._execution import ExecutionHandle, prepare_run, start_execution
 from ._provider_auth import ProviderAuthState
-from ._readiness import load_control_plane_settings, readiness
+from ._readiness import AndroidPreflightError, MacOSPreflightError, load_control_plane_settings, readiness
 from ._replay import read_replay_video, replay_video_metadata, store_replay_video
 from ._state import BusyError, ControlPlaneState, RequestNotFoundError
 from ._targets import discover_targets
@@ -51,6 +50,10 @@ _SAVE_CASE_FORBIDDEN = re.compile(r"[<>\"|\\/:*?\[\]\x00-\x1f\x7f-\x9f]")
 
 
 class _RunNotTerminalError(RuntimeError):
+    pass
+
+
+class _CasePublicationConflictError(RuntimeError):
     pass
 
 
@@ -157,11 +160,15 @@ class ControlPlaneServer:
                 return 200, self._readiness(workspace_name, platform), dict(_JSON_HEADERS)
             if path == f"{_API_PREFIX}/targets":
                 workspace_name, platform = _workspace_platform_query(query)
-                settings = self._load_settings(workspace_name, platform)
+                settings = (
+                    load_control_plane_settings(workspace_name, platform, self.options.user_config_root, diagnostic=True) if platform == "macos" else self._load_settings(workspace_name, platform)
+                )
                 return 200, discover_targets(settings), dict(_JSON_HEADERS)
             if path == f"{_API_PREFIX}/cases":
                 workspace_name, platform = _workspace_platform_query(query)
-                settings = self._load_settings(workspace_name, platform)
+                settings = (
+                    load_control_plane_settings(workspace_name, platform, self.options.user_config_root, diagnostic=True) if platform == "macos" else self._load_settings(workspace_name, platform)
+                )
                 return 200, discover_cases(settings), dict(_JSON_HEADERS)
             request_id, suffix = _run_route(path)
             if suffix == "":
@@ -203,6 +210,8 @@ class ControlPlaneServer:
             return 413, _error("evidence_too_large", str(exc), "Inspect the persisted artifact outside the Control Plane display."), dict(_JSON_HEADERS)
         except _RunNotTerminalError as exc:
             return 409, _exception_error("run_not_terminal", exc, "Wait for the run to finish."), dict(_JSON_HEADERS)
+        except ApplicationError as exc:
+            return 400, _error(exc.code.value, exc.message, exc.action or "Repair configuration and recheck."), dict(_JSON_HEADERS)
         except (ValueError, FsqAgentError) as exc:
             return 400, _exception_error("invalid_request", exc, "Correct the request and retry."), dict(_JSON_HEADERS)
         except OSError as exc:
@@ -219,6 +228,17 @@ class ControlPlaneServer:
         origin: str | None = None,
         host: str | None = None,
     ) -> tuple[int, dict[str, Any]]:
+        if path == f"{_API_PREFIX}/readiness":
+            try:
+                self._require_config_access(peer_host)
+                require_same_origin_write(origin, host)
+                if set(body) != {"workspaceName", "platform", "targetId"} or body.get("platform") != "android":
+                    return 400, _error("invalid_diagnosis", "Invalid Android diagnosis fields.", "Select a Workspace and device.")
+                return 200, readiness(body["workspaceName"], "android", self.options.user_config_root, target_id=body["targetId"])
+            except ConfigAPIError as exc:
+                return exc.status, _error(exc.code, exc.message, exc.action)
+            except Exception:  # noqa: BLE001 -- diagnosis boundary never returns private inputs.
+                return 400, _error("android_diagnosis_failed", "Android diagnosis could not be completed.", "Select a valid Workspace and device, then recheck.")
         if path == f"{_API_PREFIX}/workspaces/pick-parent-directory":
             return self._handle_workspace_write("POST", path, body, peer_host=peer_host, origin=origin, host=host)
         workspace_name, workspace_suffix = _workspace_route_or_none(path)
@@ -251,6 +271,10 @@ class ControlPlaneServer:
             return 413, _exception_error("body_too_large", exc, "Upload a smaller replay video.")
         except _RunNotTerminalError as exc:
             return 409, _exception_error("run_not_terminal", exc, "Wait for the run to finish.")
+        except _CasePublicationConflictError as exc:
+            return 409, _exception_error("case.publication_conflict", exc, "Choose another Case name.")
+        except ConfigurationError:
+            return 400, _error("case.invalid", "Generated Case is invalid.", "Inspect the candidate Case.")
         except OSError as exc:
             return 503, _exception_error("save_yaml_failed", exc, "Check workspace file permissions and retry.")
         else:
@@ -283,10 +307,16 @@ class ControlPlaneServer:
             destination.relative_to(cases_dir)
         except ValueError as exc:
             raise ValueError("Saved YAML path escapes the configured cases directory.") from exc
-        _atomic_copy(recorded_case_path, destination)
+        saved = save_recorded_case(CaseSaveRequest(candidate_path=recorded_case_path, destination_directory=cases_dir, platform=snapshot["platform"], case_name=case_name))
+        if saved.outcome == "conflict":
+            raise _CasePublicationConflictError("A different Case already uses this name.")
+        if saved.outcome == "failed":
+            raise OSError("Unable to save Case.")
         return {
             "savedPath": destination.relative_to(cases_dir).as_posix(),
-            "message": f"Saved YAML to cases/{snapshot['platform']}/{destination.name}.",
+            "outcome": saved.outcome,
+            "draft": saved.draft,
+            "message": f"{'Draft: ' if saved.draft else ''}{'Already saved' if saved.outcome == 'unchanged' else 'Saved YAML'} to cases/{snapshot['platform']}/{destination.name}.",
         }
 
     def handle_replay_video_file(self, request_id: str, range_header: str | None) -> tuple[int, bytes, dict[str, str]]:
@@ -391,7 +421,11 @@ class ControlPlaneServer:
         require_config_access(self.options.host, peer_host)
 
     def _load_settings(self, workspace_name: str, platform: str) -> Any:
-        return load_control_plane_settings(workspace_name, platform, self.options.user_config_root)
+        return (
+            load_control_plane_settings(workspace_name, platform, self.options.user_config_root, diagnostic=True)
+            if platform == "macos"
+            else load_control_plane_settings(workspace_name, platform, self.options.user_config_root)
+        )
 
     def _readiness(self, workspace_name: str, platform: str) -> dict[str, Any]:
         return readiness(workspace_name, platform, self.options.user_config_root)
@@ -447,6 +481,12 @@ class ControlPlaneServer:
             if getattr(prepared, "mode", None) == "strict":
                 self.state.update_source(request_id, {"caseSteps": _strict_case_steps(prepared)})
             self._handles[request_id] = start_execution(prepared, self.state)
+        except AndroidPreflightError as exc:
+            self.state.abandon_preparation(request_id)
+            return 400, {"code": "android_preflight_failed", "message": exc.message, "action": exc.action, "details": exc.details}
+        except MacOSPreflightError as exc:
+            self.state.abandon_preparation(request_id)
+            return 400, {"code": "macos_preflight_failed", "message": exc.message, "action": exc.action, "details": exc.details}
         except (TypeError, ValueError, FsqAgentError, OSError, UnicodeDecodeError) as exc:
             self.state.abandon_preparation(request_id)
             return 400, _exception_error("run_validation_failed", exc, "Refresh readiness, targets, and cases, then retry.", settings=settings)
@@ -518,34 +558,6 @@ def _strict_case_steps(prepared) -> list[dict[str, Any]]:
             }
         )
     return summaries
-
-
-def _atomic_copy(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with (
-            source.open("rb") as source_file,
-            tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=destination.parent,
-                prefix=f".{destination.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary_file,
-        ):
-            temporary_path = Path(temporary_file.name)
-            while chunk := source_file.read(1024 * 1024):
-                temporary_file.write(chunk)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        temporary_path.replace(destination)
-    finally:
-        if temporary_path is not None and temporary_path.exists():
-            try:
-                temporary_path.unlink()
-            except OSError:
-                pass
 
 
 def _save_case_name(body: dict[str, Any]) -> str:

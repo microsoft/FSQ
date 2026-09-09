@@ -19,6 +19,8 @@ Current `__init__.py` exports via `__all__`:
 - `FsqCaseLoader`: Loads canonical `*.fsq.yaml` Cases from explicit paths or the configured read-only case directory. It may accept `*.codex.yaml` for one deprecation cycle with a caller-visible warning. It accepts metadata-plus-command Cases, goal-only metadata Cases, and optional lifecycle hook metadata in the first YAML document. `*.intent.yaml` is not an FSQ Case format.
 - `FsqExecutableStepAdapter`: Converts an `FsqCase` command document into ordered canonical `ExecutableStep` records for deterministic core execution using a registry snapshot.
 - `is_fsq_case_file`: Detects FSQ case file names.
+- `FSQ_CASE_SUFFIX`: Canonical Case filename suffix.
+- `FsqCaseValidator` and `FsqCaseSerializer`: Exact forwards to the public static validation and deterministic serialization contracts in `case_dsl/SPEC.md`.
 
 The first deterministic step adapter exposes a narrow API:
 
@@ -43,7 +45,7 @@ Each lifecycle field may be omitted, may be one hook entry mapping, or may be an
 
 `FsqExecutableStepAdapter` resolves authored FSQ action names through canonical capability names and `ReplayPolicy(kind="fsq_command").alias` values in the registry, then stores the canonical capability name in `ExecutableStep.action_name`. Authored names such as `tapOn`, `inputText`, `pressKey`, `assertVisible`, `assert`, `assertWithAI`, `startBrowser`, `closeBrowser`, `clickOn`, `typeText`, `uiSnapshot`, `assertElementsOrder`, and generated replay alias `waitMs` are preserved in `ExecutableStep.metadata["authored_action_name"]`.
 
-The adapter normalizes each known YAML command into `ExecutableStep.params` by resolving the action alias to a `CapabilityDefinition`, validating object-shaped payloads against `capability.params_model`, then storing `model_dump(mode="json", exclude_none=True)`. Known action payloads use the same field shape as their parameter models rather than action-specific scalar shorthand. Canonical forms are grouped by active platform PlatformTools plus inherited CommonTool commands. AgentTools are not present in strict registries and cannot appear as executable FSQ commands.
+The adapter normalizes each known YAML command into `ExecutableStep.params` by resolving the action alias to a `CapabilityDefinition` and validating object-shaped payloads against `capability.params_model` through shared Case DSL validation. Null/default rules are defined in `case_dsl/SPEC.md`; implicit literal text has the same effective parameters as explicit `textType: literal`. Known action payloads use the same field shape as their parameter models rather than action-specific scalar shorthand. Canonical forms are grouped by active platform PlatformTools plus inherited CommonTool commands. AgentTools are not present in strict registries and cannot appear as executable FSQ commands.
 
 Android command block:
 
@@ -142,7 +144,7 @@ Malformed command entries that cannot be reduced to one FSQ action must raise `C
 ## Python Architecture
 
 - Architecture level: 2 Simple Package.
-- Public API: `FsqCaseLoader`, `FsqExecutableStepAdapter`, and `is_fsq_case_file` exported from `__init__.py`.
+- Public API: `FSQ_CASE_SUFFIX`, `FsqCaseLoader`, `FsqCaseValidator`, `FsqCaseSerializer`, `FsqExecutableStepAdapter`, and `is_fsq_case_file` exported from `__init__.py`.
 - Internal modules: `_loader.py` and `_step_adapter.py` are private implementation modules.
 - Domain boundaries: canonical `case_dsl` owns deterministic YAML loading, lifecycle hook metadata validation, and conversion to shared executable-step contracts. It does not execute steps or hooks, resolve real secrets, resolve hook file paths, run shell commands, construct registries, create harnesses, or generate reports.
 - Boundary models: parsed cases, lifecycle hooks, executable steps, text-entry runtime secret fields, and capability metadata models come from `models`.
@@ -162,7 +164,7 @@ Invalid FSQ YAML raises `ConfigurationError` with the failing path. Unsupported 
 
 - `*.fsq.yaml` is the canonical Case input format; `*.codex.yaml` is accepted for one deprecation cycle only.
 - Single-document `*.fsq.yaml` files containing only valid Case metadata are supported as goal-only Cases. Two-document Cases with `[]` or an empty command list are also goal-only Cases.
-- Configured `cases.dir` is treated as read-only input. Strict-core execution may parse FSQ case files from it, while dynamic LLM execution may read case files from it as raw text. Generated files and evidence must be written under the output root.
+- Configured `cases.dir` is treated as read-only input. Strict-core execution may parse FSQ case files from it, while dynamic LLM execution may read case files from it as raw text. Generated candidates and evidence remain under the output root; contained publication and explicit formatting writes are coordinated outside the DSL package.
 - Markdown conversion reports are intentionally ignored and are not loaded as task inputs.
 - FSQ commands are deterministic ordered input for the strict-core execution path when converted by `FsqExecutableStepAdapter`. Generated recorded cases may include strict replay refs and pure wait commands, but those are still deterministic authored input by the time strict execution begins.
 - FSQ lifecycle hooks are deterministic metadata around Case execution, not commands in `case.commands`. FSQ validates hook syntax and preserves order; Execution coordinates owning modules so FSQ stays independent of path resolution, shell execution, harnesses, evidence, and reports.

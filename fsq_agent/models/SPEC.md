@@ -135,6 +135,7 @@ macOS platform exports:
 - `MacOSDragToParams`: Pydantic model for `drag_to` parameters. It requires source and destination values, each expressed as a semantic target, non-empty locator, or explicit point, with optional duration metadata.
 - `MacOSTakeScreenshotParams`: Pydantic model for `take_screenshot` parameters. It accepts optional full-screen/window metadata; artifact paths are owned by `ArtifactStore`, not by user payloads.
 - `MacOSUiSnapshotParams`: Pydantic model for the read-only `ui_snapshot` macOS observation capability. It accepts optional maximum depth and simplification flags and returns a bounded compact semantic Appium Mac2 page-source/control-tree snapshot without changing the established response fields.
+- `MacOSElementQuery`: SDK-neutral optional query contract nested under `MacOSUiSnapshotParams.query`. It carries semantic text, exact/contains match mode, case sensitivity, optional control type and enabled/visible/selected filters, bounded page size, non-negative offset, and optional snapshot revision for continuation. All filters apply together; continuation beyond the initial page requires the revision. Query validation and limits belong to Models; backend reading and matching belong to the macOS Driver.
 - `MacOSAssertVisibleParams`: Pydantic model for macOS `assert_visible` parameters. It requires a semantic `target`, non-empty `locator`, or explicit `point` plus optional assertion metadata.
 - `MacOSAssertElementsOrderParams`: Pydantic model for `assert_elements_order` parameters. It requires an ordered `elements` list whose items contain a semantic target or macOS locator, accepts `direction` constrained to `vertical` or `horizontal`, optional zero-based `expected_order`, optional pixel `tolerance`, and `require_all` defaulting to true. Driver output for this assertion includes `direction`, `elements_found`, `elements_total`, `actual_order`, `expected_order`, and per-element center positions.
 - `MacOSAssertWithAIParams`: Pydantic model for authored macOS visual assertion parameters with a required prompt and optional assertion metadata. This parameter model is consumed by decorated Appium Mac2 backend driver tools such as `AppiumMac2Driver.assert_with_ai`.
@@ -171,6 +172,16 @@ Platform settings exports:
 - `WorkspaceSettings`: Pydantic model for the managed fsq-agent workspace root. Marker file name and auto-initialization behavior are internal workspace policy rather than YAML settings.
 - `CaseSettings`: Pydantic model for the read-only FSQ case directory.
 - `OutputSettings`: Pydantic model for the managed output root. The per-run report/artifact layout under the output root is internal policy. All logs, reports, tool artifacts, and generated files must live under the output root.
+
+Platform-runtime diagnostic exports include immutable `PlatformPrerequisiteCheck` values with a stable prerequisite identifier, `ready`, `unavailable`, `error`, or `not_applicable` status, safe message, and optional safe action. These SDK-neutral facts contain no raw subprocess output, environment values, credentials, or backend objects and are suitable for Application Doctor projection.
+
+Prerequisite facts may carry an immutable, default-empty `commands` tuple of bounded operator-run command strings. Commands are explicit guidance, never an execution request; they contain no credentials, workspace secrets, or unrestricted local target data. The four diagnostic statuses retain their meaning; `not_applicable` does not by itself prove readiness.
+
+`PlatformPrerequisiteCheck` additionally accepts an optional stable `code` for machine-readable failure reasons; existing consumers may omit it. Android diagnosis differentiates ADB missing/server unavailable/endpoint invalid/timeout/query failure, no device, unauthorized/offline/unsupported device state, selection required/selected device missing, and application identity/missing/query-failed outcomes without embedding raw backend details.
+
+`PlatformPrerequisiteCheck.target_id` is an optional bounded transient Android device identity carried by the device-selection fact for shared diagnosis composition. It has the same serial validation as `AndroidDevice`, is absent for other prerequisites/platforms, and is never persisted as Workspace configuration. Application removes it from individual `DoctorPrerequisite` projections and exposes the effective identity only as `DoctorPlatformResult.target_id` and the selected-device readiness response binding.
+
+`AndroidDevice` and `AndroidDeviceDiscoveryResult` are shared immutable, SDK-neutral device-inventory contracts. Existing serial/state/allowlisted metadata and paired error-code/error-message semantics remain. Discovery errors include an unavailable existing ADB server, invalid endpoint and protocol/query failure in addition to executable absence and timeout; they never encode auto-start as a successful diagnostic action. Serial values are bounded exact transient identifiers, reject protocol delimiters/control characters, and are not persisted Workspace configuration. Package-query outcomes preserve installed, absent, timeout and query failure distinctions for Environments-owned diagnosis rather than collapsing into a boolean.
 
 Exception exports:
 
@@ -216,6 +227,8 @@ macOS contracts:
 - macOS settings are grouped under `MacOSHarnessSettings` and are selected by `HarnessSettings.platform == "macos"`.
 - macOS explicit observation command is represented as `ui_snapshot`/`uiSnapshot`; automatic runner evidence captures normalized `ui_snapshot` content through the same driver observation contract.
 - macOS action parameter design follows desktop conventions shared with Windows where possible: public replay aliases use `clickOn`, `typeText`, `pressKey`, and `uiSnapshot`; coordinate actions are represented as explicit point payloads inside semantic actions rather than as separate public replay aliases.
+- macOS structured locator descriptions define conjunctive matching of supplied element constraints, exact literal handling, and unique-match requirements. `name` is a compatibility semantic-name signal; `label` and `value` constrain their named attributes. Coordinate signals do not weaken supplied semantic constraints. No equivalent matching change applies to Android, Web, or Windows contracts.
+- macOS structured observation is an optional mode of the existing `ui_snapshot` contract, not a new replay command. Tree mode remains compatible; query mode returns bounded candidates and explicit snapshot/coverage/continuation metadata without a full tree. Preview truncation never changes an exact locator value, and unknown state is not coerced into a verified state.
 
 ## Internal Structure
 

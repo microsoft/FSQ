@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ControlPlaneClient } from '../../api/controlPlaneClient';
 import type { AzureConfigPayload, ConfigResponse } from '../../api/types';
 import { AzureConfigForm } from './components/AzureConfigForm';
@@ -30,6 +30,11 @@ function sameAzure(left: AzureConfigPayload, right: AzureConfigPayload): boolean
 
 export function ConfigPage({ client, onDirtyChange }: ConfigPageProps) {
   const provider = useProviderConfig(client);
+  const connectionOpener = useRef<HTMLElement | null>(null);
+  const testConnection = () => {
+    connectionOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    void provider.testSavedConnection();
+  };
   const [azureDraft, setAzureDraft] = useState<AzureConfigPayload | null>(null);
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
   const loadedAzure = useMemo(() => persistedAzure(provider.config.data), [provider.config.data]);
@@ -95,14 +100,14 @@ export function ConfigPage({ client, onDirtyChange }: ConfigPageProps) {
       draft={azureDraft} configured={loadedProvider?.type === 'azure_openai'} dirty={dirty} savePending={provider.savePending}
       saveError={provider.saveError} testPending={provider.testPending} canTest={canTest} onChange={setAzureDraft}
       onSave={() => void provider.saveAzure(azureDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog}
-      onTest={() => void provider.testSavedConnection()}
+      onTest={testConnection}
     /> : loadedProvider?.type === 'github_copilot' ? <section className="config-provider" aria-labelledby="github-provider-title">
       <div className="config-section-heading">
         <div><p className="config-eyebrow">Active provider</p><h1 id="github-provider-title">GitHub Copilot GPT authenticated</h1></div>
         <button className="button" type="button" onClick={openProviderDialog}>Change provider</button>
       </div>
       <dl className="provider-details"><div><dt>Provider</dt><dd>GitHub Copilot GPT</dd></div><div><dt>Model</dt><dd className="mono">{loadedProvider.modelName}</dd></div><div><dt>Status</dt><dd><span className="config-status-dot" />Authenticated</dd></div></dl>
-      <div className="config-test-actions"><div><strong>Connection check</strong><span>Send a fixed minimal request using only the saved configuration.</span></div><button className="button" type="button" disabled={!canTest} onClick={() => void provider.testSavedConnection()}>{provider.testPending ? 'Testing...' : 'Test connection'}</button></div>
+      <div className="config-test-actions"><div><strong>Connection check</strong><span>Send a fixed minimal request using only the saved configuration.</span></div><button className="button" type="button" disabled={!canTest} onClick={testConnection}>{provider.testPending ? 'Testing...' : 'Test connection'}</button></div>
     </section> : <section className="config-state" aria-labelledby="empty-config-title">
       <p className="config-eyebrow">Model provider</p><h1 id="empty-config-title">No Provider configured</h1>
       <p>Add the one model provider FSQ will use for the next complete task.</p>
@@ -114,6 +119,6 @@ export function ConfigPage({ client, onDirtyChange }: ConfigPageProps) {
       onSaveModel={provider.saveGithubModel} onCancelAuthentication={cancelAuthentication}
       onClose={() => void closeProviderDialog()}
     />}
-    {provider.connectionResult && <ConnectionResultDialog result={provider.connectionResult} onClose={provider.dismissConnectionResult} />}
+    {provider.connectionResult && <ConnectionResultDialog result={provider.connectionResult} onClose={provider.dismissConnectionResult} returnFocus={connectionOpener.current} />}
   </div>;
 }

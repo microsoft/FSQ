@@ -49,7 +49,7 @@ it('renders a distinct successful empty tree state', async () => {
   expect(screen.getByRole('region', { name: 'Workspace file tree' })).toBeVisible();
   expect(screen.getByRole('region', { name: 'Workspace file content' })).toBeVisible();
   expect(screen.getByRole('heading', { name: 'Files' })).toBeVisible();
-  expect(screen.getByText('◧')).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Files' })).toBeVisible();
   expect(await screen.findByText('No cases or knowledge files')).toBeVisible();
   expect(screen.queryByText('Loading workspace files…')).not.toBeInTheDocument();
 });
@@ -91,17 +91,17 @@ it('shows the real workspace path and a non-interactive Code presentation for te
   const user = userEvent.setup();
   render(<WorkspaceBrowser workspaceName="alpha" />);
   const cases = await screen.findByRole('button', { name: 'cases' });
-  expect(within(cases).getByText('›')).toHaveClass('cp-tree-chevron');
-  expect(within(cases).getByText('■')).toHaveClass('cp-tree-type-icon--folder');
+  expect(cases).toHaveAttribute('aria-expanded', 'false');
+  expect(cases.querySelector('.cp-tree-type-icon--folder svg')).toBeInTheDocument();
   await user.click(cases);
-  expect(within(cases).getByText('⌄')).toHaveClass('cp-tree-chevron');
+  expect(cases).toHaveAttribute('aria-expanded', 'true');
   const yamlFile = await screen.findByRole('button', { name: 'scenario.yaml' });
-  expect(within(yamlFile).getByText('◇')).toHaveClass('cp-tree-type-icon--yaml');
+  expect(yamlFile.querySelector('.cp-tree-type-icon--yaml svg')).toBeInTheDocument();
   await user.click(yamlFile);
 
   const breadcrumb = await screen.findByLabelText('File path');
   expect(breadcrumb).toHaveTextContent('alpha / cases / scenario.yaml');
-  expect(screen.getByText('Code')).toBeVisible();
+  expect(screen.queryByText('Code')).not.toBeInTheDocument();
   expect(screen.queryByRole('tab', { name: 'Code' })).not.toBeInTheDocument();
   expect(screen.getByText(/1 lines · \d+ B/)).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Replay Case' })).not.toBeInTheDocument();
@@ -126,9 +126,8 @@ it('offers recording and extracts an eligible FSQ replay context', async () => {
   const onReplayCase = vi.fn();
   const user = userEvent.setup();
 
-  render(<WorkspaceBrowser workspaceName="alpha" onRecordCase={onRecordCase} onReplayCase={onReplayCase} />);
-  await user.click(screen.getByRole('button', { name: 'Record new case' }));
-  expect(onRecordCase).toHaveBeenCalledOnce();
+  render(<WorkspaceBrowser workspaceName="alpha" onReplayCase={onReplayCase} />);
+  expect(screen.queryByRole('button', { name: 'Record new case' })).not.toBeInTheDocument();
 
   await user.click(await screen.findByRole('button', { name: 'cases' }));
   await user.click(await screen.findByRole('button', { name: 'web' }));
@@ -136,7 +135,7 @@ it('offers recording and extracts an eligible FSQ replay context', async () => {
   await user.click(await screen.findByRole('button', { name: 'login.fsq.yaml' }));
 
   const replayCase = await screen.findByRole('button', { name: 'Replay Case' });
-  expect(screen.queryByText('2 lines · 24 B')).not.toBeInTheDocument();
+  expect(screen.getByText(/2 lines · 24 B/)).toBeVisible();
   await user.click(replayCase);
   expect(onReplayCase).toHaveBeenCalledWith('web', 'flows/login.fsq.yaml');
 });
@@ -209,7 +208,7 @@ it('suppresses raw HTML in Markdown preview and exposes it only in the code tab'
   const { container } = render(<WorkspaceBrowser workspaceName="alpha" />);
   await user.click(await screen.findByRole('button', { name: 'knowledge' }));
   const markdownFile = await screen.findByRole('button', { name: 'project.md' });
-  expect(within(markdownFile).getByText('▧')).toHaveClass('cp-tree-type-icon--file');
+  expect(markdownFile.querySelector('.cp-tree-type-icon--file svg')).toBeInTheDocument();
   await user.click(markdownFile);
 
   expect(await screen.findByRole('heading', { name: 'Safe heading' })).toBeVisible();
@@ -237,7 +236,7 @@ it('keeps non-YAML text in escaped plain source without YAML line numbers', asyn
   const user = userEvent.setup();
   const { container } = render(<WorkspaceBrowser workspaceName="alpha" />);
   await user.click(await screen.findByRole('button', { name: 'cases' }));
-  expect(within(screen.getByRole('button', { name: 'settings.yml' })).getByText('◇')).toHaveClass('cp-tree-type-icon--yaml');
+  expect(screen.getByRole('button', { name: 'settings.yml' }).querySelector('.cp-tree-type-icon--yaml svg')).toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'notes.txt' }));
 
   expect(await screen.findByText('<safe>plain text</safe>')).toBeVisible();

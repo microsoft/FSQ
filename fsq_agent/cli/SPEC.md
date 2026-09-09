@@ -25,7 +25,8 @@ fsq
 ├── doctor
 ├── case
 │   ├── create
-│   └── test
+│   ├── test
+│   └── format PATH
 ├── ui
 ├── providers
 │   ├── configure NAME
@@ -60,7 +61,7 @@ fsq init --platform macos --bundle-id com.example.app
 
 `--name` may override the derived name. An unregistered name uses Config's selected-directory rule: an empty current directory becomes the root, while a non-empty directory receives a new `<current-directory>/<name>` child. A registered name is resolved case-insensitively and always uses its stored root independently of the current directory; an unavailable registered Workspace is not recreated. `--env NAME=VALUE` may be repeated and supplies the complete private environment mapping. `--update-existing` permits replacement of a differing existing platform target/environment; without it, equal configuration is unchanged and differing configuration is a conflict. `--provider` is not part of workspace initialization; Provider configuration remains under `providers configure` or Control Plane Config. Public option spelling uses hyphens; underscore aliases are not accepted.
 
-- `case create` accepts a natural-language Goal, performs AI-participating testing, and may produce a Run-local candidate `*.fsq.yaml` Case. A validated successful recording is also published to the selected platform Case directory as `<run-id>.fsq.yaml` without changing the Run-local candidate reported by the command.
+- `case create` accepts a natural-language Goal, performs AI-participating testing, and may produce a Run-local candidate `*.fsq.yaml` Case. Optional `--name` selects the stable Case name; otherwise Execution derives it from platform and normalized Goal. A validated successful recording is published as `<case-name>.fsq.yaml` without changing the Run-local candidate. Output includes publication outcome, stable name, published path, and safe warnings. Conflicting existing contents are preserved and the candidate remains available. Publication conflict exits `1` while machine results retain the actual execution status.
 - `case test` executes an existing FSQ Case as authored. The source Case is immutable.
 - `case test --suggest` executes the authored Case exactly once, then permits read-only AI analysis of the parsed Case and bounded persisted execution facts. It may return Run-local suggestions or a candidate Case while preserving the completed execution result and never overwriting the source Case or configured Case directory.
 - When suggestion analysis produces an artifact, Human output displays each Run-local suggestion or candidate Case path and states that the source Case was not modified. JSON and JSONL terminal results expose the same paths through `suggestion_path` and `candidate_case_path`; absent artifacts remain `null`.
@@ -72,11 +73,27 @@ The CLI does not expose Environment inventory, Environment diagnostics, extensio
 
 ## Workspace Rule
 
-For every command except creation of an unregistered Workspace, the exact current directory is the CLI workspace root. A valid CLI workspace is registered in the user workspace registry at that exact normalized root and contains at least one valid `.fsq/config/config.<platform>.yaml`; `.fsq-agent-workspace` markers are neither created nor accepted. Commands do not search parent directories, auto-initialize, or accept an alternate workspace flag. Commands requiring only workspace context validate the exact registered root; platform-specific commands additionally require the selected platform config. Failure uses Application error code `workspace.not_initialized` and tells a human to run `fsq init` from the intended selected directory or change to an initialized Workspace. Control Plane continues to list all registered workspaces and does not derive selection or execution paths from the CLI process startup directory.
+For Workspace-scoped commands except creation of an unregistered Workspace, the exact current directory is the CLI workspace root. User-level Provider commands and static `case format` do not require a Workspace. A valid CLI workspace is registered in the user workspace registry at that exact normalized root and contains at least one valid `.fsq/config/config.<platform>.yaml`; `.fsq-agent-workspace` markers are neither created nor accepted. Commands do not search parent directories, auto-initialize, or accept an alternate workspace flag. Commands requiring only workspace context validate the exact registered root; platform-specific commands additionally require the selected platform config. Failure uses Application error code `workspace.not_initialized` and tells a human to run `fsq init` from the intended selected directory or change to an initialized Workspace. Control Plane continues to list all registered workspaces and does not derive selection or execution paths from the CLI process startup directory.
 
 `fsq init` is the only CLI command that may establish this precondition. It validates all input, resolves the complete target, and completes Driver readiness before workspace mutation; it then creates an unregistered Workspace from the current selected directory or initializes and updates exactly one platform at an existing registered root through the shared Application and Config operations. An empty selected directory is adopted as the new root; a non-empty selected directory is preserved and receives an absent `<current-directory>/<name>` child. Success is reported only after workspace files and registry truth are committed. It creates `.fsq/config/config.<platform>.yaml`, `.fsq/runs/<platform>/`, `cases/<platform>/`, `knowledge/<platform>/project.md`, and the user registry entry inside the selected final root. Repetition for an existing registered name is idempotent and uses its stored root independently of the current directory. A partially initialized, unavailable, mismatched, invalid, or Driver-unready Workspace fails with safe repair guidance rather than being treated as ready.
 
 `providers configure` and `providers status` are user-level commands and are exempt from the Workspace precondition. They operate on the same active Provider under `~/.fsq` as Control Plane Config and never read or write a Workspace `.env` or platform configuration.
+
+## Case Format Command
+
+`fsq case format PATH [--check | --diff | --write] [--json]` accepts one explicit canonical or supported legacy Case filename. Relative paths resolve against the current directory, not a configured Case directory; directory recursion and batch migration are not implicit. Mode flags are mutually exclusive; no mode means `--check`. Platform is inferred from Case metadata. This command is exempt from the Workspace precondition and is always non-interactive.
+
+- `--check` validates and compares original bytes with canonical output without writing.
+- `--diff` performs the same checks and returns a unified formatting diff without writing.
+- `--write` validates first, atomically writes canonical bytes when needed, and leaves identical files untouched. Invalid input is never rewritten.
+- Exit `0` means canonical input or successful write; `1` means valid but noncanonical input in check/diff mode; `2` means invalid Case, unsupported platform, missing input, or usage error; `5` means file I/O, concurrent-edit conflict, or internal failure; `130` means interruption.
+- `--json` selects the existing JSON terminal envelope with the structured Application result and overrides inherited presentation for this command. Diff text is a JSON string field, never mixed with raw stdout text. Existing global JSON/JSONL modes remain supported. Syntax and validation failures are machine-readable when JSON was requested. Result fields and safe diagnostic structure follow Application SPEC.
+- Human output distinguishes invalid Case, valid but noncanonical Case, already canonical Case, and successful formatting. Validation is document-local and static, not proof of execution success.
+- CLI invokes Application formatting without constructing a runtime, requiring Workspace configuration, authenticating, or inspecting referenced Case/script files.
+
+Verification covers mode exclusivity, structured diagnostics and exit codes, no-Workspace invocation, no runtime side effects, invalid-file preservation, idempotent writes, generation/CLI byte equivalence, stable create names, and publication conflicts.
+
+`docs/case-format.md` documents the canonical format and the Coding Agent check/fix/recheck interface, including machine fields, exit codes, diff behavior, comment normalization, and the distinction between static validity and successful execution. Agent write authorization and workflow instructions remain owned by repository workflow-control files, not project specifications.
 
 ## Provider Commands
 
@@ -102,9 +119,11 @@ Azure OpenAI configuration requires base URL, model/deployment name, and API key
 - Machine output is stdout-only. Diagnostics that cannot be represented as protocol records use stderr. Secrets and hidden reasoning are never emitted.
 - Exit categories are `0` success, `1` test/case failure, `2` usage or validation error, `3` workspace/configuration error, `4` provider/environment unavailable, `5` internal/infrastructure error, and `130` interruption.
 
-`doctor` has no platform option and checks configured platforms in Android, Web, Windows, macOS order. Its Human output shows Workspace and platform status, fixed checks, the three command verdicts, reasons/actions for non-ready items, and ordered deduplicated actions. JSON and JSONL each emit exactly one terminal result record; JSONL emits no synthetic event. Doctor exits `0` for `ready` or `partial`, `4` for a completed `unavailable` result, `3` when Workspace registry/root/config inventory is not trustworthy, `5` for unrecoverable internal orchestration failure, and `130` for interruption.
+`doctor` has no platform option and checks configured platforms in Android, Web, Windows, macOS order. Its Human output shows Workspace and platform status, ordered platform prerequisite details when present, fixed checks, the three command verdicts, reasons/actions for non-ready items, and ordered deduplicated actions. macOS prerequisite labels cover full Xcode, active Xcode developer directory, Appium CLI, Appium Mac2 driver, Appium endpoint, application path, and bundle identifier. JSON and JSONL each emit exactly one terminal result record with the same prerequisite facts; JSONL emits no synthetic event. Doctor exits `0` for `ready` or `partial`, `4` for a completed `unavailable` result, `3` when Workspace registry/root/config inventory is not trustworthy, `5` for unrecoverable internal orchestration failure, and `130` for interruption.
 
 Doctor is read-only: it does not install, mutate configuration, authenticate interactively, send model inference, launch applications/browsers, or create external sessions. Provider readiness may perform only its supported non-interactive cached-token refresh. Human color never carries unique information, and all output obeys the global secret and safe-error contract.
+
+Android Doctor presents ordered ADB executable, uiautomator2 dependency, existing ADB server, device connection/authorization, device selection, application identity and installation checks, including stable codes and explicit copyable/manual repair guidance. It uses shared Application diagnosis and does not spawn ADB or initialize device automation. Human and JSON/JSONL distinguish missing prerequisites, timeouts and query failures; `not_applicable` explains blocked checks. No new Doctor platform or serial option is introduced. Multiple online devices direct the user to explicit Control Plane selection or an operator-controlled unambiguous connection, never to a nonexistent persisted serial setting. The default-server startup command is manual guidance, not performed by Doctor.
 
 ## Run Commands
 

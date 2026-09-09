@@ -49,8 +49,8 @@ export function AzureConfigForm(props: AzureConfigFormProps) {
       </div>
       {props.saveError && <div className="config-error" role="alert"><strong>{props.saveError.message}</strong><span>{props.saveError.action}</span></div>}
       <div className="config-form-actions">
-        <button className="button button--primary" type="submit" disabled={props.savePending || !props.dirty}>{props.savePending ? 'Saving...' : 'Save changes'}</button>
         <button className="button" type="button" disabled={props.savePending} onClick={props.onCancel}>Cancel</button>
+        <button className="button button--primary" type="submit" disabled={props.savePending || !props.dirty}>{props.savePending ? 'Saving...' : 'Save changes'}</button>
       </div>
     </form>
     {props.configured && <div className="config-test-actions">

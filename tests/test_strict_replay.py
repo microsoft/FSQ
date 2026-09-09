@@ -71,4 +71,4 @@ platform: android
 
     assert collect_runtime_secret_refs(steps[0].params) == set()
     assert resolved[0].params["text"] == "TEST_ACCOUNT_PASSWORD"
-    assert "textType" not in resolved[0].params
+    assert resolved[0].params["textType"] == "literal"

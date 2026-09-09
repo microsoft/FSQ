@@ -2,6 +2,27 @@ import { controlPlaneClient, ControlPlaneApiError, validateRunSnapshot } from '.
 
 afterEach(() => vi.restoreAllMocks());
 
+it('sends Android device binding in POST body, never in a URL',async()=>{
+  const ok={status:'ready',message:'Ready',action:''};
+  const payload={workspaceName:'mobile',platformId:'android',targetId:'device-2',workspace:ok,platform:ok,provider:ok,target:ok,strict:ok,prerequisites:[],commands:{caseCreate:ok,caseTest:ok},checkedAt:'2026-09-08T00:00:00Z'};
+  const fetch=vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify(payload),{status:200}));
+  expect((await controlPlaneClient.readiness('mobile','android',undefined,'device-2')).targetId).toBe('device-2');
+  expect(String(fetch.mock.calls[0][0])).not.toContain('device-2');
+  expect(fetch.mock.calls[0][1]?.method).toBe('POST');
+  expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({workspaceName:'mobile',platform:'android',targetId:'device-2'});
+  fetch.mockResolvedValue(new Response(JSON.stringify({...payload,targetId:undefined}),{status:200}));
+  await expect(controlPlaneClient.readiness('mobile','android')).rejects.toMatchObject({body:{code:'invalid_response'}});
+});
+
+it('validates macOS diagnostic records including commands and verdicts',async()=>{
+  const ok={status:'ready',message:'Ready',action:''};
+  const payload={workspaceName:'mobile',platformId:'macos',workspace:ok,platform:ok,provider:ok,target:ok,strict:ok,prerequisites:[{identifier:'appium_cli',status:'unavailable',message:'Missing',action:'Install',commands:['npm install -g appium']}],commands:{caseCreate:ok,caseTest:ok},checkedAt:'2026-09-07T00:00:00Z'};
+  const fetch=vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify(payload),{status:200}));
+  expect((await controlPlaneClient.readiness('mobile','macos')).prerequisites?.[0].commands).toEqual(['npm install -g appium']);
+  fetch.mockResolvedValue(new Response(JSON.stringify({...payload,commands:undefined}),{status:200}));
+  await expect(controlPlaneClient.readiness('mobile','macos')).rejects.toMatchObject({body:{code:'invalid_response'}});
+});
+
 it.each([
   ['bootstrap', () => controlPlaneClient.bootstrap()],
   ['readiness', () => controlPlaneClient.readiness('mobile', 'web')],
@@ -115,12 +136,12 @@ it.each([
 
 it('sends the confirmed Save yaml case name without a suffix', async () => {
   const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
-    savedPath: 'checkout-flow.fsq.yaml',
+    savedPath: 'checkout-flow.fsq.yaml', outcome: 'created', draft: false,
     message: 'Saved YAML to cases/web/checkout-flow.fsq.yaml.',
   }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
 
   await expect(controlPlaneClient.saveYaml('request-1', { caseName: 'checkout-flow' })).resolves.toEqual({
-    savedPath: 'checkout-flow.fsq.yaml',
+    savedPath: 'checkout-flow.fsq.yaml', outcome: 'created', draft: false,
     message: 'Saved YAML to cases/web/checkout-flow.fsq.yaml.',
   });
   expect(fetch).toHaveBeenCalledWith(

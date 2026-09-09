@@ -18,6 +18,7 @@ from fsq_agent.application import (
     DoctorChecks,
     DoctorCommands,
     DoctorPlatformResult,
+    DoctorPrerequisite,
     DoctorResult,
     DoctorStatusDetail,
     DoctorWorkspaceSummary,
@@ -93,7 +94,15 @@ def _doctor_result(tmp_path: Path, *, status: str = "partial") -> DoctorResult:
     return DoctorResult(
         status=status,
         workspace=DoctorWorkspaceSummary(name="checkout", root=tmp_path),
-        platforms=[DoctorPlatformResult(platform="web", status=status, checks=checks, commands=commands)],
+        platforms=[
+            DoctorPlatformResult(
+                platform="web",
+                status=status,
+                prerequisites=[DoctorPrerequisite(identifier="appium_cli", status="unavailable", message="Appium unavailable.", action="Install Appium.")],
+                checks=checks,
+                commands=commands,
+            )
+        ],
         actions=["Configure Provider."],
     )
 
@@ -118,6 +127,8 @@ def test_doctor_human_output_shows_command_matrix_and_actions(tmp_path: Path, mo
 
     assert result.exit_code == 0
     assert "Workspace: checkout" in result.output
+    assert "Prerequisites" in result.output
+    assert "Appium CLI" in result.output
     assert "fsq case test --suggest" in result.output
     assert "Provider unavailable." in result.output
     assert "Action: Configure Provider." in result.output

@@ -4,18 +4,15 @@
 from __future__ import annotations
 
 import platform
-import shutil
-import socket
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlparse
 
-from fsq_agent.environments.providers._android import ANDROID_RUNTIME_PROVIDER, android_application_is_installed, discover_android_devices
-from fsq_agent.environments.providers._macos import MACOS_RUNTIME_PROVIDER
+from fsq_agent.environments.providers._android import ANDROID_RUNTIME_PROVIDER, android_prerequisites
+from fsq_agent.environments.providers._macos import MACOS_RUNTIME_PROVIDER, _macos_prerequisites
 from fsq_agent.environments.providers._web import WEB_NAMES, WEB_RUNTIME_PROVIDER, web_candidate_paths
 from fsq_agent.environments.providers._windows import WINDOWS_RUNTIME_PROVIDER
-from fsq_agent.models import PlatformRuntimeCheck, web_executable_matches_channel
+from fsq_agent.models import PlatformPrerequisiteCheck, PlatformRuntimeCheck, web_executable_matches_channel
 
 if TYPE_CHECKING:
     from fsq_agent.environments.providers._runtime import RuntimeProvider
@@ -56,11 +53,17 @@ class PlatformRuntimeService:
             return False, "Platform Target configuration is invalid.", "Repair the selected platform Target configuration."
         return True, "Platform Target configuration is ready.", ""
 
-    def check_target_availability(self, settings) -> tuple[bool, str, str]:
+    def check_target_availability(self, settings, prerequisites: tuple[PlatformPrerequisiteCheck, ...] | None = None) -> tuple[bool, str, str]:
+        if settings.harness.platform == "android":
+            facts = prerequisites if prerequisites is not None else self.check_prerequisites(settings)
+            failed = next((item for item in facts if item.status != "ready"), None)
+            return (False, failed.message, failed.action or "Recheck Android environment.") if failed else (True, "The selected Android device and application are available.", "")
         configured, message, action = self.check_target_configuration(settings)
         if not configured:
             return configured, message, action
         selected = settings.harness.platform
+        if selected == "macos" and platform.system() != "Darwin":
+            return False, "macOS prerequisites require a macOS host.", "Run macOS platform tests on a macOS host."
         if selected == "web":
             executable = Path(settings.harness.web.browser_executable_path)
             if executable.is_file() and self.web_executable_matches_channel(settings.harness.web.channel, executable):
@@ -71,35 +74,19 @@ class PlatformRuntimeService:
                 return True, "Configured Windows application Target is available.", ""
             return False, "The configured Windows application Target is unavailable.", "Repair or reselect the Windows application Target."
         if selected == "macos":
-            if not _endpoint_available(settings.harness.macos.appium_server_url):
-                return False, "The configured macOS Appium endpoint is unavailable.", "Start or repair the configured Appium server."
-            app_path = settings.harness.macos.app_path
-            if app_path is not None and Path(app_path).exists():
-                return True, "Configured macOS application Target is available.", ""
-            if settings.harness.macos.bundle_id and _macos_bundle_is_installed(settings.harness.macos.bundle_id):
-                return True, "Configured macOS application Target is available.", ""
-            return False, "The configured macOS application Target is unavailable.", "Repair or reselect the macOS application Target."
-        from fsq_agent.models import AndroidDeviceDiscoveryResult
+            macos_prerequisites = prerequisites if prerequisites is not None else self.check_prerequisites(settings)
+            failed = next((item for item in macos_prerequisites if item.status in {"unavailable", "error"}), None)
+            if failed is not None:
+                return False, failed.message, failed.action or "Repair the macOS host prerequisite."
+            return True, "Configured macOS host prerequisites and application Target are available.", ""
+        return False, "Unsupported platform target.", "Select a supported platform."
 
-        discovery = discover_android_devices()
-        if not isinstance(discovery, AndroidDeviceDiscoveryResult):
-            return False, "No online authorized Android device is available.", "Connect and authorize an Android device."
-        if discovery.error_code == "adb_missing":
-            return False, "ADB is unavailable for Android Target discovery.", "Install Android platform tools and make adb available on PATH."
-        if discovery.error_code:
-            return False, "Android Target discovery could not be completed.", "Run environment diagnostics and repair ADB connectivity."
-        serial = (settings.harness.android.serial or "").strip()
-        online = [device for device in discovery.devices if device.state == "device"]
-        if serial:
-            online = [device for device in online if device.serial == serial]
-        if not online:
-            return False, "The configured Android device is not online and authorized.", "Connect and authorize the configured Android device."
-        if not serial and len(online) != 1:
-            return False, "Android Target selection is ambiguous.", "Configure an exact Android device serial."
-        selected_device = online[0]
-        if not android_application_is_installed(selected_device.serial, settings.harness.android.app_id):
-            return False, "The configured Android application is not installed on the selected device.", "Install the application on the selected Android device."
-        return True, "The configured Android device and application are available.", ""
+    def check_prerequisites(self, settings) -> tuple[PlatformPrerequisiteCheck, ...]:
+        if settings.harness.platform == "android":
+            return android_prerequisites(settings.harness.android)
+        if settings.harness.platform != "macos":
+            return ()
+        return _macos_prerequisites(settings.harness.macos)
 
 
 def _target_configuration_valid(settings, service: PlatformRuntimeService) -> bool:
@@ -121,31 +108,3 @@ def _target_configuration_valid(settings, service: PlatformRuntimeService) -> bo
         path_valid = executable is None or (Path(executable).exists() and (Path(executable).suffix.casefold() == ".app" or Path(executable).is_file()))
         return has_identity and path_valid and endpoint.scheme in {"http", "https"} and bool(endpoint.hostname) and endpoint.port is not None
     return False
-
-
-def _macos_bundle_is_installed(bundle_id: str, timeout_seconds: float = 5.0) -> bool:
-    metadata_query = shutil.which("mdfind")
-    if platform.system() != "Darwin" or metadata_query is None:
-        return False
-    try:
-        completed = subprocess.run(  # noqa: S603 - resolved system metadata tool with a read-only exact bundle-id query.
-            [metadata_query, f"kMDItemCFBundleIdentifier == '{bundle_id}'"],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return completed.returncode == 0 and any(Path(line).exists() for line in completed.stdout.splitlines() if line.strip())
-
-
-def _endpoint_available(url: str, timeout_seconds: float = 1.0) -> bool:
-    parsed = urlparse(url)
-    if parsed.hostname is None or parsed.port is None:
-        return False
-    try:
-        with socket.create_connection((parsed.hostname, parsed.port), timeout=timeout_seconds):
-            return True
-    except OSError:
-        return False

@@ -191,3 +191,15 @@ it('reports a saved GitHub connection result without changing the page', async (
   await user.click(screen.getByRole('button', { name: 'Done' }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
+it.each([azure, github])('returns focus to the disabled-while-pending connection opener', async config => {
+  let finish!: (value: {success:true; provider:string; modelName:string; durationMs:number}) => void;
+  const pending = new Promise<{success:true; provider:string; modelName:string; durationMs:number}>(resolve => { finish=resolve; });
+  render(<ConfigPage client={client(config,{testConnection:vi.fn().mockReturnValue(pending)})}/>);
+  const opener=await screen.findByRole('button',{name:'Test connection'});
+  await userEvent.click(opener);
+  expect(opener).toBeDisabled();
+  document.body.focus();
+  finish({success:true,provider:'github_copilot',modelName:'gpt-5.5',durationMs:125});
+  await userEvent.click(await screen.findByRole('button',{name:'Done'}));
+  await waitFor(()=>expect(opener).toHaveFocus());
+});

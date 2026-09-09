@@ -10,27 +10,29 @@ vi.mock('../api/controlPlaneClient', () => ({
 }));
 
 vi.mock('../features/devices/DevicesPage', () => ({
-  DevicesPage: ({ workspaceRegistryReady, selectedWorkspaceName, launchIntent, onLaunchIntentConsumed, renderShell }: { workspaceRegistryReady: boolean; selectedWorkspaceName: string | null; launchIntent?: { id: number; mode: string; workspaceName: string; platform?: string; casePath?: string } | null; onLaunchIntentConsumed?: (id: number) => void; renderShell: (toolbar: React.ReactNode, content: React.ReactNode) => React.ReactNode }) =>
-    renderShell(null, <div>Devices content<span>Registry {workspaceRegistryReady ? 'ready' : 'pending'}</span><span>Devices Workspace {selectedWorkspaceName ?? 'unselected'}</span><span>{launchIntent ? `${launchIntent.mode}:${launchIntent.workspaceName}:${launchIntent.platform ?? ''}:${launchIntent.casePath ?? ''}` : 'No launch intent'}</span>{launchIntent && <button type="button" onClick={() => onLaunchIntentConsumed?.(launchIntent.id)}>Consume launch intent</button>}</div>),
+  DevicesPage: ({ workspaceRegistryReady, selectedWorkspaceName, launchIntent, onLaunchIntentConsumed, onStartPendingChange, onRepairTarget, renderShell }: { workspaceRegistryReady: boolean; selectedWorkspaceName: string | null; launchIntent?: { id: number; mode: string; workspaceName: string; platform?: string; casePath?: string } | null; onLaunchIntentConsumed?: (id: number) => void; onStartPendingChange?: (pending:boolean)=>void; onRepairTarget?: (name:string)=>void; renderShell: (toolbar: React.ReactNode, content: React.ReactNode) => React.ReactNode }) =>
+    renderShell(null, <div>Devices content<button onClick={()=>onStartPendingChange?.(true)}>Simulate pending start</button><button onClick={()=>onStartPendingChange?.(false)}>Finish pending start</button><button onClick={()=>selectedWorkspaceName&&onRepairTarget?.(selectedWorkspaceName)}>Repair selected target</button><span>Registry {workspaceRegistryReady ? 'ready' : 'pending'}</span><span>Devices Workspace {selectedWorkspaceName ?? 'unselected'}</span><span>{launchIntent ? `${launchIntent.mode}:${launchIntent.workspaceName}:${launchIntent.platform ?? ''}:${launchIntent.casePath ?? ''}` : 'No launch intent'}</span>{launchIntent && <button type="button" onClick={() => onLaunchIntentConsumed?.(launchIntent.id)}>Consume launch intent</button>}</div>),
 }));
 vi.mock('../features/config/ConfigPage', () => ({
   ConfigPage: ({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) => <div>Config content<button type="button" onClick={() => onDirtyChange?.(true)}>Make draft dirty</button></div>,
 }));
 vi.mock('../features/overview/OverviewPage', () => ({
-  OverviewPage: ({ workspaces, selectedWorkspace, provider, onNavigate, onSelectWorkspace, onClearWorkspace, onOpenWorkspace, onConfigureWorkspace, onRetryWorkspaces }: { workspaces: { name: string; status: string }[]; selectedWorkspace: { name: string; status: string } | null; provider: { status: string; provider?: string; modelName?: string }; onNavigate: (page: 'devices') => void; onSelectWorkspace: (name: string) => void; onClearWorkspace: () => void; onOpenWorkspace: (name: string) => void; onConfigureWorkspace: (name: string) => void; onRetryWorkspaces: () => void }) => <div>Overview content<span>{selectedWorkspace ? `Overview ${selectedWorkspace.name}` : 'Overview unselected'}</span><span data-testid="overview-provider-projection">{JSON.stringify(provider)}</span><button type="button" onClick={() => onNavigate('devices')}>Start dynamic</button><button type="button" onClick={onRetryWorkspaces}>Overview retry</button>{selectedWorkspace && <><button type="button" onClick={onClearWorkspace}>Overview clear</button><button type="button" onClick={() => onConfigureWorkspace(selectedWorkspace.name)}>Overview configure</button></>}{workspaces[0]?.status !== 'unavailable' && <><button type="button" onClick={() => onSelectWorkspace(workspaces[0].name)}>Overview select</button><button type="button" onClick={() => onOpenWorkspace(workspaces[0].name)}>Overview open</button></>}</div>,
+  OverviewPage: ({ workspaces, selectedWorkspace, provider, onNavigate, onSelectWorkspace, onClearWorkspace, onOpenWorkspace, onConfigureWorkspace, onRetryWorkspaces, onRetryProvider, onCreateWorkspace }: { workspaces: { name: string; status: string }[]; selectedWorkspace: { name: string; status: string } | null; provider: { status: string; provider?: string; modelName?: string }; onNavigate: (page: 'devices') => void; onSelectWorkspace: (name: string) => void; onClearWorkspace: () => void; onOpenWorkspace: (name: string) => void; onConfigureWorkspace: (name: string) => void; onRetryWorkspaces: () => void; onRetryProvider: () => void; onCreateWorkspace: () => void }) => <div>Overview content<button id="overview-create-workspace" onClick={onCreateWorkspace}>Overview create</button><button id="overview-step-create-workspace" onClick={onCreateWorkspace}>Overview step create</button><span>{selectedWorkspace ? `Overview ${selectedWorkspace.name}` : 'Overview unselected'}</span><span data-testid="overview-provider-projection">{JSON.stringify(provider)}</span><button type="button" onClick={() => onNavigate('devices')}>Start dynamic</button><button type="button" onClick={onRetryWorkspaces}>Overview retry</button><button type="button" onClick={onRetryProvider}>Provider retry</button>{selectedWorkspace && <><button type="button" onClick={onClearWorkspace}>Overview clear</button><button type="button" onClick={() => onConfigureWorkspace(selectedWorkspace.name)}>Overview configure</button></>}{workspaces[0]?.status !== 'unavailable' && <><button type="button" onClick={() => onSelectWorkspace(workspaces[0].name)}>Overview select</button><button type="button" onClick={() => onOpenWorkspace(workspaces[0].name)}>Overview open</button></>}</div>,
 }));
 vi.mock('../features/workspace/WorkspacePage', () => ({
-  WorkspaceTitlebar: ({ workspace, onConfigure }: { workspace: { name: string }; onConfigure: () => void }) => <div><h1 id="workspace-heading" tabIndex={-1}>{workspace.name}</h1><button type="button" onClick={onConfigure}>Configure workspace</button></div>,
-  WorkspacePage: ({ createRequested, configurationOpen, selectedName, onDirtyChange, onCancelCreate, onCreated, onRegistryChanged, onPresentationChange, onRecordCase, onReplayCase }: { createRequested: boolean; configurationOpen: boolean; selectedName: string | null; onDirtyChange?: (dirty: boolean) => void; onCancelCreate: () => void; onCreated: (detail: object) => void; onRegistryChanged: () => void; onPresentationChange?: (presentation: 'default' | 'full-bleed') => void; onRecordCase?: () => void; onReplayCase?: (platform: 'web', casePath: string) => void }) => {
+  WorkspaceTitlebar: ({ workspace, onRecordCase }: { workspace: { name: string }; onRecordCase: () => void }) => <div><h1 id="workspace-heading" tabIndex={-1}>{workspace.name}</h1><button type="button" onClick={onRecordCase}>Record case from browser</button></div>,
+  WorkspacePage: ({ createRequested, configurationOpen, selectedName, onDirtyChange, onCancelCreate, onRequestCreate, onCreated, onRegistryChanged, onPresentationChange, onRecordCase, onReplayCase, onConfigurationOpenChange }: { createRequested: boolean; configurationOpen: boolean; selectedName: string | null; onDirtyChange?: (dirty: boolean) => void; onCancelCreate: () => void; onRequestCreate: () => void; onCreated: (detail: object) => void; onRegistryChanged: () => void; onPresentationChange?: (presentation: 'default' | 'full-bleed') => void; onConfigurationOpenChange: (open: boolean) => void; onRecordCase?: () => void; onReplayCase?: (platform: 'web', casePath: string) => void }) => {
     useEffect(() => {
-      onPresentationChange?.(selectedName && !createRequested && !configurationOpen ? 'full-bleed' : 'default');
+      onPresentationChange?.(selectedName && !createRequested ? 'full-bleed' : 'default');
     }, [configurationOpen, createRequested, onPresentationChange, selectedName]);
     return <div>
+      {!createRequested && !selectedName && <button id="workspace-create-empty" onClick={onRequestCreate}>Empty create</button>}
       {createRequested ? 'Create workspace content' : selectedName ? `Workspace ${selectedName}` : 'Workspace content'}
+      {selectedName && !createRequested && <button onClick={()=>onConfigurationOpenChange(true)}>Configure workspace</button>}
       {configurationOpen && <span>Workspace configuration open</span>}
       <button type="button" onClick={() => onDirtyChange?.(true)}>Make workspace draft dirty</button>
       {createRequested && <button type="button" onClick={() => onCreated({ name: 'created', rootPath: 'C:\\projects\\created', status: 'available', message: 'Available.', platforms: [] })}>Complete creation</button>}
-      {selectedName && !createRequested && <><button type="button" onClick={onRecordCase}>Record case from browser</button><button type="button" onClick={() => onReplayCase?.('web', 'flows/login.fsq.yaml')}>Replay case from browser</button></>}
+      {selectedName && !createRequested && <><button type="button" onClick={() => onReplayCase?.('web', 'flows/login.fsq.yaml')}>Replay case from browser</button></>}
       <button type="button" onClick={createRequested ? onCancelCreate : onRegistryChanged}>Cancel registry fixture</button>
     </div>;
   },
@@ -42,6 +44,28 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it('locks sidebar navigation and diagnostic context changes during pending Start',async()=>{
+  vi.mocked(controlPlaneClient.workspaces).mockResolvedValue({workspaces:[{name:'repair',rootPath:'/local',status:'unavailable',message:'Missing',action:'Repair',platforms:[{platform:'macos',configPath:'/local/config',status:'unavailable',message:'Missing',action:'Repair',diagnosticAvailable:true,repairAvailable:true}]}]});
+  render(<ControlPlaneApp/>);
+  await userEvent.click(await screen.findByRole('button',{name:'Check macOS environment: repair'}));
+  await userEvent.click(screen.getByRole('button',{name:'Simulate pending start'}));
+  for(const name of ['Home','Workspaces','Settings','Create workspace','Check macOS environment: repair'])expect(screen.getByRole('button',{name})).toBeDisabled();
+  await userEvent.click(screen.getByRole('button',{name:'Home'}));
+  expect(screen.getByText('Devices content')).toBeVisible();
+  await userEvent.click(screen.getByRole('button',{name:'Finish pending start'}));
+  expect(screen.getByRole('button',{name:'Home'})).toBeEnabled();
+});
+
+it('opens a repairable unavailable macOS workspace for diagnosis without a ready selection',async()=>{
+  vi.mocked(controlPlaneClient.workspaces).mockResolvedValue({workspaces:[{name:'broken-mac',rootPath:'/local',status:'unavailable',message:'Missing app',action:'Repair',platforms:[{platform:'macos',status:'unavailable',configPath:'/local/config',message:'Missing app',action:'Repair',diagnosticAvailable:true,repairAvailable:true}]}]});
+  render(<ControlPlaneApp/>);
+  await userEvent.click(await screen.findByRole('button',{name:'Check macOS environment: broken-mac'}));
+  expect(screen.getByText('Devices Workspace broken-mac')).toBeVisible();
+  expect(screen.getByText('diagnostic:broken-mac:macos:')).toBeVisible();
+  await userEvent.click(screen.getByRole('button',{name:'Home'}));
+  expect(screen.getByText('Overview unselected')).toBeVisible();
+});
+
 it('defaults to Overview and selects available pages through centralized navigation', async () => {
   const user = userEvent.setup();
   render(<ControlPlaneApp />);
@@ -50,11 +74,11 @@ it('defaults to Overview and selects available pages through centralized navigat
   await user.click(screen.getByRole('button', { name: 'Start dynamic' }));
   expect(screen.getByText('Devices content')).toBeVisible();
 
-  await user.click(screen.getByRole('button', { name: 'Config' }));
+  await user.click(screen.getByRole('button', { name: 'Settings' }));
   expect(screen.getByText('Config content')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Config' })).toHaveAttribute('aria-current', 'page');
+  expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
 
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('Devices content')).toBeVisible();
 
   await user.click(screen.getByRole('button', { name: 'Create workspace' }));
@@ -159,7 +183,7 @@ it('revokes selected Workspace truth when registry refresh marks the same entry 
   expect(controlPlaneClient.workspaces).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole('button', { name: 'Overview open' })).not.toBeInTheDocument();
   expect(screen.queryByText('Workspace web-app')).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('Devices Workspace unselected')).toBeVisible();
   expect(screen.getByText('web-app').closest('[aria-disabled="true"]')).toBeInTheDocument();
 });
@@ -178,7 +202,7 @@ it('revokes selected Workspace truth when the entry disappears during refresh', 
 
   await waitFor(() => expect(screen.getByText('Overview unselected')).toBeVisible());
   expect(screen.queryByText('Workspace web-app')).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('Devices Workspace unselected')).toBeVisible();
 });
 
@@ -199,7 +223,7 @@ it('hands Workspace case actions to Devices and clears them for ordinary navigat
 
   await user.click(screen.getByRole('button', { name: 'Consume launch intent' }));
   await user.click(screen.getByRole('button', { name: /web-app/i }));
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('No launch intent')).toBeVisible();
 });
 
@@ -218,7 +242,7 @@ it('revokes Workspace, Record, and Replay consumers after a registry refresh fai
   expect(screen.getByText('Workspace content')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Record case from browser' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Replay case from browser' })).not.toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('Registry pending')).toBeVisible();
   expect(screen.getByText('Devices Workspace unselected')).toBeVisible();
   expect(screen.getByText('No launch intent')).toBeVisible();
@@ -228,13 +252,13 @@ it('keeps Config active when the user rejects dirty-draft navigation', async () 
   const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
   const user = userEvent.setup();
   render(<ControlPlaneApp />);
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
-  await user.click(screen.getByRole('button', { name: 'Config' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
+  await user.click(screen.getByRole('button', { name: 'Settings' }));
   await user.click(screen.getByRole('button', { name: 'Make draft dirty' }));
 
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('Config content')).toBeVisible();
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
 
   expect(confirm).toHaveBeenCalledTimes(2);
   expect(screen.getByText('Devices content')).toBeVisible();
@@ -247,9 +271,9 @@ it('keeps a dirty Workspace draft until page navigation is confirmed', async () 
   await user.click(screen.getByRole('button', { name: 'Create workspace' }));
   await user.click(screen.getByRole('button', { name: 'Make workspace draft dirty' }));
 
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
   expect(screen.getByText('Create workspace content')).toBeVisible();
-  await user.click(screen.getByRole('button', { name: 'Devices' }));
+  await user.click(screen.getByRole('button', { name: 'Test Runner' }));
 
   expect(confirm).toHaveBeenCalledTimes(2);
   expect(screen.getByText('Devices content')).toBeVisible();
@@ -353,7 +377,7 @@ it('shows every configured platform and status for a partial workspace without i
   expect(partial).not.toHaveTextContent('C:\\projects');
 });
 
-it('uses the full-bleed outlet only for the selected workspace browser presentation', async () => {
+it('keeps selected Workspace Files and Configuration in the full-bleed outlet', async () => {
   vi.mocked(controlPlaneClient.workspaces).mockResolvedValue({ workspaces: [
     { name: 'mobile', rootPath: 'C:\\projects\\mobile', status: 'available', message: 'Workspace is available.', platforms: [] },
   ] });
@@ -366,7 +390,7 @@ it('uses the full-bleed outlet only for the selected workspace browser presentat
   await waitFor(() => expect(outlet).toHaveClass('cp-page-outlet--full-bleed'));
 
   await user.click(screen.getByRole('button', { name: 'Configure workspace' }));
-  await waitFor(() => expect(outlet).not.toHaveClass('cp-page-outlet--full-bleed'));
+  await waitFor(() => expect(outlet).toHaveClass('cp-page-outlet--full-bleed'));
 });
 
 it('distinguishes workspace registry loading from empty and retries a failed request', async () => {
@@ -389,4 +413,66 @@ it('distinguishes workspace registry loading from empty and retries a failed req
   await user.click(screen.getByRole('button', { name: 'Retry workspace registry' }));
   await waitFor(() => expect(controlPlaneClient.workspaces).toHaveBeenCalledTimes(3));
   expect(await screen.findByText('No registered workspaces')).toBeVisible();
+});
+
+it('retries Provider and registry requests without forwarding click events as AbortSignals', async () => {
+  const error = { code: 'unavailable', message: 'Temporarily unavailable.', action: 'Retry.' };
+  vi.mocked(controlPlaneClient.config).mockRejectedValueOnce(error);
+  vi.mocked(controlPlaneClient.workspaces).mockRejectedValueOnce(error);
+  render(<ControlPlaneApp />);
+  await waitFor(() => expect(screen.getByTestId('overview-provider-projection')).toHaveTextContent('error'));
+  const configCalls = vi.mocked(controlPlaneClient.config).mock.calls.length;
+  const registryCalls = vi.mocked(controlPlaneClient.workspaces).mock.calls.length;
+  await userEvent.click(screen.getByRole('button', { name: 'Provider retry' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Overview retry' }));
+  await waitFor(() => expect(screen.getByTestId('overview-provider-projection')).toHaveTextContent('unconfigured'));
+  expect(controlPlaneClient.config).toHaveBeenCalledTimes(configCalls + 1);
+  expect(controlPlaneClient.workspaces).toHaveBeenCalledTimes(registryCalls + 1);
+  expect(controlPlaneClient.config).toHaveBeenLastCalledWith(undefined);
+  expect(controlPlaneClient.workspaces).toHaveBeenLastCalledWith(undefined);
+});
+
+it.each(['Overview create', 'Overview step create', 'Empty create'])('restores the connected %s control after cancelled creation', async (origin) => {
+  render(<ControlPlaneApp />);
+  if (origin === 'Empty create') {
+    await userEvent.click(screen.getByRole('button', { name: 'Create workspace' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel registry fixture' }));
+  }
+  await userEvent.click(screen.getByRole('button', { name: origin }));
+  expect(screen.getByText('Create workspace content')).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel registry fixture' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: origin })).toHaveFocus());
+  expect(screen.queryByText('Create workspace content')).not.toBeInTheDocument();
+});
+
+it('collapses Workspaces without navigating or discarding a Settings draft',async()=>{
+ const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);
+ render(<ControlPlaneApp/>);
+ await userEvent.click(screen.getByRole('button',{name:'Settings'}));
+ await userEvent.click(screen.getByRole('button',{name:'Make draft dirty'}));
+ await userEvent.click(screen.getByRole('button',{name:'Workspaces'}));
+ expect(screen.getByText('Config content')).toBeVisible();
+ expect(confirm).not.toHaveBeenCalled();
+ await userEvent.click(screen.getByRole('button',{name:'Workspaces'}));
+ expect(confirm).not.toHaveBeenCalled();
+ expect(screen.getByRole('button',{name:'Settings'})).toHaveAttribute('aria-current','page');
+});
+
+it('focuses the Workspace heading on selection including a same-context return from Home',async()=>{
+ vi.mocked(controlPlaneClient.workspaces).mockResolvedValue({workspaces:[{name:'focus-demo',rootPath:'/focus',status:'available',message:'Available',platforms:[]}]});
+ render(<ControlPlaneApp/>);
+ const entry=await screen.findByRole('button',{name:/focus-demo/});
+ await userEvent.click(entry);
+ await waitFor(()=>expect(screen.getByRole('heading',{name:'focus-demo'})).toHaveFocus());
+ await userEvent.click(screen.getByRole('button',{name:'Home'}));
+ await userEvent.click(screen.getByRole('button',{name:/focus-demo/}));
+ await waitFor(()=>expect(screen.getByRole('heading',{name:'focus-demo'})).toHaveFocus());
+});
+
+it('focuses the Workspace heading when Home opens configuration',async()=>{
+ vi.mocked(controlPlaneClient.workspaces).mockResolvedValue({workspaces:[{name:'configure-focus',rootPath:'/focus',status:'available',message:'Available',platforms:[]}]});
+ render(<ControlPlaneApp/>);
+ await userEvent.click(await screen.findByRole('button',{name:'Overview select'}));
+ await userEvent.click(screen.getByRole('button',{name:'Overview configure'}));
+ await waitFor(()=>expect(screen.getByRole('heading',{name:'configure-focus'})).toHaveFocus());
 });

@@ -98,3 +98,19 @@ def test_repository_windows_harness_skill_uses_exposed_assertions() -> None:
     assert "assert_visible" in bundles[0].instructions
     assert "assert_with_ai" in bundles[0].instructions
     assert "assert_not_visible" not in bundles[0].instructions
+
+
+def test_package_macos_skill_preserves_element_only_guidance(tmp_path: Path) -> None:
+    from fsq_agent.config import load_platform_settings
+
+    settings = load_platform_settings("macos", workspace=tmp_path / "workspace", user_config_root=tmp_path / "user")
+    config = settings.agent_context.knowledge.skills
+    expected = Path(__file__).resolve().parents[1] / "fsq_agent" / "resources" / "skills"
+    assert config.dir == expected
+    bundles = SkillLoader(config.dir).load(config.items)
+    macos = next(bundle for bundle in bundles if bundle.name == "macos-harness")
+    assert macos.files == [expected / "macos-harness.md"]
+    assert "Discover controls with `ui_snapshot` and its `query` object" in macos.instructions
+    assert "Honor explicit element-only requests" in macos.instructions
+    assert "Detail-page variant selection does not substitute for result-list filtering" in macos.instructions
+    assert "Existing cart contents are initial state, not proof of a new add" in macos.instructions

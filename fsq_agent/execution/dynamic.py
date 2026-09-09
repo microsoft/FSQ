@@ -31,6 +31,7 @@ class DynamicExecutionRequest:
     settings: Settings
     event_sink: RunEventSink | None = None
     record: bool = False
+    case_name: str | None = None
     allow_recording_failure: bool = False
     publication_directory: Path | None = None
     cancellation_check: Callable[[], None] | None = None
@@ -110,6 +111,7 @@ class DynamicExecutionService:
                     settings=request.settings,
                     allow_failure=request.allow_recording_failure,
                     publication_directory=request.publication_directory,
+                    case_name=request.case_name,
                 )
             except Exception as exc:  # noqa: BLE001 - recording never changes completed execution status.
                 if request.recording_error_sink is not None:

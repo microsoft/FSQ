@@ -15,7 +15,7 @@ from fsq_agent.adapters.coding_agent._harness_tools import HarnessToolAdapter
 from fsq_agent.agent._pre_plan import build_pre_plan_input
 from fsq_agent.agent._prompt import PromptModelBuilder, PromptRenderer
 from fsq_agent.agent._verification_task import VerificationEvidenceBuilder
-from fsq_agent.agent_engine import AgentEvent, AgentRequest, AgentResult, EngineError, ModelRequest, ModelResult, ToolCall, ToolInputFailure, ToolOutputEntry
+from fsq_agent.agent_engine import AgentEvent, AgentRequest, AgentResult, EngineError, ModelRequest, ModelResult, TokenUsage, ToolCall, ToolInputFailure, ToolOutputEntry
 from fsq_agent.config import Settings
 from fsq_agent.models import (
     AgentFinalOutput,
@@ -284,6 +284,89 @@ async def test_runtime_routes_three_agent_flows_through_neutral_engine(monkeypat
     assert all(request.stream for request in _FakeEngine.requests)
     assert len(_FakeEngine.requests[0].tools) == 2
     assert _FakeEngine.requests[-1].tools == ()
+
+
+@pytest.mark.asyncio
+async def test_runtime_emits_one_dynamic_agent_token_usage_event_from_engine_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UsageEngine(_FakeEngine):
+        async def run(self, model, request, *, on_event=None):
+            result = await super().run(model, request, on_event=on_event)
+            if request.output is not None and request.output.name == "AgentFinalOutput":
+                return AgentResult(
+                    final_output=result.final_output,
+                    usage=TokenUsage(1200, 80, 1280, requests=3, cached_input_tokens=900, reasoning_tokens=25),
+                )
+            return result
+
+    _patch_runtime_engine(monkeypatch)
+    runtime = DefaultCodingAgentRuntime(
+        Settings(agent_runtime=_azure_openai_settings()),
+        _EmptyToolFactory(),
+        _fake_harness_factory,
+        engine=UsageEngine(),
+    )
+    events: list[Any] = []
+
+    results = await runtime.run_task(Task(id="usage", description="Measure usage."), KnowledgeBundle(), [], "usage-run", events.append)
+
+    assert results[-1].status == "success"
+    usage_events = [event for event in events if event.type == "dynamic_agent_token_usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].payload == {
+        "provider": "azure_openai",
+        "model": "gpt-5.4",
+        "requests": 3,
+        "input_tokens": 1200,
+        "output_tokens": 80,
+        "total_tokens": 1280,
+        "cached_input_tokens": 900,
+        "reasoning_tokens": 25,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_emit_token_usage_without_engine_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_runtime_engine(monkeypatch)
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
+    events: list[Any] = []
+
+    await runtime.run_task(Task(id="no-usage", description="No usage."), KnowledgeBundle(), [], "no-usage-run", events.append)
+
+    assert all(event.type != "dynamic_agent_token_usage" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_retry_usage_event_when_sink_fails_after_receiving_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UsageEngine(_FakeEngine):
+        async def run(self, model, request, *, on_event=None):
+            result = await super().run(model, request, on_event=on_event)
+            return AgentResult(final_output=result.final_output, usage=TokenUsage(100, 10, 110))
+
+    _patch_runtime_engine(monkeypatch)
+    runtime = DefaultCodingAgentRuntime(
+        Settings(agent_runtime=_azure_openai_settings()),
+        _EmptyToolFactory(),
+        _fake_harness_factory,
+        engine=UsageEngine(),
+    )
+    events: list[Any] = []
+
+    def failing_usage_sink(event: Any) -> None:
+        events.append(event)
+        if event.type == "dynamic_agent_token_usage":
+            raise RuntimeError("downstream sink failed after persistence")
+
+    results = await runtime.run_task(
+        Task(id="usage-sink-failure", description="Fail the usage sink."),
+        KnowledgeBundle(),
+        [],
+        "usage-sink-failure-run",
+        failing_usage_sink,
+    )
+
+    assert results[0].status == "failed"
+    assert len([event for event in events if event.type == "dynamic_agent_token_usage"]) == 1
+    assert events[-1].type == "run_failed"
 
 
 @pytest.mark.asyncio

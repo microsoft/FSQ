@@ -276,6 +276,8 @@ class ControlPlaneState:
             "events": [dict(event) for event in task.events if event["sequence"] > events_after],
             "activeStep": dict(task.active_step) if task.active_step else None,
             "result": dict(task.result) if task.result else None,
+            "suggestedCaseName": (task.result or {}).get("suggestedCaseName"),
+            "recordingDraft": (task.result or {}).get("recordingDraft"),
             "summary": task.summary,
             "screenshotRevision": task.screenshot_revision,
             "uiSnapshotRevision": task.ui_snapshot_revision,

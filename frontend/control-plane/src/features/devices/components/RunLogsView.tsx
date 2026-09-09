@@ -1,3 +1,4 @@
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { TimelineEvent } from '../../../api/types';
 
@@ -32,7 +33,7 @@ function LogMessage({ event }: { event: TimelineEvent }) {
   }, [expanded, message]);
   return <div className="event-message-wrap">
     <span ref={messageRef} id={messageId} className={!expanded ? 'event-message event-message--clamped' : 'event-message'}>{message}</span>
-    {overflowing && <button className="message-disclosure" type="button" title={expanded ? 'Collapse message' : 'Expand message'} aria-label={expanded ? 'Collapse message' : 'Expand message'} aria-expanded={expanded} aria-controls={messageId} onClick={() => setExpanded((value) => !value)}>{expanded ? '⌃' : '⌄'}</button>}
+    {overflowing && <button className="message-disclosure" type="button" title={expanded ? 'Collapse message' : 'Expand message'} aria-label={expanded ? 'Collapse message' : 'Expand message'} aria-expanded={expanded} aria-controls={messageId} onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronUp aria-hidden="true"/> : <ChevronDown aria-hidden="true"/>}</button>}
   </div>;
 }
 
@@ -52,11 +53,11 @@ export function RunLogsView({ events, active }: { events: TimelineEvent[]; activ
   useEffect(() => {
     const previous = previousLastSequence.current;
     previousLastSequence.current = lastSequence;
-    if (!lastSequence || lastSequence <= previous) return;
+    if (!active || !lastSequence || lastSequence <= previous) return;
     if (following) {
       scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: 'auto' });
     }
-  }, [events, following, lastSequence]);
+  }, [events, following, lastSequence, active]);
   if (!events.length) return <div className="evidence-message"><strong>Logs not yet available</strong><p>Safe structured events will appear as the run progresses.</p></div>;
   const onScroll = () => {
     const element = scrollRef.current;

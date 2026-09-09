@@ -373,6 +373,7 @@ def test_provider_readiness_is_noninteractive_and_closes_without_model_request(t
 
 
 def test_explore_preparation_normalizes_goal_and_overrides_only_android_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fsq_agent.adapters.control_plane._execution.require_android_preflight", lambda *_args, **_kwargs: None)
     settings = _settings(tmp_path)
     settings.harness.android.serial = "configured-device"
     calls: list[str] = []
@@ -391,7 +392,7 @@ def test_explore_preparation_normalizes_goal_and_overrides_only_android_serial(t
     assert prepared.goal == "Verify settings"
     assert prepared.settings.harness.android.serial == "selected-device"
     assert settings.harness.android.serial == "configured-device"
-    assert calls == ["target:selected-device", "runtime", "provider"]
+    assert calls == ["runtime", "provider"]
 
 
 def test_strict_preparation_validates_lifecycle_children_before_harness_creation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -444,6 +445,7 @@ def test_strict_preparation_rejects_lifecycle_symlink_escape_before_loading(tmp_
 
 
 def test_strict_preparation_builds_registry_and_resolved_steps_without_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fsq_agent.adapters.control_plane._execution.require_android_preflight", lambda *_args, **_kwargs: None)
     settings = _settings(tmp_path)
     _case(settings.cases.dir / "strict.fsq.yaml")
     calls: list[bool] = []
@@ -467,6 +469,7 @@ def test_strict_preparation_builds_registry_and_resolved_steps_without_provider(
 
 
 def test_strict_preparation_gates_provider_from_registry_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fsq_agent.adapters.control_plane._execution.require_android_preflight", lambda *_args, **_kwargs: None)
     settings = _settings(tmp_path)
     _case(settings.cases.dir / "ai.fsq.yaml", command="assertWithAI:\n    prompt: Verify the page")
     calls: list[str] = []
@@ -485,6 +488,7 @@ def test_strict_preparation_gates_provider_from_registry_metadata(tmp_path: Path
 
 
 def test_strict_execution_composes_real_lifecycle_with_fake_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fsq_agent.adapters.control_plane._execution.require_android_preflight", lambda *_args, **_kwargs: None)
     settings = _settings(tmp_path)
     _case(settings.cases.dir / "wait.fsq.yaml")
     monkeypatch.setattr("fsq_agent.adapters.control_plane._execution.validate_target", lambda _settings, _target: None)
@@ -1013,7 +1017,7 @@ def test_server_save_yaml_copies_terminal_explore_recording_to_cases(tmp_path: P
     request_id = server.state.reserve(workspace_name="checkout", platform="web", target_id="chrome", mode="explore", source={"goal": "Go"})
     run_dir = settings.output.runs_dir / "run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "recorded.fsq.yaml").write_text("schemaVersion: fsq.ai-test/v1\n---\n- waitMs:\n    duration_ms: 1\n", encoding="utf-8")
+    (run_dir / "recorded.fsq.yaml").write_text("schemaVersion: fsq.ai-test/v1\nname: candidate\nplatform: web\n---\n- waitMs:\n    duration_ms: 1\n", encoding="utf-8")
     server.state.bind_cases_dir(request_id, settings.cases.dir.resolve())
     server.state.bind_run(request_id, "run-1", run_dir.resolve())
 
@@ -1023,7 +1027,7 @@ def test_server_save_yaml_copies_terminal_explore_recording_to_cases(tmp_path: P
 
     assert (active_status, active_payload["code"]) == (409, "run_not_terminal")
     assert status == 200
-    assert payload == {"savedPath": "checkout-flow.fsq.yaml", "message": "Saved YAML to cases/web/checkout-flow.fsq.yaml."}
+    assert payload == {"savedPath": "checkout-flow.fsq.yaml", "message": "Saved YAML to cases/web/checkout-flow.fsq.yaml.", "outcome": "created", "draft": False}
     assert (settings.cases.dir / "checkout-flow.fsq.yaml").read_text(encoding="utf-8").startswith("schemaVersion: fsq.ai-test/v1")
 
 
@@ -1035,7 +1039,7 @@ def test_server_save_yaml_uses_frozen_cases_directory(tmp_path: Path, monkeypatc
     request_id = server.state.reserve(workspace_name="checkout", platform="web", target_id="chrome", mode="explore", source={"goal": "Go"})
     run_dir = original_settings.output.runs_dir / "run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "recorded.fsq.yaml").write_text("schemaVersion: fsq.ai-test/v1\n---\n- waitMs:\n    duration_ms: 1\n", encoding="utf-8")
+    (run_dir / "recorded.fsq.yaml").write_text("schemaVersion: fsq.ai-test/v1\nname: candidate\nplatform: web\n---\n- waitMs:\n    duration_ms: 1\n", encoding="utf-8")
     server.state.bind_cases_dir(request_id, original_settings.cases.dir.resolve())
     server.state.bind_run(request_id, "run-1", run_dir.resolve())
     server.state.finish(request_id, status="success", summary="done")
@@ -1079,7 +1083,7 @@ def test_server_save_yaml_rejects_unsafe_case_names(tmp_path: Path, monkeypatch:
     request_id = server.state.reserve(workspace_name="checkout", platform="android", target_id="device", mode="explore", source={"goal": "Go"})
     run_dir = settings.output.runs_dir / "run-1"
     run_dir.mkdir(parents=True)
-    (run_dir / "recorded.fsq.yaml").write_text("schemaVersion: fsq.ai-test/v1\n---\n- waitMs:\n    duration_ms: 1\n", encoding="utf-8")
+    (run_dir / "recorded.fsq.yaml").write_text("schemaVersion: fsq.ai-test/v1\nname: candidate\nplatform: web\n---\n- waitMs:\n    duration_ms: 1\n", encoding="utf-8")
     server.state.bind_cases_dir(request_id, settings.cases.dir.resolve())
     server.state.bind_run(request_id, "run-1", run_dir.resolve())
     server.state.finish(request_id, status="success", summary="done")
@@ -1181,6 +1185,20 @@ def test_readiness_covers_all_supported_platforms(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fsq_agent.adapters.control_plane._readiness.provider_readiness", lambda _settings: {"status": "ready", "message": "ready", "action": ""})
     monkeypatch.setattr("fsq_agent.adapters.control_plane._readiness.target_readiness", lambda _settings: (True, "ready", ""))
     monkeypatch.setattr("fsq_agent.adapters.control_plane._readiness.validate_strict_core_settings", lambda _settings: None)
+    if platform in {"macos", "android"}:
+        from fsq_agent.application import DoctorPlatformResult, DoctorResult
+
+        ready = {"status": "ready", "message": "ready"}
+        diagnosis = DoctorPlatformResult(
+            platform=platform,
+            status="ready",
+            checks=dict.fromkeys(("configuration", "runtime", "target_configuration", "target_availability", "strict_core", "provider", "suggestion_analyzer", "dynamic_agent"), ready),
+            commands=dict.fromkeys(("case_test", "case_test_suggest", "case_create"), ready),
+        )
+        monkeypatch.setattr(
+            "fsq_agent.adapters.control_plane._readiness.diagnose_registered_platform",
+            lambda _request: DoctorResult(status="ready", workspace={"name": "checkout", "root": tmp_path}, platforms=(diagnosis,), actions=()),
+        )
 
     payload = readiness("checkout", platform)
 
@@ -1190,7 +1208,7 @@ def test_readiness_covers_all_supported_platforms(tmp_path: Path, monkeypatch: p
 
 
 def test_readiness_and_case_discovery_do_not_require_cases_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(tmp_path)
+    settings = _settings(tmp_path, "web")
     settings.cases.dir.rmdir()
     workspace_status = type(
         "WorkspaceStatus",
@@ -1198,7 +1216,7 @@ def test_readiness_and_case_discovery_do_not_require_cases_directory(tmp_path: P
         {
             "name": "checkout",
             "root_path": settings.workspace.root_dir,
-            "platforms": [type("PlatformStatus", (), {"platform": "android", "status": "available"})()],
+            "platforms": [type("PlatformStatus", (), {"platform": "web", "status": "available"})()],
         },
     )()
     monkeypatch.setattr("fsq_agent.adapters.control_plane._readiness.inspect_registered_workspace", lambda *_args: workspace_status)
@@ -1207,11 +1225,11 @@ def test_readiness_and_case_discovery_do_not_require_cases_directory(tmp_path: P
     monkeypatch.setattr("fsq_agent.adapters.control_plane._readiness.target_readiness", lambda _settings: (True, "ready", ""))
     monkeypatch.setattr("fsq_agent.adapters.control_plane._readiness.validate_strict_core_settings", lambda _settings: None)
 
-    payload = readiness("checkout", "android")
+    payload = readiness("checkout", "web")
 
     assert payload["workspace"] == {"status": "ready", "message": "Workspace is ready.", "action": ""}
     assert payload["strict"]["status"] == "ready"
-    assert discover_cases(settings) == {"platform": "android", "cases": [], "truncated": False}
+    assert discover_cases(settings) == {"platform": "web", "cases": [], "truncated": False}
     assert not settings.cases.dir.exists()
 
 

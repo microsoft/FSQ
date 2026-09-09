@@ -57,6 +57,7 @@ from fsq_agent.models._core import (
     MacOSDoubleClickOnParams,
     MacOSDragEndpoint,
     MacOSDragToParams,
+    MacOSElementQuery,
     MacOSHoverOnParams,
     MacOSKillAppParams,
     MacOSLaunchAppParams,
@@ -144,7 +145,7 @@ from fsq_agent.models._page_knowledge import (
     PageKnowledgePage,
     ReferenceLocator,
 )
-from fsq_agent.models._platform_runtime import PlatformRuntimeCheck, web_executable_matches_channel
+from fsq_agent.models._platform_runtime import PlatformPrerequisiteCheck, PlatformRuntimeCheck, web_executable_matches_channel
 from fsq_agent.models._report import ReportArtifact
 from fsq_agent.models._settings import (
     AgentContextSettings,
@@ -298,6 +299,7 @@ __all__ = [
     "MacOSDoubleClickOnParams",
     "MacOSDragEndpoint",
     "MacOSDragToParams",
+    "MacOSElementQuery",
     "MacOSHarnessSettings",
     "MacOSHoverOnParams",
     "MacOSKillAppParams",
@@ -319,6 +321,7 @@ __all__ = [
     "PageKnowledgeIndexEntry",
     "PageKnowledgePage",
     "PlanningError",
+    "PlatformPrerequisiteCheck",
     "PlatformRuntimeCheck",
     "PostActionDelaySettings",
     "PrePlanKnowledgeSettings",

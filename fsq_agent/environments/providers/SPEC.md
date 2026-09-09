@@ -29,3 +29,5 @@ No public package API. Providers are selected internally by `environments`.
 ## Error Handling
 
 Providers perform read-only checks and return safe normalized outcomes. They never install or modify Python packages, system dependencies, services, targets, applications, devices, emulators, or virtual machines.
+
+Android owns the existing-server-only ADB wire transport, response parsing, device inventory, and fixed package queries used by shared discovery and prerequisites. A missing server never triggers client auto-start, including disappearance between requests. Protocol failures, transport timeouts, missing requirements, device authorization/state, ambiguous selection and package-query errors remain distinguishable safe facts. Local host/port resolution, protocol/output limits and repair-command safety are governed by the parent Environments contract; no ADB logic is duplicated in adapters or Application.

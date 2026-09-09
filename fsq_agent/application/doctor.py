@@ -13,10 +13,12 @@ from fsq_agent.application.contracts import (
     DoctorChecks,
     DoctorCommands,
     DoctorPlatformResult,
+    DoctorPrerequisite,
     DoctorRequest,
     DoctorResult,
     DoctorStatusDetail,
     DoctorWorkspaceSummary,
+    RegisteredPlatformDoctorRequest,
 )
 from fsq_agent.config import inspect_registered_workspace, list_workspace_registry, load_workspace_platform_settings, validate_strict_core_settings
 from fsq_agent.core import CapabilityDefinitionFactory, CapabilityRegistry, CommonPlatformTools
@@ -46,7 +48,7 @@ def diagnose_workspace(request: DoctorRequest) -> DoctorResult:
             action="Run 'fsq init' here or change to an initialized FSQ Workspace.",
         )
     try:
-        workspace_status = inspect_registered_workspace(entry.name)
+        workspace_status = inspect_registered_workspace(entry.name, validate_target_paths=False)
     except Exception as exc:
         raise _workspace_error() from exc
     if workspace_status.root_path.resolve() != root or not workspace_status.platforms:
@@ -64,23 +66,48 @@ def diagnose_workspace(request: DoctorRequest) -> DoctorResult:
     )
 
 
-def _diagnose_platform(platform: str, root: Path, workspace_platform) -> DoctorPlatformResult:
+def diagnose_registered_platform(request: RegisteredPlatformDoctorRequest) -> DoctorResult:
+    try:
+        status = inspect_registered_workspace(request.workspace_name, request.user_config_root, validate_target_paths=False)
+        selected = next(item for item in status.platforms if item.platform == request.platform)
+    except Exception as exc:
+        raise _workspace_error() from exc
+    result = _diagnose_platform(request.platform, status.root_path, selected, request.user_config_root, target_id=request.target_id)
+    return DoctorResult(
+        status=result.status,
+        workspace=DoctorWorkspaceSummary(name=status.name, root=status.root_path),
+        platforms=(result,),
+        actions=tuple(dict.fromkeys(item.action for item in _details(result) if item.action)),
+    )
+
+
+def _diagnose_platform(platform: str, root: Path, workspace_platform, user_config_root: Path | None = None, *, target_id: str | None = None) -> DoctorPlatformResult:
     unavailable = DoctorStatusDetail(status="error", code="doctor.configuration_invalid", message=workspace_platform.message, action=workspace_platform.action)
     if workspace_platform.status != "available":
         checks = DoctorChecks(configuration=unavailable, **{name: _blocked("configuration") for name in _CHECK_ORDER[1:]})
         commands = _commands(checks)
         return DoctorPlatformResult(platform=platform, status="unavailable", checks=checks, commands=commands)
     try:
-        settings = load_workspace_platform_settings(root, platform)
+        settings = load_workspace_platform_settings(root, platform, user_config_root) if user_config_root is not None else load_workspace_platform_settings(root, platform)
     except Exception:  # noqa: BLE001 - diagnostic isolation returns a safe check result.
         checks = DoctorChecks(configuration=unavailable, **{name: _blocked("configuration") for name in _CHECK_ORDER[1:]})
         commands = _commands(checks)
         return DoctorPlatformResult(platform=platform, status="unavailable", checks=checks, commands=commands)
 
+    if platform == "android" and target_id is not None:
+        settings = settings.model_copy(deep=True)
+        settings.harness.android.serial = target_id
+    return diagnose_platform_settings(settings)
+
+
+def diagnose_platform_settings(settings) -> DoctorPlatformResult:
+    platform = settings.harness.platform
     environment = PlatformRuntimeService()
+    prerequisite_facts = _safe_prerequisites(environment, settings)
+    prerequisites = tuple(DoctorPrerequisite.model_validate(item.model_dump(exclude={"target_id"})) for item in prerequisite_facts)
     runtime_check = _safe_check("runtime", lambda: _runtime(environment, platform))
     target_configuration = _configuration_check("target_configuration", lambda: environment.check_target_configuration(settings))
-    target_availability = _safe_check("target_availability", lambda: environment.check_target_availability(settings))
+    target_availability = _safe_check("target_availability", lambda: environment.check_target_availability(settings, prerequisite_facts))
     foundation = (runtime_check, target_configuration, target_availability)
     strict_core = _dependent_check("strict_core", foundation, lambda: _strict(settings))
     provider = _safe_check("provider", lambda: check_provider_readiness(settings))
@@ -99,7 +126,11 @@ def _diagnose_platform(platform: str, root: Path, workspace_platform) -> DoctorP
     commands = _commands(checks)
     return DoctorPlatformResult(
         platform=platform,
+        target_id=(getattr(getattr(settings.harness, "android", None), "serial", None) or next((item.target_id for item in prerequisite_facts if item.identifier == "device_selection"), None))
+        if platform == "android"
+        else None,
         status=_summary_status([commands.case_test.status, commands.case_test_suggest.status, commands.case_create.status]),
+        prerequisites=prerequisites,
         checks=checks,
         commands=commands,
     )
@@ -108,6 +139,22 @@ def _diagnose_platform(platform: str, root: Path, workspace_platform) -> DoctorP
 def _runtime(environment: PlatformRuntimeService, platform: str) -> tuple[bool, str, str]:
     result = environment.check(platform)
     return result.ready, result.message, result.action or ""
+
+
+def _safe_prerequisites(environment: PlatformRuntimeService, settings):
+    try:
+        return environment.check_prerequisites(settings)
+    except Exception:  # noqa: BLE001 - diagnostic isolation returns one safe prerequisite fact.
+        from fsq_agent.models import PlatformPrerequisiteCheck
+
+        return (
+            PlatformPrerequisiteCheck(
+                identifier="prerequisite_diagnostics",
+                status="error",
+                message="Platform prerequisite diagnostics could not be completed safely.",
+                action="Inspect the platform prerequisite installation manually.",
+            ),
+        )
 
 
 def _strict(settings) -> tuple[bool, str, str]:
@@ -175,6 +222,7 @@ def _blocked(dependency: str) -> DoctorStatusDetail:
 
 def _details(platform: DoctorPlatformResult):
     return [
+        *platform.prerequisites,
         *(getattr(platform.checks, name) for name in _CHECK_ORDER),
         *(getattr(platform.commands, name) for name in _COMMAND_DEPENDENCIES),
     ]
@@ -189,4 +237,4 @@ def _workspace_error() -> ApplicationError:
     )
 
 
-__all__ = ["diagnose_workspace"]
+__all__ = ["diagnose_platform_settings", "diagnose_registered_platform", "diagnose_workspace"]

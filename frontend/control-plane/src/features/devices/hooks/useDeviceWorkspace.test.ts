@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { ControlPlaneClient } from '../../../api/controlPlaneClient';
+import { ControlPlaneApiError, type ControlPlaneClient } from '../../../api/controlPlaneClient';
 import type { BootstrapResponse, ReadinessResponse, TargetsResponse, CasesResponse } from '../../../api/types';
 import { useDeviceWorkspace } from './useDeviceWorkspace';
 
@@ -8,6 +8,7 @@ const bootstrap: BootstrapResponse = {
   busy: false, activeTask: null,
 };
 const readiness = (platform: 'android' | 'web'): ReadinessResponse => ({
+  ...(platform === 'android' ? {targetId:'android-target',prerequisites:[],commands:{caseCreate:{status:'ready' as const,message:'Ready',action:''},caseTest:{status:'ready' as const,message:'Ready',action:''}},checkedAt:'2026-09-08T00:00:00Z'} : {}),
   workspaceName: 'test', platformId: platform,
   platform: { status: 'ready', message: 'ready', action: '' },
   workspace: { status: 'ready', message: 'ready', action: '' }, provider: { status: 'ready', message: 'ready', action: '' },
@@ -24,6 +25,124 @@ const runSnapshot = (requestId = 'request-1', platform: 'android' | 'web' = 'and
 });
 const platforms = bootstrap.platforms;
 const deviceContext = { workspaceName: 'test', platforms, onWorkspaceChange: vi.fn() };
+
+it('binds Android diagnosis to explicit selection and rejects stale device responses',async()=>{
+  const one=deferred<ReadinessResponse>();
+  const two=deferred<ReadinessResponse>();
+  const client={bootstrap:vi.fn().mockResolvedValue(bootstrap),readiness:vi.fn((_w,_p,_s,id)=>id==='one'?one.promise:id==='two'?two.promise:Promise.resolve({...readiness('android'),targetId:null})),targets:vi.fn().mockResolvedValue({platform:'android',targetLabel:'Device',targets:['one','two'].map(id=>({id,label:id,status:'ready',selectable:true,isDefault:false,description:'online',metadata:{}}))}),cases:vi.fn().mockResolvedValue(cases('android'))} as unknown as ControlPlaneClient;
+  const {result}=renderHook(()=>useDeviceWorkspace(deviceContext,client));
+  await waitFor(()=>expect(result.current.bootstrap.state).toBe('ready'));
+  act(()=>{result.current.setPlatform('android');result.current.setGoal('Keep goal');});
+  await waitFor(()=>expect(result.current.targets.state).toBe('ready'));
+  expect(result.current.targetId).toBe('');
+  expect(result.current.canStart).toBe(false);
+  act(()=>result.current.setTargetId('one'));
+  act(()=>result.current.setTargetId('two'));
+  await act(async()=>two.resolve({...readiness('android'),targetId:'two'}));
+  await waitFor(()=>expect(result.current.canStart).toBe(true));
+  await act(async()=>one.resolve({...readiness('android'),targetId:'one'}));
+  expect(result.current.readiness.data?.targetId).toBe('two');
+  vi.mocked(client.targets).mockResolvedValueOnce({platform:'android',targetLabel:'Device',targets:[{id:'one',label:'one',status:'ready',selectable:true,isDefault:true,description:'online',metadata:{}}]});
+  act(()=>result.current.refresh());
+  await waitFor(()=>expect(result.current.targets.state).toBe('ready'));
+  expect(result.current.targetId).toBe('two');
+  expect(result.current.canStart).toBe(false);
+  expect(result.current.goal).toBe('Keep goal');
+});
+
+it('allows provider-free Android Strict and keeps input after preflight failure',async()=>{
+  const data={...readiness('android'),provider:{status:'unavailable' as const,message:'Configure provider',action:''}};
+  const client={bootstrap:vi.fn().mockResolvedValue(bootstrap),readiness:vi.fn().mockResolvedValue(data),targets:vi.fn().mockResolvedValue(targets('android')),cases:vi.fn().mockResolvedValue(cases('android')),startRun:vi.fn().mockRejectedValue(new ControlPlaneApiError(400,{code:'android_preflight_failed',message:'Device disconnected',action:'Reconnect'}))} as unknown as ControlPlaneClient;
+  const {result}=renderHook(()=>useDeviceWorkspace(deviceContext,client));
+  await waitFor(()=>expect(result.current.bootstrap.state).toBe('ready'));
+  act(()=>result.current.setPlatform('android'));
+  await waitFor(()=>expect(result.current.readiness.state).toBe('ready'));
+  act(()=>{result.current.setMode('strict');result.current.setCasePath('android.fsq.yaml');});
+  await waitFor(()=>expect(result.current.canStart).toBe(true));
+  await act(async()=>result.current.start());
+  expect(result.current.casePath).toBe('android.fsq.yaml');
+  expect(result.current.requestId).toBeNull();
+  expect(result.current.startError?.code).toBe('android_preflight_failed');
+});
+
+it('applies explicit macOS diagnostic intent when switching an existing Devices workspace',async()=>{
+  const ok={status:'ready' as const,message:'Ready',action:''};
+  const client={bootstrap:vi.fn().mockResolvedValue(bootstrap),readiness:vi.fn((name:string,platform:string)=>Promise.resolve({...readiness('web'),workspaceName:name,platformId:platform,prerequisites:[],commands:{caseCreate:ok,caseTest:ok},checkedAt:'2026-09-07T00:00:00Z'})),targets:vi.fn().mockResolvedValue(targets('web')),cases:vi.fn().mockResolvedValue(cases('web'))} as unknown as ControlPlaneClient;
+  const onWorkspaceChange=vi.fn();
+  const opts=[{id:'web' as const,label:'Web'},{id:'macos' as const,label:'macOS'}];
+  const {result,rerender}=renderHook(({name,intent}:{name:string;intent:import('./useDeviceWorkspace').DevicesLaunchIntent|null})=>useDeviceWorkspace({workspaceName:name,platforms:opts,onWorkspaceChange,launchIntent:intent},client),{initialProps:{name:'test',intent:null as import('./useDeviceWorkspace').DevicesLaunchIntent|null}});
+  await waitFor(()=>expect(result.current.bootstrap.state).toBe('ready'));
+  act(()=>result.current.setPlatform('web'));
+  await waitFor(()=>expect(result.current.readiness.state).toBe('ready'));
+  rerender({name:'repair',intent:{id:91,mode:'diagnostic',workspaceName:'repair',platform:'macos'}});
+  await waitFor(()=>expect(result.current.platform).toBe('macos'));
+  await waitFor(()=>expect(result.current.readiness.data?.workspaceName).toBe('repair'));
+  expect(client.readiness).toHaveBeenLastCalledWith('repair','macos',expect.any(AbortSignal));
+});
+
+it('gives request-specific disabled reasons during Strict recheck with retained Case',async()=>{
+  const client={bootstrap:vi.fn().mockResolvedValue(bootstrap),readiness:vi.fn().mockResolvedValue(readiness('web')),targets:vi.fn().mockResolvedValue(targets('web')),cases:vi.fn().mockResolvedValue(cases('web'))} as unknown as ControlPlaneClient;
+  const {result}=renderHook(()=>useDeviceWorkspace(deviceContext,client));
+  await waitFor(()=>expect(result.current.bootstrap.state).toBe('ready'));
+  act(()=>result.current.setPlatform('web'));
+  await waitFor(()=>expect(result.current.cases.state).toBe('ready'));
+  act(()=>{result.current.setMode('strict');result.current.setCasePath('web.fsq.yaml');});
+  const targetWait=deferred<TargetsResponse>();
+  vi.mocked(client.targets).mockReturnValueOnce(targetWait.promise);
+  act(()=>result.current.refresh());
+  await waitFor(()=>expect(result.current.readiness.state).toBe('ready'));
+  expect(result.current.blockedReason).toBe('Wait for target discovery to finish.');
+  await act(async()=>targetWait.resolve(targets('web')));
+  const caseWait=deferred<CasesResponse>();
+  vi.mocked(client.cases).mockReturnValueOnce(caseWait.promise);
+  act(()=>result.current.refresh());
+  await waitFor(()=>expect(result.current.targets.state).toBe('ready'));
+  expect(result.current.casePath).toBe('web.fsq.yaml');
+  expect(result.current.blockedReason).toBe('Wait for Case discovery to finish.');
+});
+
+it('retains macOS input after start rejection and refreshes diagnosis without waiting for cases',async()=>{
+  const ok={status:'ready' as const,message:'Ready',action:''};
+  const mac:ReadinessResponse={workspaceName:'test',platformId:'macos',workspace:ok,platform:ok,provider:ok,target:ok,strict:ok,prerequisites:[],commands:{caseCreate:ok,caseTest:ok},checkedAt:'2026-09-07T00:00:00Z'};
+  const pendingCases=deferred<CasesResponse>();
+  const pendingStart=vi.fn();
+  const client={bootstrap:vi.fn().mockResolvedValue(bootstrap),readiness:vi.fn().mockResolvedValue(mac),targets:vi.fn().mockResolvedValue({...targets('web'),platform:'macos'}),cases:vi.fn().mockReturnValue(pendingCases.promise),startRun:vi.fn().mockRejectedValue(new ControlPlaneApiError(400,{code:'macos_preflight_failed',message:'Endpoint offline',action:'Recheck'}))} as unknown as ControlPlaneClient;
+  const context={workspaceName:'test',platforms:[{id:'macos' as const,label:'macOS'}],onWorkspaceChange:vi.fn(),onStartPendingChange:pendingStart};
+  const {result}=renderHook(()=>useDeviceWorkspace(context,client));
+  await waitFor(()=>expect(result.current.bootstrap.state).toBe('ready'));
+  act(()=>{result.current.setPlatform('macos');result.current.setGoal('Retain this Goal');});
+  await waitFor(()=>expect(result.current.canStart).toBe(true));
+  expect(result.current.cases.state).toBe('loading');
+  await act(async()=>{await result.current.start();});
+  expect(result.current.goal).toBe('Retain this Goal');
+  expect(result.current.requestId).toBeNull();
+  expect(result.current.startError).not.toBeNull();
+  expect(client.readiness).toHaveBeenCalledTimes(2);
+  expect(pendingStart.mock.calls).toEqual([[true],[false]]);
+});
+
+it('invalidates macOS readiness on refresh and locks duplicate starts while retaining the goal',async()=>{
+  const ok={status:'ready' as const,message:'Ready',action:''};
+  const mac:ReadinessResponse={workspaceName:'test',platformId:'macos',workspace:ok,platform:ok,provider:ok,target:ok,strict:ok,prerequisites:[],commands:{caseCreate:ok,caseTest:ok},checkedAt:'2026-09-07T00:00:00Z'};
+  const pending=deferred<{requestId:string}>();
+  const client={bootstrap:vi.fn().mockResolvedValue(bootstrap),readiness:vi.fn().mockResolvedValue(mac),targets:vi.fn().mockResolvedValue({...targets('web'),platform:'macos'}),cases:vi.fn().mockResolvedValue({platform:'macos',cases:[],truncated:false}),startRun:vi.fn().mockReturnValue(pending.promise)} as unknown as ControlPlaneClient;
+  const context={workspaceName:'test',platforms:[{id:'macos' as const,label:'macOS'}],onWorkspaceChange:vi.fn()};
+  const {result}=renderHook(()=>useDeviceWorkspace(context,client));
+  await waitFor(()=>expect(result.current.bootstrap.state).toBe('ready'));
+  act(()=>{result.current.setPlatform('macos');result.current.setGoal('Keep my Goal');});
+  await waitFor(()=>expect(result.current.canStart).toBe(true));
+  const refresh=deferred<ReadinessResponse>();
+  vi.mocked(client.readiness).mockReturnValueOnce(refresh.promise);
+  act(()=>result.current.refresh());
+  expect(result.current.canStart).toBe(false);
+  expect(result.current.goal).toBe('Keep my Goal');
+  await act(async()=>refresh.resolve(mac));
+  await waitFor(()=>expect(result.current.canStart).toBe(true));
+  act(()=>{void result.current.start();void result.current.start();});
+  expect(client.startRun).toHaveBeenCalledTimes(1);
+  expect(result.current.controlsLocked).toBe(true);
+  expect(result.current.starting).toBe(true);
+});
 
 it('does not discover until a platform is explicitly selected', async () => {
   const client = {

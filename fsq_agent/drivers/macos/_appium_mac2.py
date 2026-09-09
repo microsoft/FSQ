@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from fsq_agent.drivers._ai_assertion import AIAssertionBackendToolMixin
 from fsq_agent.drivers._capabilities import _macos_driver_tool
+from fsq_agent.drivers.macos._elements import candidate, parse_source, query_source
 from fsq_agent.models import (
     ConfigurationError,
     MacOSAssertElementsOrderParams,
@@ -170,7 +171,10 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         if element is not None:
             click = getattr(element, "click", None)
             if callable(click):
-                click()
+                try:
+                    click()
+                except Exception as exc:  # noqa: BLE001 -- normalize backend failure without raw details.
+                    self._raise_resolution_error(exc)
                 return self._passed()
         point = self._point_from_params(params)
         if point is None:
@@ -284,12 +288,19 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
     @_macos_driver_tool(
         "uiSnapshot",
         description=(
-            "Return a compact macOS accessibility tree snapshot. Signal-free wrappers and default attributes may be removed, and long text-like values are clipped to the first 50 characters."
+            "Read macOS accessibility evidence. Use query for bounded semantic element discovery before text/depth clipping; otherwise return a compact tree with explicit clipping markers. No-match is not proof of invisibility."
         ),
     )
     def ui_snapshot(self, params: MacOSUiSnapshotParams) -> dict[str, object]:
         session = self._require_session()
-        source = getattr(session, "page_source", None)
+        try:
+            source = getattr(session, "page_source", None)
+        except Exception as exc:  # noqa: BLE001 -- normalize optional backend errors without exposing their bodies.
+            self._raise_resolution_error(exc)
+        if not isinstance(source, str):
+            raise ConfigurationError("Mac2 did not return a page source.", context={"resolution_reason": "backend_error"})
+        if params.query is not None:
+            return query_source(source, params.query)
         max_depth = params.max_depth or self.page_source_max_depth
         include_attributes = bool(params.include_attributes)
         return {
@@ -301,6 +312,7 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
             ),
             "max_depth": max_depth,
             "include_attributes": include_attributes,
+            "diagnostics": {"source": "appium_mac2_page_source", "atomic_with_screenshot": False, "absence_proves_invisibility": False},
         }
 
     @_macos_driver_tool("assertVisible", description="Assert that a macOS element is visible.")
@@ -444,9 +456,7 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
 
     def _require_session(self) -> object:
         if self._session is None:
-            raise ConfigurationError("Appium Mac2 session is not available. Call launchApp before macOS Appium actions.")
-        if self._session is None:
-            raise ConfigurationError("Appium Mac2 session is not available.")
+            raise ConfigurationError("Appium Mac2 session is not available. Call launchApp before macOS Appium actions.", context={"resolution_reason": "session_unavailable"})
         return self._session
 
     def _resolve_element_or_none(self, params: BaseModel) -> object | None:
@@ -461,56 +471,86 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
 
     def _element_from_locator(self, locator: MacOSLocator) -> object | None:
         session = self._require_session()
-        if locator.accessibilityId:
-            element = self._find_element(session, "accessibility id", locator.accessibilityId)
-            if element is not None:
-                return element
-        if locator.xpath:
-            element = self._find_element(session, "xpath", locator.xpath)
-            if element is not None:
-                return element
+        constraints = self._locator_constraints(locator)
+        if not constraints and not locator.xpath and not locator.predicate:
+            return None
+        selector = f"({locator.xpath})" if locator.xpath else "//*"
+        if constraints:
+            selector += "[" + " and ".join(constraints) + "]"
+        elements = self._find_elements(session, "xpath", selector)
         if locator.predicate:
-            element = self._find_element(session, "-ios predicate string", locator.predicate)
-            if element is not None:
-                return element
-        for value in (locator.name, locator.label, locator.value):
+            predicate_matches = self._find_elements(session, "-ios predicate string", locator.predicate)
+            allowed = {self._element_identity(element) for element in predicate_matches}
+            elements = [element for element in elements if self._element_identity(element) in allowed]
+        unique = {self._element_identity(element): element for element in elements}
+        if len(unique) > 1:
+            raise ConfigurationError(
+                "macOS locator matches multiple elements; refine the locator.",
+                context={"resolution_reason": "ambiguous", "match_count": len(unique), "candidates": [self._candidate_summary(element) for element in list(unique.values())[:5]]},
+            )
+        return next(iter(unique.values()), None)
+
+    def _locator_constraints(self, locator: MacOSLocator) -> list[str]:
+        constraints = []
+        for field, attribute in (("accessibilityId", "identifier"), ("label", "label"), ("value", "value"), ("role", "role")):
+            value = getattr(locator, field)
             if value:
-                element = self._element_by_accessibility_or_name(value)
-                if element is not None:
-                    return element
-        if locator.role or locator.controlType or locator.className:
-            predicate_parts: list[str] = []
-            if locator.role:
-                predicate_parts.append(f"role == '{locator.role}'")
-            if locator.controlType:
-                predicate_parts.append(f"type == '{locator.controlType}'")
-            if locator.className:
-                predicate_parts.append(f"type == '{locator.className}'")
-            if predicate_parts:
-                return self._find_element(session, "-ios predicate string", " AND ".join(predicate_parts))
-        return None
+                constraints.append(f"@{attribute}={self._xpath_literal(value)}")
+        if locator.name:
+            literal = self._xpath_literal(locator.name)
+            constraints.append("(" + " or ".join(f"@{key}={literal}" for key in ("identifier", "name", "label", "value")) + ")")
+        for value in (locator.controlType, locator.className):
+            if value:
+                literal = self._xpath_literal(value)
+                constraints.append(f"(name()={literal} or @type={literal})")
+        return constraints
+
+    def _element_identity(self, element: object) -> str:
+        identifier = getattr(element, "id", None)
+        if not isinstance(identifier, str) or not identifier:
+            raise ConfigurationError("Cannot establish unique macOS element identity.", context={"resolution_reason": "backend_error"})
+        return identifier
+
+    def _candidate_summary(self, element: object) -> dict[str, object]:
+        getter = getattr(element, "get_attribute", None)
+        attrs = {}
+        if callable(getter):
+            for key in ("identifier", "label", "value", "type", "enabled", "visible", "selected"):
+                try:
+                    value = getter(key)
+                except Exception:  # noqa: BLE001 -- optional diagnostic attributes must not expose backend errors.
+                    value = None
+                if value is not None:
+                    attrs[key] = str(value)
+        rect = self._element_rect(element)
+        if rect:
+            attrs.update({key: str(value) for key, value in rect.items()})
+        return candidate(ElementTree.Element(attrs.get("type", "unknown"), attrs))
 
     def _element_by_accessibility_or_name(self, value: str) -> object | None:
-        session = self._require_session()
-        for strategy, locator in (
-            ("accessibility id", value),
-            ("-ios predicate string", f"name == '{value}' OR label == '{value}' OR value == '{value}'"),
-            ("xpath", f"//*[@name={self._xpath_literal(value)} or @label={self._xpath_literal(value)}]"),
-        ):
-            element = self._find_element(session, strategy, locator)
-            if element is not None:
-                return element
-        return None
+        return self._element_from_locator(MacOSLocator(name=value))
 
-    def _find_element(self, session: object, strategy: str, locator: str) -> object | None:
-        find_element = getattr(session, "find_element", None)
-        if not callable(find_element):
-            return None
+    def _find_elements(self, session: object, strategy: str, locator: str) -> list[object]:
+        find_elements = getattr(session, "find_elements", None)
+        if not callable(find_elements):
+            raise ConfigurationError("Mac2 session cannot enumerate element matches.", context={"resolution_reason": "backend_error"})
         try:
-            return find_element(strategy, locator)
-        # Appium and Selenium locator failures use optional-backend exception classes outside the core contract.
-        except Exception:  # noqa: BLE001
-            return None
+            result = find_elements(strategy, locator)
+        except Exception as exc:  # noqa: BLE001 -- optional backend exception types are loaded lazily.
+            self._raise_resolution_error(exc)
+        if not isinstance(result, list) or len(result) > 10000:
+            raise ConfigurationError("Mac2 element enumeration is invalid or exceeds safe limits.", context={"resolution_reason": "backend_error"})
+        return result
+
+    def _raise_resolution_error(self, error: Exception) -> None:
+        from selenium.common.exceptions import InvalidSelectorException, InvalidSessionIdException, NoSuchWindowException
+
+        reason = "backend_error"
+        if isinstance(error, InvalidSelectorException):
+            reason = "invalid_locator"
+        elif isinstance(error, (InvalidSessionIdException, NoSuchWindowException)):
+            reason = "session_unavailable"
+        raise ConfigurationError(f"macOS element lookup failed: {reason}.", context={"resolution_reason": reason}) from None
 
     def _click_count(self, params: BaseModel, *, count: int) -> dict[str, object]:
         point = self._point_from_params(params)
@@ -531,6 +571,10 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
 
     def _point_from_params(self, params: BaseModel) -> MacOSPoint | None:
         data = params.model_dump(mode="python", exclude_none=True)
+        locator_data = data.get("locator", {})
+        if data.get("target") or (isinstance(locator_data, dict) and any(value for key, value in locator_data.items() if key != "point")):
+            element = self._resolve_element_or_none(params)
+            return self._element_center(element) if element is not None else None
         point = data.get("point")
         if isinstance(point, dict):
             return MacOSPoint.model_validate(point)
@@ -589,14 +633,13 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         actions.perform()
 
     def _element_displayed(self, element: object) -> bool:
-        displayed = getattr(element, "is_displayed", None)
-        if callable(displayed):
-            try:
+        try:
+            displayed = getattr(element, "is_displayed", None)
+            if callable(displayed):
                 return bool(displayed())
-            # Appium element state probes must treat any optional-backend lookup failure as not displayed.
-            except Exception:  # noqa: BLE001
-                return False
-        return True
+        except Exception as exc:  # noqa: BLE001 -- a failed state probe is not an invisibility verdict.
+            self._raise_resolution_error(exc)
+        raise ConfigurationError("Mac2 element cannot report visibility.", context={"resolution_reason": "backend_error"})
 
     def _element_center(self, element: object | None) -> MacOSPoint | None:
         rect = self._element_rect(element)
@@ -613,7 +656,10 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
     def _element_rect(self, element: object | None) -> dict[str, float] | None:
         if element is None:
             return None
-        rect = getattr(element, "rect", None)
+        try:
+            rect = getattr(element, "rect", None)
+        except Exception as exc:  # noqa: BLE001 -- preserve state/geometry backend failure distinctions.
+            self._raise_resolution_error(exc)
         if isinstance(rect, dict):
             try:
                 return {key: float(rect[key]) for key in ("x", "y", "width", "height")}
@@ -637,8 +683,8 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         if not source.strip():
             return {"format": "xml", "root": None, "source_length": 0}
         try:
-            root = _parse_xml_safely(source)
-        except ElementTree.ParseError as exc:
+            root = parse_source(source)
+        except (ElementTree.ParseError, ValueError) as exc:
             return self._unparsed_page_source(source, exc)
         try:
             return {
@@ -688,12 +734,30 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         children = [child_snapshot for child in element for child_snapshot in self._compact_element_snapshots(child, include_attributes=include_attributes)]
         attributes = self._snapshot_attributes(element.attrib, include_attributes=include_attributes)
         text = (element.text or "").strip()[:DEFAULT_MACOS_SNAPSHOT_TEXT_LIMIT_CHARS]
-        if not preserve_node and not self._has_snapshot_signal(attributes, text=text):
+        interactive = self._xml_name(element.tag).removeprefix("XCUIElementType") in {
+            "Button",
+            "CheckBox",
+            "RadioButton",
+            "PopUpButton",
+            "ComboBox",
+            "TextField",
+            "SecureTextField",
+            "TextArea",
+            "Slider",
+            "Switch",
+            "Link",
+        }
+        if not preserve_node and not interactive and not self._has_snapshot_signal(attributes, text=text):
             return children
 
         snapshot: dict[str, object] = {"type": self._xml_name(element.tag)}
         if attributes:
             snapshot["attributes"] = attributes
+        clipped = [key for key, value in element.attrib.items() if self._xml_name(key) in MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS and len(value.strip()) > DEFAULT_MACOS_SNAPSHOT_TEXT_LIMIT_CHARS]
+        if clipped:
+            snapshot["truncated_attributes"] = clipped
+        if len((element.text or "").strip()) > DEFAULT_MACOS_SNAPSHOT_TEXT_LIMIT_CHARS:
+            snapshot["text_truncated"] = True
         if text:
             snapshot["text"] = text
         if children:
@@ -793,7 +857,7 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         return self._failed(
             "target_resolution_error",
             "Target was not found.",
-            metadata={"params": params.model_dump(mode="json", exclude_none=True)},
+            metadata={"resolution_reason": "not_found"},
         )
 
     def _passed(self, output: object | None = None) -> dict[str, object]:

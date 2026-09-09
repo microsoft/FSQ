@@ -13,7 +13,7 @@ The module does not parse CLI arguments, parse FSQ YAML, construct provider sess
 - `core.interfaces`: canonical public protocols and stable construction boundaries.
 - `harnesses`: private concrete runtime gateways reached through the public Harness factory.
 - `drivers`: private concrete automation backends reached through public Driver interfaces and factories.
-- `environments`: canonical `PlatformRuntimeService` reached only by the legacy Core compatibility export.
+- `environments`: canonical `PlatformRuntimeService` and `AndroidDeviceDiscovery` reached only by Core compatibility exports.
 
 - Internal project dependencies: `models`, `capabilities`, and the narrow `environments` compatibility export dependency.
 - External dependencies: standard library typing/time/path modules and optional platform backend imports only inside concrete backend modules with lazy import behavior.
@@ -32,7 +32,7 @@ Current `__init__.py` exports via `__all__`:
 - `DriverFactory`: Concrete factory class for selecting private concrete backend drivers from config-owned platform backend settings. It exposes typed `create_android_driver`, `create_web_driver`, `create_windows_driver`, and `create_macos_driver` methods, each returning the corresponding public driver protocol. It is not named `Default` because config selects the backend implementation; additional platform driver implementations belong behind this config-selected factory boundary.
 - `HarnessFactory`: Concrete factory class for constructing runtime harnesses. Each supported platform has one built-in harness implementation; this factory is a convenience composition boundary that creates the configured driver through `DriverFactory` and wraps it in the private concrete platform harness. It returns `HarnessInterface` and accepts the active platform, `HarnessSettings`, optional `ArtifactStore`, optional `AIAssertionEvaluatorProtocol`, runtime secret settings, and Android app/serial overrides used by strict cases and Control Plane device selection.
 - `RuntimeSecretStore`: Process-local runtime-secret resolver built from the names and private values in `RuntimeSecretSettings`. It exposes safe available names, resolves values only in memory, never reads workspace secrets from `os.environ`, and never persists values.
-- `AndroidDeviceDiscovery`: Stable service class that resolves ADB from `PATH`, executes only the fixed bounded `adb devices -l` command, parses every well-formed device state and safe metadata field into model-owned contracts, and returns expected discovery failures as `AndroidDeviceDiscoveryResult`. It does not select a device or emit CLI/HTTP response wording.
+- `AndroidDeviceDiscovery`: Compatibility re-export of the canonical Environments service, preserving its `discover(timeout_seconds=...)` call shape and model-owned result. It uses bounded existing-server-only discovery, never starts/restarts ADB, selects a device, or emits CLI/HTTP wording. Core owns no duplicate ADB transport or device parser.
 - `HarnessInterface`: Protocol describing platform capabilities required by StepRunner. Concrete Android, Web, iOS, and fake harnesses may satisfy the protocol structurally.
 - `StepRunner`: Executes one canonical `ExecutableStep` or capability invocation by looking up metadata in `CapabilityRegistry`, validating params with the declared model, applying evidence, post-action delay, and sensitivity policy, invoking the active `HarnessInterface`, normalizing backend/provider output, emitting structured safe events, and returning `RunnerStepResult`.
 - `StepSequenceRunner`: Executes ordered `ExecutableStep` records with `StepRunner`, records events and step results, stops normal execution on blocking failures, and always executes supplied teardown steps. It does not own configured sleep or pacing behavior; post-action stabilization is handled inside `StepRunner`.
@@ -167,7 +167,7 @@ Capability metadata, not a static Android action table, is the runtime source of
 - `harness/__init__.py`: Compatibility surface only. It exports canonical Core Interfaces and public factory classes, not concrete platform harnesses or backend drivers.
 - `harness/_interface.py`: Compatibility forwarder to `core.interfaces` protocols.
 - `harness/_android.py`: Compatibility forwarder to the canonical Android harness implementation.
-- `harness/_android_devices.py`: `AndroidDeviceDiscovery` service implementation plus private fixed-command parsing helpers.
+- `harness/_android_devices.py`: Compatibility forwarding of the canonical Environments Android discovery service.
 - `harness/_android_driver.py`, `_web_driver.py`, `_windows_driver.py`, `_macos_driver.py`: Compatibility forwarders to `core.interfaces` driver protocols.
 - `harness/_web.py`, `_windows.py`, `_macos.py`: Compatibility forwarders to canonical platform harness implementations.
 - `harness/_driver_tools.py`: Compatibility forwarder to driver-owned capability declaration and discovery support.
@@ -207,7 +207,7 @@ Sensitive capabilities must return values in the standard normalized shape `outp
 
 - Verification covers registry validation and alias resolution, factory platform/backend selection, `StepRunner` routing through `HarnessInterface.invoke_action`, centralized evidence capture, post-action delay, runtime-secret resolution, sensitivity redaction, structured events, sequence teardown, and CommonTool/PlatformTool dispatch.
 - Boundary verification ensures registry/bootstrap does not connect to real devices or launch apps/browsers, strict registries exclude AgentTools, public exports exclude concrete harness/backend implementations, and non-core modules do not import core internals.
-- Android discovery verification covers missing ADB, timeout, process-start failure, nonzero exit, empty output, online/offline/unauthorized states, metadata parsing, and fixed-command invocation. Entry-layer tests separately cover selection and transport projection.
+- Android discovery verification proves the Core export is the canonical Environments service. Environments verification covers existing-server-only protocol requests, missing ADB/server, endpoint validation, timeout, malformed/truncated responses, empty inventory, online/offline/unauthorized states, metadata parsing, and absence of daemon-start side effects. Entry-layer tests separately cover selection and transport projection.
 
 ## Current Invariants
 

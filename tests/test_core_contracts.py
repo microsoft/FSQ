@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 
 import ast
-import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -96,75 +95,11 @@ def test_core_public_exports_follow_strict_boundary() -> None:
     assert not hasattr(harness, "driver_tool")
 
 
-def test_android_device_discovery_normalizes_all_states_and_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_android_discovery_core_export_is_canonical():
     from fsq_agent.core import AndroidDeviceDiscovery
+    from fsq_agent.environments import AndroidDeviceDiscovery as CanonicalDiscovery
 
-    invocation: dict[str, object] = {}
-    completed = subprocess.CompletedProcess(
-        ["adb"],
-        0,
-        "List of devices attached\nemulator-5554 device product:sdk model:Pixel_8 transport_id:1\noffline-1 offline\nlocked-1 unauthorized\n",
-        "",
-    )
-    monkeypatch.setattr("fsq_agent.core.harness._android_devices.shutil.which", lambda _name: "C:/tools/adb.exe")
-
-    def run_adb(command: list[str], **kwargs):
-        invocation.update(command=command, **kwargs)
-        return completed
-
-    monkeypatch.setattr("fsq_agent.core.harness._android_devices.subprocess.run", run_adb)
-
-    result = AndroidDeviceDiscovery().discover()
-
-    assert invocation == {
-        "command": ["C:/tools/adb.exe", "devices", "-l"],
-        "capture_output": True,
-        "text": True,
-        "timeout": 5.0,
-        "check": False,
-    }
-    assert result.error_code is None
-    assert [(device.serial, device.state) for device in result.devices] == [
-        ("emulator-5554", "device"),
-        ("offline-1", "offline"),
-        ("locked-1", "unauthorized"),
-    ]
-    assert result.devices[0].metadata == {"product": "sdk", "model": "Pixel_8", "transport_id": "1"}
-
-
-@pytest.mark.parametrize(
-    ("adb_path", "exception", "returncode", "error_code"),
-    [
-        (None, None, 0, "adb_missing"),
-        ("C:/tools/adb.exe", FileNotFoundError(), 0, "adb_missing"),
-        ("C:/tools/adb.exe", subprocess.TimeoutExpired("adb", 5), 0, "adb_timeout"),
-        ("C:/tools/adb.exe", OSError(), 0, "adb_start_failed"),
-        ("C:/tools/adb.exe", None, 1, "adb_failed"),
-    ],
-)
-def test_android_device_discovery_normalizes_expected_failures(
-    monkeypatch: pytest.MonkeyPatch,
-    adb_path: str | None,
-    exception: BaseException | None,
-    returncode: int,
-    error_code: str,
-) -> None:
-    from fsq_agent.core import AndroidDeviceDiscovery
-
-    monkeypatch.setattr("fsq_agent.core.harness._android_devices.shutil.which", lambda _name: adb_path)
-
-    def run_adb(*args, **kwargs):
-        if exception is not None:
-            raise exception
-        return subprocess.CompletedProcess(["adb"], returncode, "", "adb failed")
-
-    monkeypatch.setattr("fsq_agent.core.harness._android_devices.subprocess.run", run_adb)
-
-    result = AndroidDeviceDiscovery().discover()
-
-    assert result.devices == []
-    assert result.error_code == error_code
-    assert result.error_message
+    assert AndroidDeviceDiscovery is CanonicalDiscovery
 
 
 def test_capability_definition_factory_selects_platform_and_filters_ai_assertion() -> None:

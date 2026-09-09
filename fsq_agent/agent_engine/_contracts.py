@@ -40,6 +40,8 @@ class TokenUsage:
     output_tokens: int
     total_tokens: int
     requests: int = 1
+    cached_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
 
 @dataclass(frozen=True)

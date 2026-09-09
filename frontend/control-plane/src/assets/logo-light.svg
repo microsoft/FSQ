@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" fill="none">
+  <!-- FSQ Logo - Light mode (dark text on transparent) -->
+
+  <!-- Icon: Shield with checkmark inside a circular arrow (Fully Self Quality) -->
+  <g transform="translate(20, 10)">
+    <!-- Outer circular arrow (Self / loop) -->
+    <path d="M50 10 A40 40 0 1 1 15 65" stroke="#1a1a2e" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <!-- Arrow head on the circular path -->
+    <polygon points="12,56 22,65 8,68" fill="#1a1a2e"/>
+
+    <!-- Shield shape (Quality / trust) -->
+    <path d="M50 25 L72 35 L72 58 C72 72 50 85 50 85 C50 85 28 72 28 58 L28 35 Z"
+          fill="#1a1a2e" opacity="0.08" stroke="#1a1a2e" stroke-width="2.5"/>
+
+    <!-- Checkmark inside shield (Verified) -->
+    <polyline points="38,55 47,64 63,44" stroke="#1a1a2e" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Text: FSQ -->
+  <text x="130" y="78" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="56" font-weight="700" fill="#1a1a2e" letter-spacing="-1">FSQ</text>
+
+  <!-- Subtitle -->
+  <text x="132" y="105" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="14" font-weight="400" fill="#555" letter-spacing="0.5">Fully Self Quality</text>
+</svg>

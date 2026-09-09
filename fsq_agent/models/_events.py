@@ -13,6 +13,7 @@ RunEventType: TypeAlias = Literal[
     "planning_started",
     "planning_update",
     "reasoning_summary",
+    "dynamic_agent_token_usage",
     "tool_capabilities_listed",
     "tool_call_started",
     "tool_call_completed",

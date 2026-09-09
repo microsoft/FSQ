@@ -117,8 +117,8 @@ it('shows selected Action screenshot comparison and UI Tree diff', async () => {
     ],
   });
   const { container, rerender } = render(<LiveEvidencePanel tab="screen" snapshot={terminal} selectedStepId="step-1" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} onClearStep={vi.fn()} />);
-  expect(await screen.findByRole('img', { name: 'before screenshot for selected Action' })).toBeInTheDocument();
-  expect(screen.getByRole('img', { name: 'after screenshot for selected Action' })).toBeInTheDocument();
+  expect(await screen.findByRole('img', { name: /web before screenshot for Chrome, selected Action/ })).toBeInTheDocument();
+  expect(screen.getByRole('img', { name: /web after screenshot for Chrome, selected Action/ })).toBeInTheDocument();
   expect([...container.querySelectorAll('.step-screenshot-card figcaption')].map((caption) => caption.textContent)).toEqual(['Before', 'After']);
   rerender(<LiveEvidencePanel tab="ui-tree" snapshot={terminal} selectedStepId="step-1" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} onClearStep={vi.fn()} />);
   expect(await screen.findByLabelText('Before and After UI Tree diff')).toHaveTextContent('before');
@@ -138,20 +138,21 @@ it('keeps selected Action screenshots visible while the next Action evidence loa
   const terminal = { ...snapshot, terminal: true, status: 'success' as const, completedAt: '2026-08-11T12:00:10Z' };
   const { rerender } = render(<LiveEvidencePanel tab="screen" snapshot={terminal} selectedStepId="step-1" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} onClearStep={vi.fn()} />);
 
-  expect(await screen.findByRole('img', { name: 'before screenshot for selected Action' })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0x');
+  expect(await screen.findByRole('img', { name: /web before screenshot for Chrome, selected Action/ })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0x');
   rerender(<LiveEvidencePanel tab="screen" snapshot={terminal} selectedStepId="step-2" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} onClearStep={vi.fn()} />);
 
   expect(screen.queryByText('Loading Action evidence')).not.toBeInTheDocument();
   expect(screen.queryByText('Reading persisted Before and After artifacts…')).not.toBeInTheDocument();
-  expect(screen.getByRole('img', { name: 'before screenshot for selected Action' })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0x');
+  expect(screen.getByRole('img', { name: /web before screenshot for Chrome, selected Action/ })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0x');
   expect(screen.getByRole('status')).toHaveTextContent('Updating selected Action evidence');
+  expect(screen.getByRole('img')).toHaveAccessibleName('web before screenshot for Chrome, selected Action step-1');
   resolveStep2({
     available: true,
     stepId: 'step-2',
     message: null,
     artifacts: [{ kind: 'screenshot', phase: 'before', timestamp: null, mimeType: 'image/png', contentBase64: 'c3RlcC0y' }],
   });
-  await waitFor(() => expect(screen.getByRole('img', { name: 'before screenshot for selected Action' })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0y'));
+  await waitFor(() => expect(screen.getByRole('img', { name: 'web before screenshot for Chrome, selected Action step-2' })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0y'));
 });
 
 it('diffs selected XML UI Tree evidence after structured formatting', async () => {
@@ -186,8 +187,8 @@ it('shows one-sided selected Action evidence without an empty counterpart', asyn
   });
   const terminal = { ...snapshot, terminal: true, status: 'success' as const, completedAt: '2026-08-11T12:00:10Z' };
   render(<LiveEvidencePanel tab="screen" snapshot={terminal} selectedStepId="step-1" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} />);
-  expect(await screen.findByRole('img', { name: 'before screenshot for selected Action' })).toBeInTheDocument();
-  expect(screen.queryByRole('img', { name: 'after screenshot for selected Action' })).not.toBeInTheDocument();
+  expect(await screen.findByRole('img', { name: /web before screenshot for Chrome, selected Action/ })).toBeInTheDocument();
+  expect(screen.queryByRole('img', { name: /web after screenshot for Chrome, selected Action/ })).not.toBeInTheDocument();
 });
 
 it('keeps replay generation failures scoped to Screen', async () => {
@@ -232,7 +233,7 @@ it('discloses long log messages and resumes paused log following', async () => {
   const disclosure = await screen.findByRole('button', { name: 'Expand message' });
   expect(document.getElementById('log-message-1')).toHaveClass('event-message--clamped');
   await userEvent.click(disclosure);
-  expect(disclosure).toHaveTextContent('⌃');
+  expect(disclosure).toHaveAccessibleName('Collapse message');
   expect(disclosure).toHaveAccessibleName('Collapse message');
   expect(document.getElementById('log-message-1')).not.toHaveClass('event-message--clamped');
   await userEvent.click(disclosure);

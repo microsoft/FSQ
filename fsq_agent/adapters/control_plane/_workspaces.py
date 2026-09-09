@@ -45,7 +45,9 @@ def list_workspaces(user_config_root: Path | None) -> dict[str, list[dict[str, A
                 }
             )
             continue
-        workspaces.append(_status_projection(status))
+        projected = _status_projection(status)
+        _add_macos_diagnostic_eligibility(projected, entry.name, user_config_root)
+        workspaces.append(projected)
     return {"workspaces": workspaces}
 
 
@@ -53,7 +55,21 @@ def get_workspace(name: str, user_config_root: Path | None) -> dict[str, Any]:
     status = inspect_registered_workspace(name, user_config_root)
     result = _status_projection(status)
     result["platforms"] = [_platform_summary(name, platform.platform, user_config_root) if platform.status == "available" else _platform_status_projection(platform) for platform in status.platforms]
+    _add_macos_diagnostic_eligibility(result, name, user_config_root)
     return result
+
+
+def _add_macos_diagnostic_eligibility(result: dict[str, Any], name: str, user_config_root: Path | None) -> None:
+    macos = next((item for item in result["platforms"] if item["platform"] == "macos" and item["status"] == "unavailable"), None)
+    if macos is None:
+        return
+    try:
+        inspected = inspect_registered_workspace(name, user_config_root, validate_target_paths=False)
+        valid = any(item.platform == "macos" and item.status == "available" for item in inspected.platforms)
+    except (ConfigurationError, OSError):
+        return
+    if valid:
+        macos.update(diagnosticAvailable=True, repairAvailable=True)
 
 
 def create_workspace_request(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
@@ -208,7 +224,11 @@ def _load_exact_workspace_platform(name: str, platform: str, user_config_root: P
     if entry is None:
         raise WorkspaceAPIError(404, "workspace_not_found", "Workspace is not registered.", "Refresh the workspace list.")
     try:
-        return load_registered_workspace(entry.name, platform, user_config_root)
+        return (
+            load_registered_workspace(entry.name, platform, user_config_root, allow_unavailable_target=True)
+            if platform == "macos"
+            else load_registered_workspace(entry.name, platform, user_config_root)
+        )
     except ConfigurationError as exc:
         raise WorkspaceAPIError(
             409,

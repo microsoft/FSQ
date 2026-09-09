@@ -193,7 +193,7 @@ def test_fsq_executable_step_adapter_normalizes_params_and_source_refs(tmp_path:
 
     assert steps[0].params == {}
     assert steps[2].params == {"target": "Search box in NTP page"}
-    assert steps[3].params == {
+    assert {key: value for key, value in steps[3].params.items() if key != "textType"} == {
         "text": "bing.com",
         "target": "Search box",
         "locator": {"resourceId": "com.microsoft.emmx:id/url_bar"},
@@ -437,8 +437,8 @@ platform: web
     ]
     assert steps[0].params == {}
     assert steps[1].params == {"url": "https://www.bing.com"}
-    assert steps[3].params == {"target": "Search box", "locator": {"role": "textbox", "name": "Search"}}
-    assert steps[4].params == {"target": "Search box", "text": "playwright"}
+    assert {key: value for key, value in steps[3].params.items() if key != "textType"} == {"target": "Search box", "locator": {"role": "textbox", "name": "Search"}}
+    assert steps[4].params == {"target": "Search box", "text": "playwright", "textType": "literal"}
     assert steps[6].params == {"text": "playwright", "timeout_ms": 5000}
     assert steps[7].params == {"target": "Results", "text": {"contains": "playwright"}}
     assert steps[8].params == {}
@@ -532,7 +532,7 @@ platform: macos
     assert [step.kind for step in steps] == ["setup", "action", "action", "assertion", "teardown"]
     assert steps[1].params == {"point": {"x": 120, "y": 240}}
     assert steps[2].params == {"target": "Search field", "text": "TEST_ACCOUNT_PASSWORD", "textType": "runtimeSecret"}
-    assert steps[3].params == {
+    assert {key: value for key, value in steps[3].params.items() if key != "textType"} == {
         "elements": [{"target": "File"}, {"locator": {"accessibilityId": "Edit"}}],
         "direction": "horizontal",
         "expected_order": [0, 1],

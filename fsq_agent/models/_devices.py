@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class AndroidDevice(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    serial: str = Field(min_length=1)
+    serial: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_.:@-]+$")
     state: str = Field(min_length=1)
     metadata: dict[str, str] = Field(default_factory=dict)
 
@@ -18,7 +18,7 @@ class AndroidDeviceDiscoveryResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     devices: list[AndroidDevice] = Field(default_factory=list)
-    error_code: Literal["adb_missing", "adb_timeout", "adb_start_failed", "adb_failed"] | None = None
+    error_code: Literal["adb_missing", "adb_timeout", "adb_start_failed", "adb_failed", "adb_server_unavailable", "adb_endpoint_invalid"] | None = None
     error_message: str | None = None
 
     @model_validator(mode="after")

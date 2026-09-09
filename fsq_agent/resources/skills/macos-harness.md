@@ -19,6 +19,11 @@ Use when `harness.platform` is macOS. This skill contains macOS-specific stabili
 
 ## Locator Rules
 
+- Discover controls with `ui_snapshot` and its `query` object, for example `query: {text: "Men", match: "contains", limit: 20}`. Query matches decoded semantic text, not JSON keys or `XCUIElementType` names. Narrow with `control_type` or known state filters; missing state is unknown.
+- Inspect query `coverage`, `count_is_lower_bound`, truncation and `next_offset`. Continue with the returned `snapshot_revision`; restart at offset zero if stale. Partial results are not exhaustive. Use complete candidate `locator` values, never clipped `display` text. Refine ambiguous matches rather than choosing the first.
+- All populated element locator fields constrain the same element. `label` and `value` match their own fields exactly; `name` is a compatibility semantic-name signal. A type constraint never replaces a failed text constraint.
+- A shallow or clipped tree is not proof that a control is absent. Use a fresh structured query before reporting a missing backend control. Query does not infer screenshot-only controls. Default tree output omits enabled=true, visible=true and selected=false; query state filters require explicit backend facts.
+
 - A macOS locator may use `accessibilityId`, `name`, `label`, `value`, `role`, `controlType`, `className`, `xpath`, `predicate`, or `point`.
 - Prefer `accessibilityId` when available because it is the most stable Appium Mac2 lookup.
 - Use `name`, `label`, or `value` for controls that expose user-visible accessibility metadata.
@@ -26,6 +31,11 @@ Use when `harness.platform` is macOS. This skill contains macOS-specific stabili
 - Use `xpath` or `predicate` only when simpler accessibility fields are absent or ambiguous.
 
 ## Verification and Assertion Rules
+
+- Honor explicit element-only requests: never call `assert_with_ai` or use screenshot-inferred coordinates. Actions on a uniquely resolved element's current geometry remain element-based. Screenshot capture is evidence only.
+- Preserve user-required filters and order. Confirm required filter state before dependent price comparison or add-to-cart actions. Detail-page variant selection does not substitute for result-list filtering. If bounded permitted recovery cannot complete a required filter, stop dependent actions and report the blocking step as unmet.
+- Existing cart contents are initial state, not proof of a new add. Link product identity, size, price, actual add action and cart change with element evidence. Never clear or modify existing items unless requested.
+- Preserve explicit user method constraints in planning and outcome claims. Do not hide a non-equivalent fallback as an adjusted success. Generated key actions do not introduce extra final-verifier requirements.
 
 - Use `search_artifact` and `read_artifact_slice` only to inspect evidence and choose the next action.
 - Finish every required verification step by calling `assert_visible`, `assert_elements_order`, or `assert_with_ai`.

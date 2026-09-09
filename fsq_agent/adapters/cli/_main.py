@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import sys
 import webbrowser
 from enum import IntEnum
 from pathlib import Path
@@ -15,6 +16,7 @@ from fsq_agent.application import (
     ApplicationErrorCategory,
     ApplicationErrorCode,
     CaseCreateRequest,
+    CaseFormatRequest,
     CaseTestRequest,
     DoctorRequest,
     GenerateRunHtmlRequest,
@@ -28,6 +30,7 @@ from fsq_agent.application import (
     create_case,
     diagnose_workspace,
     event_record,
+    format_case,
     generate_run_html,
     initialize_workspace,
     list_runs,
@@ -60,7 +63,7 @@ class ExitCode(IntEnum):
 
 class ProtocolGroup(click.Group):
     def main(self, args=None, prog_name=None, complete_var=None, standalone_mode=True, **extra):
-        invocation_args = list(args) if args is not None else None
+        invocation_args = list(args) if args is not None else sys.argv[1:]
         try:
             result = super().main(
                 args=args,
@@ -69,7 +72,7 @@ class ProtocolGroup(click.Group):
                 standalone_mode=False,
                 **extra,
             )
-        except KeyboardInterrupt as exc:
+        except (KeyboardInterrupt, click.Abort) as exc:
             if standalone_mode:
                 raise SystemExit(ExitCode.INTERRUPTED) from exc
             raise click.exceptions.Exit(ExitCode.INTERRUPTED) from exc
@@ -110,6 +113,8 @@ class ProtocolGroup(click.Group):
 
 def _requested_output(args: list[str] | None) -> str:
     values = args or []
+    if "--json" in values and "format" in values:
+        return "json"
     for index, value in enumerate(values):
         if value == "--output" and index + 1 < len(values):
             return values[index + 1]
@@ -247,8 +252,9 @@ def case_group() -> None:
 @case_group.command(name="create")
 @click.option("--platform", type=PLATFORMS, required=True)
 @click.option("--goal", required=True)
+@click.option("--name", default=None, help="Stable Case name without a suffix.")
 @click.pass_context
-def case_create(context: click.Context, platform: str, goal: str) -> None:
+def case_create(context: click.Context, platform: str, goal: str, name: str | None) -> None:
     events: list[dict[str, object]] = []
 
     def collect_event(event: object) -> None:
@@ -257,7 +263,7 @@ def case_create(context: click.Context, platform: str, goal: str) -> None:
     try:
         result = asyncio.run(
             create_case(
-                CaseCreateRequest(current_directory=Path.cwd(), platform=platform, goal=goal),
+                CaseCreateRequest(current_directory=Path.cwd(), platform=platform, goal=goal, case_name=name),
                 event_sink=collect_event,
                 agent_factory=create_case_agent,
             )
@@ -269,7 +275,7 @@ def case_create(context: click.Context, platform: str, goal: str) -> None:
         raise click.exceptions.Exit(ExitCode.INTERRUPTED) from exc
     except Exception as exc:  # noqa: BLE001 - transport boundary normalization.
         _application_error(context, normalize_application_error(exc))
-    if result.status != "success":
+    if result.status != "success" or result.publication_outcome == "conflict":
         raise click.exceptions.Exit(ExitCode.CASE_FAILED)
 
 
@@ -501,6 +507,34 @@ def _render_doctor(result: object) -> None:
     }
     for platform in result.platforms:
         click.echo(f"\n{platform.platform.capitalize()}")
+        if platform.prerequisites:
+            labels = {
+                "adb_cli": "ADB CLI",
+                "uiautomator2_runtime": "uiautomator2 dependency",
+                "adb_server": "Existing ADB server",
+                "device_connection": "Device connection/authorization",
+                "device_selection": "Device selection",
+                "application_identifier": "Application ID",
+                "application_installation": "Application installation",
+                "xcode_installation": "Full Xcode",
+                "xcode_developer_directory": "Xcode developer directory",
+                "appium_cli": "Appium CLI",
+                "appium_mac2_driver": "Appium Mac2 driver",
+                "appium_endpoint": "Appium endpoint",
+                "application_path": "Application path",
+                "bundle_identifier": "Bundle identifier",
+            }
+            click.echo("  Prerequisites")
+            for detail in platform.prerequisites:
+                click.echo(f"    {labels.get(detail.identifier, detail.identifier):28} {detail.status}")
+                if detail.status != "ready":
+                    click.echo(f"      {detail.message}")
+                if detail.status != "ready" and detail.action:
+                    click.echo(f"      Action: {detail.action}")
+                if detail.code:
+                    click.echo(f"      Code: {detail.code}")
+                for command in detail.commands:
+                    click.echo(f"      Run manually: {command}")
         click.echo("  Checks")
         for name in check_labels:
             detail = getattr(platform.checks, name)
@@ -598,3 +632,34 @@ def _context_operation(context: click.Context) -> str:
         parts.append(current.info_name or current.command.name or "unknown")
         current = current.parent
     return ".".join(reversed(parts)) or "fsq"
+
+
+@case_group.command(name="format")
+@click.argument("case_path", type=click.Path(path_type=Path))
+@click.option("--check", is_flag=True, help="Validate and check canonical formatting (default).")
+@click.option("--diff", "show_diff", is_flag=True, help="Preview the canonical formatting diff.")
+@click.option("--write", is_flag=True, help="Validate and atomically write canonical formatting.")
+@click.option("--json", "json_output", is_flag=True, help="Return structured static diagnostics and results.")
+@click.pass_context
+def case_format(context, case_path, check, show_diff, write, json_output):
+    if json_output:
+        context.obj["output"] = "json"
+    if sum((check, show_diff, write)) > 1:
+        raise click.UsageError("Choose only one of --check, --diff, or --write.")
+    result = format_case(CaseFormatRequest(current_directory=Path.cwd(), case_path=case_path, mode="write" if write else "diff" if show_diff else "check"))
+    if context.obj["output"] == "human":
+        label = "Invalid Case" if not result.valid else "Formatted" if result.changed else "Already canonical" if result.formatted else "Formatting required"
+        click.echo(f"{label}: {result.path}")
+        click.echo(f"Scope: {result.validation_scope}")
+        for warning in result.warnings:
+            click.echo(f"Warning: {warning}")
+        for diagnostic in result.diagnostics:
+            click.echo(f"{diagnostic.code}: {diagnostic.field_path} {diagnostic.message}")
+        if result.diff:
+            click.echo(result.diff, nl=False)
+    else:
+        _emit_terminal(context, result.model_dump(mode="json"))
+    if not result.valid:
+        raise click.exceptions.Exit(2)
+    if not result.formatted:
+        raise click.exceptions.Exit(1)

@@ -20,7 +20,7 @@ from fsq_agent.application.contracts import (
     WorkspaceRequest,
 )
 from fsq_agent.application.workspace import require_initialized_workspace
-from fsq_agent.case_dsl import FsqCaseLoader, FsqExecutableStepAdapter
+from fsq_agent.case_dsl import FsqCaseLoader, FsqCaseSerializer, FsqExecutableStepAdapter
 from fsq_agent.config import Settings, list_workspace_registry, load_workspace_platform_settings, validate_strict_core_settings
 from fsq_agent.core import ArtifactStore, HarnessFactory, RuntimeSecretStore
 from fsq_agent.execution import RunArtifactIndex, RunResultSummary, RunSource, RunStepCounts, allocate_run, collect_strict_lifecycle_cases, run_strict_lifecycle_case, transition_run
@@ -141,6 +141,7 @@ def execute_case_test(
             suggestion_path, candidate_case_path = _write_analysis_artifacts(
                 run_dir=run_dir,
                 source_case=case_path,
+                parsed_source=case,
                 source_platform=case.config.platform,
                 execution_status=status,
                 execution_summary=summary,
@@ -299,17 +300,26 @@ def _write_analysis_artifacts(
     execution_status: str,
     execution_summary: str,
     analysis: CaseSuggestionAnalysis,
+    parsed_source=None,
 ) -> tuple[Path, Path | None]:
     candidate_path = None
     candidate_status = "absent"
+    candidate_diagnostics = []
     if analysis.candidate_case_yaml is not None:
         proposed_path = run_dir / "candidate.fsq.yaml"
         try:
-            _validate_candidate(analysis.candidate_case_yaml, proposed_path, source_platform)
+            candidate = FsqCaseLoader().load_text(analysis.candidate_case_yaml, proposed_path)
+            source = parsed_source if parsed_source is not None else FsqCaseLoader().load_case(source_case)
+            if candidate.config.platform != source_platform:
+                raise ValueError("Candidate platform mismatch.")  # noqa: TRY301 - candidate rejection is reported below.
+            # Suggestions change commands; source metadata remains the stable authority.
+            candidate = candidate.model_copy(update={"config": source.config.model_copy(deep=True)})
+            content = FsqCaseSerializer(build_capability_registry(platform=source_platform).snapshot()).serialize(candidate).decode("utf-8")
         except (ConfigurationError, ValueError):
             candidate_status = "invalid"
+            candidate_diagnostics = [{"code": "case.invalid", "message": "Candidate failed static Case validation."}]
         else:
-            _atomic_write(proposed_path, analysis.candidate_case_yaml)
+            _atomic_write(proposed_path, content)
             candidate_path = proposed_path
             candidate_status = "available"
     suggestion_path = run_dir / "case-suggestions.json"
@@ -325,21 +335,13 @@ def _write_analysis_artifacts(
                 "suggestions": [dict(item) for item in analysis.suggestions],
                 "candidate_case_path": str(candidate_path) if candidate_path else None,
                 "candidate_case_status": candidate_status,
+                "candidate_diagnostics": candidate_diagnostics,
             },
             indent=2,
             ensure_ascii=False,
         ),
     )
     return suggestion_path, candidate_path
-
-
-def _validate_candidate(content: str, destination: Path, source_platform: str) -> None:
-    with tempfile.TemporaryDirectory(dir=destination.parent) as temporary_directory:
-        temporary_path = Path(temporary_directory) / destination.name
-        temporary_path.write_text(content, encoding="utf-8")
-        candidate = FsqCaseLoader().load_case(temporary_path)
-    if candidate.config.platform != source_platform:
-        raise ValueError("Candidate Case platform does not match the source Case.")
 
 
 def _atomic_write(path: Path, content: str) -> None:

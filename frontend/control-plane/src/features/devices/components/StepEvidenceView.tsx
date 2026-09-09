@@ -9,6 +9,7 @@ interface Props {
   stepId: string;
   kind: 'screen' | 'ui-tree';
   platform: PlatformId | null;
+  targetLabel?: string;
 }
 
 function preferred(artifacts: StepArtifact[], phase: 'before' | 'after') {
@@ -34,7 +35,7 @@ interface StepEvidenceState {
   message: string;
 }
 
-export function StepEvidenceView({ requestId, stepId, kind, platform }: Props) {
+export function StepEvidenceView({ requestId, stepId, kind, platform, targetLabel = 'selected target' }: Props) {
   const [cache] = useState(() => new Map<string, StepArtifactsResponse>());
   const [state, setState] = useState<StepEvidenceState>({ status: 'loading', requestId, stepId, payload: null, message: '' });
   const cacheKey = `${requestId}:${stepId}`;
@@ -75,7 +76,7 @@ export function StepEvidenceView({ requestId, stepId, kind, platform }: Props) {
     const shown = [before, after].filter((item): item is StepArtifact => Boolean(item?.contentBase64));
     if (!shown.length) return <div className="evidence-message" role="alert"><strong>Action screenshots unavailable</strong><p>{matching.map((item) => item.error).filter(Boolean).join(' ')}</p></div>;
     return wrap(<div className={`step-screenshot-comparison${platform === 'android' ? ' step-screenshot-comparison--android' : ''}`}>
-      {shown.map((artifact) => <figure key={artifact.phase} className="step-screenshot-card"><figcaption>{artifact.phase === 'before' ? 'Before' : 'After'}</figcaption><img src={`data:${artifact.mimeType};base64,${artifact.contentBase64}`} alt={`${artifact.phase} screenshot for selected Action`} /></figure>)}
+      {shown.map((artifact) => <figure key={artifact.phase} className="step-screenshot-card"><figcaption>{artifact.phase === 'before' ? 'Before' : 'After'}</figcaption><img src={`data:${artifact.mimeType};base64,${artifact.contentBase64}`} alt={(platform ?? "Platform") + " " + artifact.phase + " screenshot for " + targetLabel + ", selected Action " + (state.payload?.stepId ?? state.stepId)} /></figure>)}
     </div>);
   }
   if (!before?.content || !after?.content) {

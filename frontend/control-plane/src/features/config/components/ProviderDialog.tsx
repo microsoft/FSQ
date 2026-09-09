@@ -1,3 +1,4 @@
+import { Copy } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ApiErrorBody, GitHubDeviceFlowResponse } from '../../../api/types';
 import type { DeviceFlowPending } from '../hooks/useProviderConfig';
@@ -68,7 +69,7 @@ export function ProviderDialog(props: ProviderDialogProps) {
       <a ref={verificationRef} className="verification-link" data-dialog-initial href={flow.verificationUri} target="_blank" rel="noreferrer">Open GitHub verification</a>
       <div className="device-code-block">
         <span>User code</span><strong className="mono">{flow.userCode}</strong>
-        <button className="config-icon-button" type="button" aria-label="Copy user code" title="Copy user code" onClick={() => void copyCode()}>⧉</button>
+        <button className="config-icon-button" type="button" aria-label="Copy user code" title="Copy user code" onClick={() => void copyCode()}><Copy aria-hidden="true"/></button>
       </div>
       {copied && <p className="field-help" role="status">Code copied.</p>}
       <p className="field-help">Expires <time dateTime={flow.expiresAt}>{new Date(flow.expiresAt).toLocaleString()}</time></p>

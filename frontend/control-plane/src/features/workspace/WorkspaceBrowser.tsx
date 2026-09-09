@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { AlertCircle, FileText, Play, Plus, RefreshCw } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronRight, FileCode, FileText, Folder, FolderOpen, Play, RefreshCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { ContentTabs } from '../../shared/ContentTabs';
 import { controlPlaneClient, toApiError } from '../../api/controlPlaneClient';
 import type { ApiErrorBody, PlatformId, WorkspaceEntriesResponse, WorkspaceEntry, WorkspaceFileResponse } from '../../api/types';
 
 interface WorkspaceBrowserProps {
   workspaceName: string;
-  onRecordCase?: () => void;
   onReplayCase?: (platform: PlatformId, casePath: string) => void;
 }
 
@@ -52,7 +52,6 @@ function SourceViewer({ content, yaml }: { content: string; yaml: boolean }) {
 
   const lines = content.split(/\r?\n/);
   return <section className="cp-source-viewer cp-yaml-source" aria-label="Read-only YAML source">
-    <div className="cp-source-toolbar"><div className="cp-source-language"><span>YAML</span><span>{lines.length} lines</span></div></div>
     <div className="cp-source-scroll">
       <ol className="cp-source-lines">
         {lines.map((line, index) => <li className="cp-source-line" key={index}>
@@ -86,8 +85,8 @@ function TreeEntry({ entry, depth, expanded, childrenByPath, loadingPaths, selec
       onClick={() => isDirectory ? onDirectory(entry.path) : onFile(entry.path)}
     >
       {isDirectory
-        ? <><span className="cp-tree-chevron" aria-hidden="true">{isExpanded ? '⌄' : '›'}</span><span className="cp-tree-type-icon cp-tree-type-icon--folder" aria-hidden="true">■</span></>
-        : <span className={`cp-tree-type-icon ${isYamlFile(entry.name) ? 'cp-tree-type-icon--yaml' : 'cp-tree-type-icon--file'}`} aria-hidden="true">{isYamlFile(entry.name) ? '◇' : '▧'}</span>}
+        ? <><span className="cp-tree-chevron" aria-hidden="true">{isExpanded ? <ChevronDown/> : <ChevronRight/>}</span><span className="cp-tree-type-icon cp-tree-type-icon--folder" aria-hidden="true">{isExpanded ? <FolderOpen/> : <Folder/>}</span></>
+        : <span className={`cp-tree-type-icon ${isYamlFile(entry.name) ? 'cp-tree-type-icon--yaml' : 'cp-tree-type-icon--file'}`} aria-hidden="true">{isYamlFile(entry.name) ? <FileCode/> : <FileText/>}</span>}
       <span>{entry.name}</span>
     </button>
     {isDirectory && isExpanded && <ul>
@@ -98,7 +97,7 @@ function TreeEntry({ entry, depth, expanded, childrenByPath, loadingPaths, selec
   </li>;
 }
 
-export function WorkspaceBrowser({ workspaceName, onRecordCase, onReplayCase }: WorkspaceBrowserProps) {
+export function WorkspaceBrowser({ workspaceName, onReplayCase }: WorkspaceBrowserProps) {
   const markdownPanelId = useId();
   const markdownPreviewTabId = useId();
   const markdownCodeTabId = useId();
@@ -201,7 +200,7 @@ export function WorkspaceBrowser({ workspaceName, onRecordCase, onReplayCase }: 
   return <section className="cp-workspace-browser" aria-label={`Workspace files for ${workspaceName}`}>
     <div className="cp-browser-grid">
       <section className="cp-tree-pane" aria-label="Workspace file tree">
-        <header className="cp-tree-header"><span aria-hidden="true">◧</span><h2>Files</h2><button className="cp-tree-add-case" type="button" aria-label="Record new case" title="Record new case" onClick={onRecordCase}><Plus aria-hidden="true" /></button></header>
+        <header className="cp-tree-header"><FolderOpen aria-hidden="true"/><h2>Files</h2></header>
         <div className="cp-tree-content">
           {treeError && <div className="cp-inline-error"><AlertCircle aria-hidden="true" /><span><strong>{treeError.message}</strong><small>{treeError.action}</small></span><button className="cp-icon-button" type="button" aria-label="Retry workspace files" onClick={loadRoot}><RefreshCw aria-hidden="true" /></button></div>}
           {!root && !treeError && <p className="cp-pane-state">Loading workspace files…</p>}
@@ -214,20 +213,12 @@ export function WorkspaceBrowser({ workspaceName, onRecordCase, onReplayCase }: 
         {fileLoading && <p className="cp-pane-state">Loading file…</p>}
         {fileError && <div className="cp-file-empty cp-file-empty--error"><AlertCircle aria-hidden="true" /><strong>{fileError.message}</strong><span>{fileError.action}</span>{requestedFilePath && <button className="button" type="button" onClick={() => onFile(requestedFilePath)}><RefreshCw aria-hidden="true" />Retry file</button>}</div>}
         {file && <>
-          <div className="cp-file-pathbar" aria-label="File path">
-            <span>{workspaceName}</span>
-            {file.path.split('/').slice(0, -1).map((segment) => <span key={segment}>{' / '}{segment}</span>)}
-            <strong>{' / '}{file.name}</strong>
-          </div>
+          <header className="cp-file-header">
+            <div><div className="cp-file-breadcrumb" aria-label="File path"><span>{workspaceName} / {file.path.split('/').slice(0,-1).join(' / ')}</span><strong> / {file.name}</strong></div><small>Read only · {file.lineCount} lines · {formatBytes(file.size)}</small></div>
+            {selectedReplayContext && <button className="button button--primary button--compact cp-replay-case" type="button" onClick={() => onReplayCase?.(selectedReplayContext.platform, selectedReplayContext.casePath)}><Play aria-hidden="true"/>Replay Case</button>}
+          </header>
           <div className="cp-file-panel">
-            <div className="cp-file-toolbar">
-              {file.presentation === 'markdown'
-                ? <div className="cp-file-tabs" role="tablist" aria-label="Markdown presentation"><button id={markdownPreviewTabId} type="button" role="tab" aria-selected={fileTab === 'preview'} aria-controls={markdownPanelId} onClick={() => setFileTab('preview')}>Preview</button><button id={markdownCodeTabId} type="button" role="tab" aria-selected={fileTab === 'code'} aria-controls={markdownPanelId} onClick={() => setFileTab('code')}>Code</button></div>
-                : <span className="cp-file-mode">Code</span>}
-              {selectedReplayContext
-                ? <button className="button cp-replay-case" type="button" onClick={() => onReplayCase?.(selectedReplayContext.platform, selectedReplayContext.casePath)}><Play aria-hidden="true" />Replay Case</button>
-                : <span>{file.lineCount} lines · {formatBytes(file.size)}</span>}
-            </div>
+            {file.presentation==='markdown' && <ContentTabs label="Markdown presentation" className="cp-file-tabs" value={fileTab} onChange={setFileTab} items={[{id:'preview',label:'Preview',tabId:markdownPreviewTabId,panelId:markdownPanelId},{id:'code',label:'Code',tabId:markdownCodeTabId,panelId:markdownPanelId}]}/>}
             <div className="cp-file-content" id={file.presentation === 'markdown' ? markdownPanelId : undefined} role={file.presentation === 'markdown' ? 'tabpanel' : undefined} aria-labelledby={file.presentation === 'markdown' ? (fileTab === 'preview' ? markdownPreviewTabId : markdownCodeTabId) : undefined}>
               {file.presentation === 'markdown' && fileTab === 'preview'
                 ? <article className="cp-markdown"><ReactMarkdown skipHtml>{file.content}</ReactMarkdown></article>

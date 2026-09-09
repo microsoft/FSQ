@@ -37,7 +37,7 @@ from fsq_agent.models import ExecutableStep, FsqCase, RunnerEvent, RunnerStepRes
 
 from ._cases import build_strict_registry_context, resolve_case
 from ._evidence import EvidenceProjection, configured_secret_values, safe_exception_message
-from ._readiness import require_provider
+from ._readiness import require_android_preflight, require_macos_preflight, require_provider
 from ._state import ControlPlaneState, TaskCancelledError
 from ._targets import validate_target
 
@@ -101,9 +101,15 @@ def prepare_run(*, request_id: str, settings: Settings, body: dict[str, Any]) ->
     if not isinstance(config_path, Path):
         raise TypeError("Selected workspace platform configuration is unavailable.")
     platform_revision = workspace_revision(config_path)
-    validate_target(settings, target_id)
+    if platform not in {"macos", "android"}:
+        validate_target(settings, target_id)
+    elif platform == "macos" and target_id != "macos-app":
+        raise ValueError("Select the configured macOS application target.")
     run_settings = settings.model_copy(deep=True)
     if platform == "android":
+        from fsq_agent.models import AndroidDevice
+
+        AndroidDevice(serial=target_id, state="device")
         run_settings.harness.android.serial = target_id
 
     if mode == "explore":
@@ -112,6 +118,8 @@ def prepare_run(*, request_id: str, settings: Settings, body: dict[str, Any]) ->
             raise ValueError("Explore runs require a non-empty goal.")
         if body.get("casePath") is not None:
             raise ValueError("Explore runs must not include casePath.")
+        require_macos_preflight(run_settings, "explore")
+        require_android_preflight(run_settings, "explore")
         validate_runtime_settings(run_settings)
         require_provider(run_settings)
         return PreparedRun(
@@ -146,6 +154,10 @@ def prepare_run(*, request_id: str, settings: Settings, body: dict[str, Any]) ->
         _preflight_steps(steps, snapshot, secret_store)
         resolved_steps[lifecycle_path.resolve()] = steps
         requires_ai = requires_ai or steps_require_provider(steps, snapshot, provider_required)
+    require_macos_preflight(run_settings, "strict", requires_provider=requires_ai)
+    if platform == "android":
+        run_settings.harness.android.app_id = _android_app_id(run_settings, case)
+        require_android_preflight(run_settings, "strict", requires_provider=requires_ai)
     validate_strict_core_settings(run_settings, requires_ai_assertion=requires_ai)
     if requires_ai:
         require_provider(run_settings)
@@ -243,7 +255,12 @@ async def _run_explore(prepared: PreparedRun, state: ControlPlaneState) -> None:
             request_id,
             status=result.status,
             summary=projection.safe_text(result.verification.summary),
-            result={"status": result.status, "durationMs": result.duration_ms},
+            result={
+                "status": result.status,
+                "durationMs": result.duration_ms,
+                "suggestedCaseName": execution.recording.case_name if execution.recording else None,
+                "recordingDraft": execution.recording.draft if execution.recording else None,
+            },
             report_available=result.report.path.exists(),
         )
     except asyncio.CancelledError:

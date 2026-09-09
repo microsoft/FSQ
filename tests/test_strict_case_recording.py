@@ -143,7 +143,7 @@ def test_record_dynamic_run_writes_strict_yaml_with_runtime_secret_and_wait(tmp_
     assert recording.status == "recorded"
     assert recording.validation_status == "passed"
     docs = list(yaml.safe_load_all((run_dir / "recorded.fsq.yaml").read_text(encoding="utf-8")))
-    assert docs[0]["properties"]["recording"]["required_runtime_secret_names"] == ["TEST_ACCOUNT_PASSWORD"]
+    assert json.loads((run_dir / "recording.json").read_text())["required_runtime_secret_names"] == ["TEST_ACCOUNT_PASSWORD"]
     assert docs[1] == [
         {"inputText": {"text": "TEST_ACCOUNT_PASSWORD", "textType": "runtimeSecret", "target": "Password field"}},
         {"waitMs": {"duration_ms": 1, "reason": "settle"}},
@@ -351,7 +351,7 @@ def test_record_dynamic_run_skips_observation_capabilities(tmp_path: Path) -> No
 
     assert recording.status == "recorded"
     docs = list(yaml.safe_load_all((run_dir / "recorded.fsq.yaml").read_text(encoding="utf-8")))
-    assert docs[0]["properties"]["recording"]["warnings"] == []
+    assert list(recording.warnings) == []
     assert docs[1] == [{"tapOn": {"target": "Login"}}]
     assert recording.skipped_tool_calls == ({"tool_name": "ui_snapshot", "reason": "observation tool is not recorded"},)
     manifest = json.loads((run_dir / "recording.json").read_text(encoding="utf-8"))
@@ -510,13 +510,13 @@ def test_record_dynamic_goal_publishes_validated_case_to_platform_cases_dir(tmp_
         publication_directory=settings.cases.dir,
     )
 
-    expected_path = settings.cases.dir / "goal-recording-run.fsq.yaml"
+    expected_path = settings.cases.dir / "case-5c6a5d06b26b468e9b799c1cfb18d9a54c183fcb368408f798977784af48a8d0.fsq.yaml"
     assert recording.status == "recorded"
     assert recording.validation_status == "passed"
     assert recording.published_case_path == expected_path
     assert expected_path.read_bytes() == (run_dir / "recorded.fsq.yaml").read_bytes()
     docs = list(yaml.safe_load_all(expected_path.read_text(encoding="utf-8")))
-    assert docs[0]["name"] == "goal-recording-run"
+    assert docs[0]["name"] == recording.case_name
     assert docs[0]["description"] == "Search the web"
     manifest = json.loads((run_dir / "recording.json").read_text(encoding="utf-8"))
     assert manifest["published_case_path"] == str(expected_path)
@@ -544,29 +544,18 @@ def test_record_dynamic_goal_keeps_validated_case_run_local_when_publication_is_
     assert manifest["published_case_path"] is None
 
 
-def test_record_dynamic_goal_atomically_overwrites_published_case_with_valid_draft(tmp_path: Path) -> None:
+def test_record_dynamic_goal_preserves_conflicting_case_with_valid_draft(tmp_path: Path) -> None:
     run_dir, task, result, settings = _recordable_web_run(tmp_path, status="failed")
-    published_path = settings.cases.dir / "goal-recording-run.fsq.yaml"
-    published_path.parent.mkdir(parents=True)
-    published_path.write_text("stale", encoding="utf-8")
-
-    recording = _record_with_service(
-        run_dir=run_dir,
-        task=task,
-        result=result,
-        settings=settings,
-        allow_failure=True,
-        publication_directory=settings.cases.dir,
-    )
-
+    settings.cases.dir.mkdir(parents=True)
+    published = settings.cases.dir / "stable.fsq.yaml"
+    published.write_text("existing")
+    recording = _record_with_service(run_dir=run_dir, task=task, result=result, settings=settings, allow_failure=True, case_name="stable", publication_directory=settings.cases.dir)
     assert recording.status == "recorded"
     assert recording.draft is True
-    assert recording.published_case_path == published_path
-    assert published_path.read_bytes() == (run_dir / "recorded.fsq.yaml").read_bytes()
-    docs = list(yaml.safe_load_all(published_path.read_text(encoding="utf-8")))
-    assert docs[0]["name"] == "goal-recording-run"
-    assert docs[0]["description"] == "Search the web"
-    assert docs[0]["properties"]["recording"]["draft"] is True
+    assert recording.publication_outcome == "conflict"
+    assert recording.published_case_path is None
+    assert published.read_text() == "existing"
+    assert recording.recorded_case_path.is_file()
 
 
 @pytest.mark.parametrize("planning_reference_text", [None, "   "])
@@ -581,7 +570,7 @@ def test_record_dynamic_goal_falls_back_to_task_name_when_reference_is_blank(
 
     assert recording.status == "recorded"
     docs = list(yaml.safe_load_all((run_dir / "recorded.fsq.yaml").read_text(encoding="utf-8")))
-    assert docs[0]["name"] == "goal-recording-run"
+    assert docs[0]["name"] == recording.case_name
     assert docs[0]["description"] == "Fallback goal"
 
 
@@ -611,8 +600,8 @@ def test_record_dynamic_raw_case_does_not_publish(tmp_path: Path) -> None:
     assert recording.published_case_path is None
     assert not settings.cases.dir.exists()
     docs = list(yaml.safe_load_all((run_dir / "recorded.fsq.yaml").read_text(encoding="utf-8")))
-    assert docs[0]["name"] == "Recorded: Search"
-    assert docs[0]["description"] == "Generated from dynamic run goal-recording-run."
+    assert docs[0]["name"] == recording.case_name
+    assert docs[0]["description"] == task.description
     manifest = json.loads((run_dir / "recording.json").read_text(encoding="utf-8"))
     assert manifest["published_case_path"] is None
 
@@ -623,7 +612,7 @@ def test_record_dynamic_goal_does_not_publish_when_generated_case_validation_fai
     def fail_validation(*_args, **_kwargs):
         raise ConfigurationError("invalid generated case")
 
-    monkeypatch.setattr("fsq_agent.execution.recording.FsqExecutableStepAdapter.to_executable_steps", fail_validation)
+    monkeypatch.setattr("fsq_agent.execution.recording.FsqCaseSerializer.serialize", fail_validation)
 
     recording = _record_with_service(
         run_dir=run_dir,
@@ -641,14 +630,15 @@ def test_record_dynamic_goal_does_not_publish_when_generated_case_validation_fai
 
 def test_record_dynamic_goal_publication_failure_preserves_recording_and_existing_case(tmp_path: Path, monkeypatch) -> None:
     run_dir, task, result, settings = _recordable_web_run(tmp_path)
-    published_path = settings.cases.dir / "goal-recording-run.fsq.yaml"
+    published_path = settings.cases.dir / "case-5c6a5d06b26b468e9b799c1cfb18d9a54c183fcb368408f798977784af48a8d0.fsq.yaml"
     published_path.parent.mkdir(parents=True)
+    published_path = published_path.with_name("unrelated.fsq.yaml")
     published_path.write_text("existing", encoding="utf-8")
 
     def fail_replace(_source: Path, _destination: Path) -> None:
         raise OSError("replace failed")
 
-    monkeypatch.setattr("fsq_agent.execution.recording.os.replace", fail_replace)
+    monkeypatch.setattr("fsq_agent.execution.recording.os.link", fail_replace)
 
     recording = _record_with_service(
         run_dir=run_dir,
@@ -663,9 +653,37 @@ def test_record_dynamic_goal_publication_failure_preserves_recording_and_existin
     assert recording.published_case_path is None
     assert published_path.read_text(encoding="utf-8") == "existing"
     assert list(settings.cases.dir.iterdir()) == [published_path]
-    assert any("publish" in warning.lower() for warning in recording.warnings)
+    assert any("publication" in warning.lower() for warning in recording.warnings)
     manifest = json.loads((run_dir / "recording.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "recorded"
     assert manifest["validation_status"] == "passed"
     assert manifest["published_case_path"] is None
     assert manifest["warnings"] == list(recording.warnings)
+
+
+def test_same_actions_across_runs_have_identical_case_bytes(tmp_path: Path) -> None:
+    first_dir, task, result, settings = _recordable_web_run(tmp_path)
+    first = _record_with_service(run_dir=first_dir, task=task, result=result, settings=settings)
+    second_dir = first_dir.with_name("different-run")
+    second_dir.mkdir()
+    (second_dir / "events.jsonl").write_bytes((first_dir / "events.jsonl").read_bytes().replace(b"goal-recording-run", b"different-run"))
+    second_result = result.model_copy(update={"report": result.report.model_copy(update={"run_id": "different-run"})})
+    second = _record_with_service(run_dir=second_dir, task=task.model_copy(update={"id": "other-task"}), result=second_result, settings=settings)
+    assert first.recorded_case_path.read_bytes() == second.recorded_case_path.read_bytes()
+    assert first.case_name == second.case_name
+    assert "source_run_id" not in first.recorded_case_path.read_text()
+    assert json.loads(second.recording_path.read_text())["source_run_id"] == "different-run"
+
+
+def test_publication_rejection_preserves_candidate_and_metadata(tmp_path: Path) -> None:
+    run_dir, task, result, settings = _recordable_web_run(tmp_path)
+    settings.cases.dir.mkdir(parents=True)
+    outside = tmp_path / "outside.fsq.yaml"
+    outside.write_text("untouched")
+    (settings.cases.dir / "stable.fsq.yaml").symlink_to(outside)
+    recording = _record_with_service(run_dir=run_dir, task=task, result=result, settings=settings, case_name="stable", publication_directory=settings.cases.dir)
+    assert recording.status == "recorded"
+    assert recording.recorded_case_path.is_file()
+    assert recording.publication_outcome == "failed"
+    assert json.loads(recording.recording_path.read_text())["publication_outcome"] == "failed"
+    assert outside.read_text() == "untouched"
