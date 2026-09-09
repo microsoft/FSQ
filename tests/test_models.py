@@ -97,10 +97,10 @@ def test_agent_runtime_settings_defaults_to_safe_offline_mode() -> None:
     assert settings.prompt.agent_template_path is None
     assert settings.prompt.task_template_path is None
     assert settings.prompt.variables == {}
-    assert settings.context_trimming.enabled is True
-    assert settings.context_trimming.max_tool_output_chars == 30000
     assert settings.local_tool_output.always_write_artifact is True
+    assert settings.local_tool_output.recent_inline_output_count == 3
     assert settings.local_tool_output.full_output_max_chars == 30000
+    assert settings.local_tool_output.total_inline_output_max_chars == 60000
 
 
 def test_harness_settings_default_to_android_uiautomator2() -> None:
@@ -184,6 +184,18 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
 def test_local_tool_output_rejects_artifact_subdir_escape() -> None:
     with pytest.raises(ValueError, match="artifact_subdir"):
         LocalToolOutputSettings(artifact_subdir="../outside")
+
+
+@pytest.mark.parametrize("field", ["full_output_max_chars", "total_inline_output_max_chars"])
+def test_local_tool_output_rejects_nonpositive_character_budgets(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        LocalToolOutputSettings(**{field: 0})
+
+
+def test_local_tool_output_allows_no_recent_inline_outputs() -> None:
+    settings = LocalToolOutputSettings(recent_inline_output_count=0)
+
+    assert settings.recent_inline_output_count == 0
 
 
 def test_page_knowledge_page_uses_semantic_identifiers_and_reference_locators() -> None:

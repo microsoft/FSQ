@@ -18,24 +18,15 @@ class AgentSettings(BaseModel):
     step_timeout_seconds: int = Field(default=60, ge=1)
 
 
-class ContextTrimmingSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    recent_turns: int = Field(default=2, ge=1)
-    max_tool_output_chars: int = Field(default=30000, ge=1)
-    preview_chars: int = Field(default=1000, ge=0)
-    trimmable_tools: list[str] = Field(default_factory=list)
-
-
 class LocalToolOutputSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifact_enabled: bool = True
     always_write_artifact: bool = True
     artifact_subdir: str = "artifacts/tools"
-    recent_full_output_count: int = Field(default=3, ge=0)
+    recent_inline_output_count: int = Field(default=3, ge=0)
     full_output_max_chars: int = Field(default=30000, ge=1)
+    total_inline_output_max_chars: int = Field(default=60000, ge=1)
     historical_output_mode: Literal["artifact_reference"] = "artifact_reference"
     historical_preview_chars: int = Field(default=1000, ge=0)
     model_response_max_chars: int = Field(default=4000, ge=500)
@@ -253,7 +244,6 @@ class AgentRuntimeSettings(BaseModel):
     _github_token: dict[str, Any] | None = PrivateAttr(default=None)
     _provider_token: dict[str, Any] | None = PrivateAttr(default=None)
     _user_config_root: Path | None = PrivateAttr(default=None)
-    _context_trimming: ContextTrimmingSettings = PrivateAttr(default_factory=ContextTrimmingSettings)
     _local_tool_output: LocalToolOutputSettings = PrivateAttr(default_factory=LocalToolOutputSettings)
 
     @property
@@ -303,14 +293,6 @@ class AgentRuntimeSettings(BaseModel):
     @user_config_root.setter
     def user_config_root(self, value: Path | None) -> None:
         self._user_config_root = value
-
-    @property
-    def context_trimming(self) -> ContextTrimmingSettings:
-        return self._context_trimming
-
-    @context_trimming.setter
-    def context_trimming(self, value: ContextTrimmingSettings | dict[str, Any]) -> None:
-        self._context_trimming = ContextTrimmingSettings.model_validate(value)
 
     @property
     def local_tool_output(self) -> LocalToolOutputSettings:

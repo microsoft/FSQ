@@ -15,7 +15,7 @@ from fsq_agent.adapters.coding_agent._harness_tools import HarnessToolAdapter
 from fsq_agent.agent._pre_plan import build_pre_plan_input
 from fsq_agent.agent._prompt import PromptModelBuilder, PromptRenderer
 from fsq_agent.agent._verification_task import VerificationEvidenceBuilder
-from fsq_agent.agent_engine import AgentEvent, AgentRequest, AgentResult, EngineError, ModelRequest, ModelResult, ToolCall, ToolInputFailure, ToolOutputEntry, ToolOutputTrimSettings
+from fsq_agent.agent_engine import AgentEvent, AgentRequest, AgentResult, EngineError, ModelRequest, ModelResult, ToolCall, ToolInputFailure, ToolOutputEntry
 from fsq_agent.config import Settings
 from fsq_agent.models import (
     AgentFinalOutput,
@@ -587,10 +587,11 @@ def test_runtime_builds_step_results_from_structured_pre_plan() -> None:
 }
 """
 
-    steps = runtime._build_pre_plan_step_results(final_output, duration_ms=123)
+    steps = runtime._build_pre_plan_step_results(final_output)
 
     assert [step.step_id for step in steps] == [1, 2]
     assert [step.status for step in steps] == ["success", "adjusted"]
+    assert [step.duration_ms for step in steps] == [0, 0]
     assert steps[0].tool_name == "pre_plan"
     assert "Browser is open" in steps[0].actual_outcome
     assert "Used keyboard shortcut" in steps[1].actual_outcome
@@ -1247,7 +1248,7 @@ def test_verification_evidence_builder_does_not_attach_images_from_paths(tmp_pat
     assert "visual_artifacts" not in model_input
 
 
-def test_runtime_builds_neutral_request_with_tool_output_trimming(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runtime_builds_neutral_request_with_one_tool_output_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     settings = Settings(agent_runtime=AgentRuntimeSettings())
     runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
@@ -1256,8 +1257,10 @@ def test_runtime_builds_neutral_request_with_tool_output_trimming(monkeypatch: p
 
     assert request.tracing_enabled is False
     input_filter = request.tool_output_filter
-    assert input_filter.recent_tool_outputs == 3
-    assert request.trimming == ToolOutputTrimSettings(recent_turns=2, max_output_chars=30000, preview_chars=1000)
+    assert input_filter.recent_inline_outputs == 3
+    assert input_filter.max_output_chars == 30000
+    assert input_filter.max_total_inline_chars == 60000
+    assert not hasattr(request, "trimming")
 
 
 def test_runtime_builds_run_config_enables_sdk_tracing_with_openai_export_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1286,37 +1289,54 @@ def test_provider_session_preserves_azure_connection_values_for_neutral_access()
     assert not hasattr(session, "create_agents_provider")
 
 
-def test_runtime_tool_count_filter_keeps_small_recent_outputs_and_trims_large_outputs() -> None:
-    settings = Settings(agent_runtime=AgentRuntimeSettings())
+def test_runtime_tool_count_filter_keeps_only_three_small_recent_outputs(tmp_path: Path) -> None:
+    output_settings = OutputSettings()
+    output_settings.runs_dir = tmp_path / "runs"
+    settings = Settings(agent_runtime=AgentRuntimeSettings(), output=output_settings)
     runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
-    input_filter = _test_request(runtime).tool_output_filter
-    old_output = "old-output " * 4000
-    recent_output = "recent-output " * 4000
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     entries = (
-        ToolOutputEntry(1, "1", "read_file", 1, old_output),
-        ToolOutputEntry(3, "2", "read_file", 1, "recent 1"),
-        ToolOutputEntry(5, "3", "read_file", 1, "recent 2"),
-        ToolOutputEntry(7, "4", "read_file", 1, recent_output),
+        ToolOutputEntry(1, "1", "read_file", "old output"),
+        ToolOutputEntry(3, "2", "read_file", "recent 1"),
+        ToolOutputEntry(5, "3", "read_file", "recent 2"),
+        ToolOutputEntry(7, "4", "read_file", "recent 3"),
     )
 
     filtered = input_filter(entries)
 
-    assert filtered[1].startswith("[Trimmed historical read_file output")
+    assert filtered[1].startswith("[Historical read_file output stored as artifact.")
+    assert "old output" not in filtered[1]
     assert 3 not in filtered
     assert 5 not in filtered
-    assert filtered[7].startswith("[Trimmed historical read_file output")
+    assert 7 not in filtered
+
+
+def test_runtime_tool_count_filter_enforces_total_inline_budget(tmp_path: Path) -> None:
+    runtime_settings = AgentRuntimeSettings()
+    runtime_settings.local_tool_output = LocalToolOutputSettings(recent_inline_output_count=3, total_inline_output_max_chars=60000)
+    output_settings = OutputSettings()
+    output_settings.runs_dir = tmp_path / "runs"
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=runtime_settings, output=output_settings), _EmptyToolFactory())
+    input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
+    entries = tuple(ToolOutputEntry(index, str(index), "ui_snapshot", character * 25000) for index, character in enumerate("abc", start=1))
+
+    filtered = input_filter(entries)
+
+    assert filtered[1].startswith("[Historical ui_snapshot output stored as artifact.")
+    assert 2 not in filtered
+    assert 3 not in filtered
 
 
 @pytest.mark.parametrize(("tool_name", "artifact_label"), [("harness_source", "harness_source"), ("", "runtime_tool")])
 def test_runtime_tool_count_filter_writes_artifact_for_trimmed_history(tmp_path: Path, tool_name: str, artifact_label: str) -> None:
     runtime_settings = AgentRuntimeSettings()
-    runtime_settings.local_tool_output = LocalToolOutputSettings(recent_full_output_count=0)
+    runtime_settings.local_tool_output = LocalToolOutputSettings(recent_inline_output_count=0)
     output_settings = OutputSettings()
     output_settings.runs_dir = tmp_path / "runs"
     settings = Settings(agent_runtime=runtime_settings, output=output_settings)
     runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
-    entries = (ToolOutputEntry(1, "1", tool_name, 1, "<node>" * 7000),)
+    entries = (ToolOutputEntry(1, "1", tool_name, "<node>" * 7000),)
 
     filtered = input_filter(entries)
 
@@ -1350,8 +1370,15 @@ async def test_file_helper_context_filter_preserves_complete_artifact(tmp_path: 
     assert json.loads(json.loads(original_artifact)["content"])["output"] == content
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
 
-    input_filter((ToolOutputEntry(1, "large-read", "read_file", 1, output),))
+    entries = (
+        ToolOutputEntry(1, "large-read", "read_file", output),
+        ToolOutputEntry(2, "recent-1", "read_file", "recent 1"),
+        ToolOutputEntry(3, "recent-2", "read_file", "recent 2"),
+        ToolOutputEntry(4, "recent-3", "read_file", "recent 3"),
+    )
+    filtered = input_filter(entries)
 
+    assert str(artifact_path) in filtered[1]
     assert await asyncio.to_thread(artifact_path.read_text, encoding="utf-8") == original_artifact
     recovery = json.loads(await search_tool.invoke(ToolCall(name="search_artifact", arguments={"artifact_path": str(artifact_path), "query": "TAIL", "max_matches": 1}, call_id="recover-tail")))
     assert recovery["result"]["output"]["matches"]
@@ -1371,11 +1398,11 @@ def test_runtime_input_filter_trims_recent_large_ui_snapshot_to_artifact(tmp_pat
             "result": {"output": {"xml": '<node password="false">' + ("visible text " * 5000) + "</node>"}},
         }
     )
-    entries = (ToolOutputEntry(1, "snapshot", "ui_snapshot", 1, snapshot_output),)
+    entries = (ToolOutputEntry(1, "snapshot", "ui_snapshot", snapshot_output),)
 
     filtered = input_filter(entries)
 
-    assert filtered[1].startswith("[Trimmed historical ui_snapshot output")
+    assert filtered[1].startswith("[Historical ui_snapshot output stored as artifact.")
     assert "Artifact path:" in filtered[1]
     assert len(filtered[1]) < len(snapshot_output)
     assert list((tmp_path / "runs" / "run-1" / "artifacts" / "tools").glob("*.json"))
@@ -1471,7 +1498,7 @@ def test_runtime_input_filter_leaves_plain_screenshot_outputs_text_only(tmp_path
     settings = Settings(agent_runtime=AgentRuntimeSettings(), output=output_settings)
     runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
-    entries = (ToolOutputEntry(1, "img", "harness_screenshot", 1, f"Screenshot saved successfully to: {screenshot_path}"),)
+    entries = (ToolOutputEntry(1, "img", "harness_screenshot", f"Screenshot saved successfully to: {screenshot_path}"),)
 
     filtered = input_filter(entries)
 
@@ -1497,7 +1524,7 @@ def test_runtime_input_filter_does_not_attach_submitted_visual_assertion_image(t
             "screenshot_path": str(screenshot_path),
         }
     )
-    entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", 1, output),)
+    entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", output),)
 
     filtered = input_filter(entries)
 
@@ -1517,7 +1544,7 @@ def test_runtime_input_filter_rejects_screenshot_images_outside_output_root(tmp_
     runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
     input_filter = _test_request(runtime, run_id="run-1").tool_output_filter
     output = json.dumps({"type": "visual_assertion_submission", "assertion_id": "key-action-7", "prompt": "Verify the logo is visible.", "screenshot_path": str(screenshot_path)})
-    entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", 1, output),)
+    entries = (ToolOutputEntry(1, "visual", "submit_visual_assertion", output),)
 
     filtered = input_filter(entries)
 

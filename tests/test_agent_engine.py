@@ -4,6 +4,7 @@
 import ast
 import asyncio
 import builtins
+import gc
 import importlib
 import json
 from copy import deepcopy
@@ -29,7 +30,6 @@ from fsq_agent.agent_engine import (
     ToolBinding,
     ToolCall,
     ToolOutputEntry,
-    ToolOutputTrimSettings,
     create_agent_engine,
     create_model_provider,
 )
@@ -174,6 +174,69 @@ def _sse_response(events: list[dict]) -> httpx.Response:
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
 
+class _ChunkedSseStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.iterator_closed = asyncio.Event()
+        self.response_closed = asyncio.Event()
+
+    async def __aiter__(self):
+        try:
+            for chunk in self.chunks:
+                yield chunk
+                await asyncio.sleep(0)
+        finally:
+            self.iterator_closed.set()
+
+    async def aclose(self) -> None:
+        self.response_closed.set()
+
+
+def test_stream_consumes_terminal_event_before_event_loop_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = asyncio.new_event_loop()
+    loop_errors = []
+    loop.set_exception_handler(lambda owner, context: loop_errors.append(context))
+
+    async def exercise():
+        response = _response()
+        completed = {"type": "response.completed", "sequence_number": 0, "response": response}
+        stream = _ChunkedSseStream(
+            [
+                f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
+                b"data: [DONE]\n\n",
+            ]
+        )
+        provider, _client = _provider(
+            monkeypatch,
+            lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream),
+        )
+        try:
+            result = await create_agent_engine().run(
+                provider.get_model("test-model"),
+                AgentRequest(name="stream", instructions="test", input="test", stream=True),
+            )
+            return result, stream
+        finally:
+            await provider.aclose()
+
+    try:
+        result, stream = loop.run_until_complete(exercise())
+        assert result.final_output == "done"
+        assert stream.iterator_closed.is_set()
+        assert stream.response_closed.is_set()
+        gc.collect()
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        assert not asyncio.all_tasks(loop)
+        assert loop_errors == []
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+
+
 @pytest.mark.parametrize("stream", [False, True])
 async def test_agent_tool_loop_output_contract_events_and_context(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
     payloads: list[dict] = []
@@ -213,7 +276,6 @@ async def test_agent_tool_loop_output_contract_events_and_context(monkeypatch: p
         tools=(tool,),
         output=OutputContract(name="FinalOutput", schema=_FinalOutput.model_json_schema(), parse=_FinalOutput.model_validate_json),
         stream=stream,
-        trimming=ToolOutputTrimSettings(max_output_chars=10, preview_chars=4),
         tool_output_filter=trim,
     )
     try:
@@ -229,7 +291,6 @@ async def test_agent_tool_loop_output_contract_events_and_context(monkeypatch: p
             assert payload["text"]["format"]["name"] == "final_output"
             assert payload["include"] == []
         assert entries[0].call_id == "call_test"
-        assert entries[0].user_turn == 1
         assert entries[0].output == "original tool output"
         output = next(item for item in payloads[1]["input"] if item.get("type") == "function_call_output")
         assert output["call_id"] == "call_test"
@@ -562,12 +623,11 @@ def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
         observed.extend(entries)
         return {entries[-1].entry_id: "new bounded output"}
 
-    bridge = ModelInputFilter(ToolOutputTrimSettings(recent_turns=1, max_output_chars=100, preview_chars=10), filter_outputs)
+    bridge = ModelInputFilter(filter_outputs)
     result = bridge(ModelInputData(input=items, instructions="instructions"))
 
-    assert observed[0].output.startswith("[Trimmed:")
+    assert observed[0].output == original[2]["output"]
     assert observed[1].output == original[6]["output"]
-    assert [entry.user_turn for entry in observed] == [1, 2]
     assert [entry.call_id for entry in observed] == ["old-call", "new-call"]
     assert result.input[4] == original[4]
     assert result.input[6] == {**original[6], "output": "new bounded output"}
@@ -579,7 +639,7 @@ def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
 def test_context_bridge_rejects_replacing_non_tool_input() -> None:
     from fsq_agent.agent_engine._context import ModelInputData, ModelInputFilter
 
-    bridge = ModelInputFilter(None, lambda entries: {0: "replaced user content"})
+    bridge = ModelInputFilter(lambda entries: {0: "replaced user content"})
     with pytest.raises(EngineError, match="known entries"):
         bridge(ModelInputData(input=[{"role": "user", "content": "test"}], instructions=None))
 
@@ -763,7 +823,7 @@ async def test_shared_response_failures_stop_before_output_or_tools(monkeypatch:
     assert client.is_closed
 
 
-@pytest.mark.parametrize("configuration", ["tool_ref", "output_node", "recent_turns", "max_output_chars", "preview_chars"])
+@pytest.mark.parametrize("configuration", ["tool_ref", "output_node"])
 async def test_invalid_preflight_is_configuration_without_model_or_tool_effects(monkeypatch: pytest.MonkeyPatch, configuration: str) -> None:
     requests = []
 
@@ -776,9 +836,8 @@ async def test_invalid_preflight_is_configuration_without_model_or_tool_effects(
 
     schema = {"type": "object", "properties": {"field": {"$ref": "#/private_missing", "description": "private schema"}}} if configuration == "tool_ref" else {}
     output = OutputContract(name="Invalid", schema={"type": "object", "properties": {"private_field": False}}, parse=json.loads) if configuration == "output_node" else None
-    trimming = ToolOutputTrimSettings(**{configuration: -1}) if configuration in {"recent_turns", "max_output_chars", "preview_chars"} else None
     request = AgentRequest(
-        name="test", instructions="test", input="test", tools=(ToolBinding(name="unused", description="Unused", parameters_schema=schema, invoke=forbidden),), output=output, trimming=trimming
+        name="test", instructions="test", input="test", tools=(ToolBinding(name="unused", description="Unused", parameters_schema=schema, invoke=forbidden),), output=output
     )
     provider, client = _provider(monkeypatch, respond)
     try:

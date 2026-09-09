@@ -1283,10 +1283,9 @@ def test_load_settings_rejects_internal_context_and_tool_output_policy(tmp_path:
             tmp_path,
             """
 agent_runtime:
-  context_trimming:
-    recent_turns: 3
   local_tool_output:
-    recent_full_output_count: 4
+        recent_inline_output_count: 4
+        total_inline_output_max_chars: 50000
 """,
         ),
         encoding="utf-8",

@@ -25,7 +25,6 @@ from ._contracts import (
     ToolInputFailure,
     ToolOutputEntry,
     ToolOutputFilter,
-    ToolOutputTrimSettings,
 )
 
 
@@ -67,7 +66,6 @@ __all__ = [
     "ToolInputFailure",
     "ToolOutputEntry",
     "ToolOutputFilter",
-    "ToolOutputTrimSettings",
     "create_agent_engine",
     "create_model_provider",
 ]

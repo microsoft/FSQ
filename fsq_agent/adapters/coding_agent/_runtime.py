@@ -25,7 +25,6 @@ from fsq_agent.agent_engine import (
     ToolBinding,
     ToolCall,
     ToolOutputEntry,
-    ToolOutputTrimSettings,
     create_agent_engine,
 )
 from fsq_agent.ai_services import build_ai_assertion_evaluator
@@ -74,56 +73,55 @@ def _runtime_failure_metadata(exc: BaseException) -> dict[str, str]:
     }
 
 
-class _RecentToolOutputInputFilter:
+class _ToolOutputBudgetFilter:
     def __init__(
         self,
-        recent_tool_outputs: int,
+        recent_inline_outputs: int,
         max_output_chars: int,
-        preview_chars: int,
-        trimmable_tools: set[str] | None,
+        max_total_inline_chars: int,
         artifact_store: ToolArtifactStore | None,
     ) -> None:
-        self.recent_tool_outputs = recent_tool_outputs
+        self.recent_inline_outputs = recent_inline_outputs
         self.max_output_chars = max_output_chars
-        self.preview_chars = preview_chars
-        self.trimmable_tools = trimmable_tools
+        self.max_total_inline_chars = max_total_inline_chars
         self.artifact_store = artifact_store
         self.artifact_paths_by_call_id: dict[str, str] = {}
 
     def __call__(self, entries: tuple[ToolOutputEntry, ...]) -> dict[int, str]:
-        if not entries or self.recent_tool_outputs < 0:
+        if not entries:
             return {}
-        protected = {entry.entry_id for entry in entries[-self.recent_tool_outputs :]} if self.recent_tool_outputs else set()
+        remaining_inline_chars = self.max_total_inline_chars
+        inline_entry_ids: set[int] = set()
+        recent_entries = entries[-self.recent_inline_outputs :] if self.recent_inline_outputs else ()
+        for entry in reversed(recent_entries):
+            output_chars = len(entry.output)
+            if output_chars <= self.max_output_chars and output_chars <= remaining_inline_chars:
+                inline_entry_ids.add(entry.entry_id)
+                remaining_inline_chars -= output_chars
+
         replacements: dict[int, str] = {}
         for entry in entries:
-            tool_names = {entry.tool_name} if entry.tool_name else set()
-            output_text = entry.output
-            is_sensitive = self._is_sensitive_tool_output(output_text)
+            if entry.entry_id in inline_entry_ids:
+                continue
+            display_name = entry.tool_name or "tool"
             artifact_path = self._artifact_path_for(entry)
-            if entry.entry_id in protected and len(output_text) <= self.max_output_chars:
-                continue
-            if is_sensitive:
-                display_name = next(iter(tool_names), "tool")
-                replacements[entry.entry_id] = f"[Sensitive historical {display_name} output omitted.]"
-                continue
-            if self.trimmable_tools and not tool_names.intersection(self.trimmable_tools):
-                continue
-            if len(output_text) <= self.max_output_chars:
-                continue
-            display_name = next(iter(tool_names), "tool")
-            preview = output_text[: self.preview_chars]
-            artifact_line = f" Artifact path: {artifact_path}." if artifact_path else ""
-            replacements[entry.entry_id] = f"[Trimmed historical {display_name} output: {len(output_text)} chars, preview follows].{artifact_line}\n{preview}..."
+            if artifact_path:
+                replacements[entry.entry_id] = f"[Historical {display_name} output stored as artifact. Artifact path: {artifact_path}. Content chars: {len(entry.output)}.]"
+            else:
+                replacements[entry.entry_id] = f"[Historical {display_name} output omitted because artifact storage is unavailable. Content chars: {len(entry.output)}.]"
         return replacements
 
     def _artifact_path_for(self, entry: ToolOutputEntry) -> str | None:
-        if self._is_sensitive_tool_output(entry.output):
-            return None
-        if not self.artifact_store:
-            return None
         call_id = entry.call_id or ""
         if call_id in self.artifact_paths_by_call_id:
             return self.artifact_paths_by_call_id[call_id]
+        existing_path = self._existing_artifact_path(entry.output)
+        if existing_path:
+            if call_id:
+                self.artifact_paths_by_call_id[call_id] = existing_path
+            return existing_path
+        if not self.artifact_store:
+            return None
         tool_name = entry.tool_name or "runtime_tool"
         path = self.artifact_store.write(tool_name, entry.output, {"source": "model_input_filter", "call_id": call_id})
         if not path:
@@ -133,21 +131,18 @@ class _RecentToolOutputInputFilter:
             self.artifact_paths_by_call_id[call_id] = artifact_path
         return artifact_path
 
-    def _is_sensitive_tool_output(self, output_text: str) -> bool:
+    def _existing_artifact_path(self, output_text: str) -> str | None:
         try:
             payload = json.loads(output_text)
         except json.JSONDecodeError:
-            return False
-        return self._has_sensitive_marker(payload)
-
-    def _has_sensitive_marker(self, value: Any) -> bool:
-        if isinstance(value, dict):
-            if value.get("sensitive") is True:
-                return True
-            return any(self._has_sensitive_marker(item) for item in value.values())
-        if isinstance(value, list):
-            return any(self._has_sensitive_marker(item) for item in value)
-        return False
+            return None
+        if not isinstance(payload, dict):
+            return None
+        artifact = payload.get("artifact")
+        if not isinstance(artifact, dict):
+            return None
+        path = artifact.get("path")
+        return path if isinstance(path, str) and path else None
 
 
 class DefaultCodingAgentRuntime:
@@ -399,7 +394,7 @@ class DefaultCodingAgentRuntime:
         final_output = self.policy.coerce_agent_final_output(result.final_output) or str(result.final_output)
         final_output = self._redact_runtime_secrets(final_output)
         serialized_final_output = self.policy.serialize_agent_final_output(final_output)
-        pre_plan_steps = self._build_pre_plan_step_results(final_output, duration_ms)
+        pre_plan_steps = self._build_pre_plan_step_results(final_output)
         structured_steps = pre_plan_steps
         return [
             *structured_steps,
@@ -768,26 +763,14 @@ class DefaultCodingAgentRuntime:
         return not bool(export_api_key and export_api_key.strip())
 
     def _build_request(self, *, name: str, instructions: str, model_input: str, tools: list[ToolBinding], output_type: type[BaseModel], run_id: str = "") -> AgentRequest:
-        trimming = self.settings.agent_runtime.context_trimming
         local_output = self.settings.agent_runtime.local_tool_output
-        input_filter = None
-        trim_settings = None
-        if trimming.enabled:
-            trimmable_tools = set(trimming.trimmable_tools) if trimming.trimmable_tools else None
-            artifact_store = ToolArtifactStore(self.settings.output.runs_dir, run_id, local_output) if run_id and local_output.artifact_enabled else None
-            trim_settings = ToolOutputTrimSettings(
-                recent_turns=trimming.recent_turns,
-                max_output_chars=trimming.max_tool_output_chars,
-                preview_chars=trimming.preview_chars,
-                trimmable_tools=frozenset(trimmable_tools) if trimmable_tools else None,
-            )
-            input_filter = _RecentToolOutputInputFilter(
-                local_output.recent_full_output_count,
-                trimming.max_tool_output_chars,
-                trimming.preview_chars,
-                trimmable_tools,
-                artifact_store,
-            )
+        artifact_store = ToolArtifactStore(self.settings.output.runs_dir, run_id, local_output) if run_id and local_output.artifact_enabled else None
+        input_filter = _ToolOutputBudgetFilter(
+            local_output.recent_inline_output_count,
+            local_output.full_output_max_chars,
+            local_output.total_inline_output_max_chars,
+            artifact_store,
+        )
         return AgentRequest(
             name=name,
             instructions=instructions,
@@ -796,7 +779,6 @@ class DefaultCodingAgentRuntime:
             output=OutputContract(name=output_type.__name__, schema=output_type.model_json_schema(), parse=output_type.model_validate_json),
             max_turns=self.settings.agent_runtime.max_turns,
             stream=True,
-            trimming=trim_settings,
             tool_output_filter=input_filter,
             tracing_enabled=not self._tracing_disabled(),
         )
@@ -982,7 +964,7 @@ class DefaultCodingAgentRuntime:
             return steps
         return [step.model_copy(update={"step_id": step.step_id + offset}) for step in steps]
 
-    def _build_pre_plan_step_results(self, final_output: AgentFinalOutput | str, duration_ms: int) -> list[StepResult]:
+    def _build_pre_plan_step_results(self, final_output: AgentFinalOutput | str) -> list[StepResult]:
         payload = self.policy.coerce_agent_final_output(final_output)
         if not payload:
             return []
@@ -990,7 +972,7 @@ class DefaultCodingAgentRuntime:
         plan_updates = payload.plan_updates
         steps: list[StepResult] = []
         for index, item in enumerate(pre_plan, start=1):
-            steps.append(self._build_pre_plan_step(index, item.model_dump(mode="json"), plan_updates, duration_ms))
+            steps.append(self._build_pre_plan_step(index, item.model_dump(mode="json"), plan_updates))
         return steps
 
     def _build_pre_plan_step(
@@ -998,7 +980,6 @@ class DefaultCodingAgentRuntime:
         fallback_step_id: int,
         item: dict[str, Any],
         plan_updates: list[str],
-        duration_ms: int,
     ) -> StepResult:
         raw_step_id = item.get("step_id", fallback_step_id)
         step_id = raw_step_id if isinstance(raw_step_id, int) and raw_step_id >= 1 else fallback_step_id
@@ -1015,7 +996,6 @@ class DefaultCodingAgentRuntime:
             step_id=step_id,
             status=status,
             actual_outcome="\n".join(lines),
-            duration_ms=duration_ms,
             tool_name="pre_plan",
             tool_output=item,
         )

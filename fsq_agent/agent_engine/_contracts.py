@@ -86,19 +86,10 @@ class ToolOutputEntry:
     entry_id: int
     call_id: str | None
     tool_name: str | None
-    user_turn: int
     output: str
 
 
 ToolOutputFilter: TypeAlias = Callable[[tuple[ToolOutputEntry, ...]], Mapping[int, str]]
-
-
-@dataclass(frozen=True)
-class ToolOutputTrimSettings:
-    recent_turns: int = 2
-    max_output_chars: int = 500
-    preview_chars: int = 200
-    trimmable_tools: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -111,7 +102,6 @@ class AgentRequest(Generic[OutputT]):
     max_turns: int = 10
     stream: bool = False
     tracing_enabled: bool = False
-    trimming: ToolOutputTrimSettings | None = None
     tool_output_filter: ToolOutputFilter | None = field(default=None, repr=False)
 
 

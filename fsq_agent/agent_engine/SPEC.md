@@ -24,14 +24,14 @@ Public exports from `__init__.py`:
 - `JsonValue`, `TextContent`, `ImageContent`, `Message`, `ModelRequest`, `ModelResult`, and `TokenUsage`: neutral input/output values. Images contain bytes and MIME type; the engine does not read image files.
 - `ToolCall`, `ToolInputFailure`, `ToolBinding`, and `OutputContract`: neutral tool identity/JSON-object arguments, safe invalid-input facts, tool schema/callback binding, and named output schema with validation/parser callback.
 - `AgentRequest`, `AgentResult`, `AgentEvent`, and `AgentEventSink`: execution input, validated output, semantic events, and asynchronous event delivery.
-- `ToolOutputEntry`, `ToolOutputFilter`, and `ToolOutputTrimSettings`: ordered tool-output views, restricted replacements, and user-turn trimming configuration.
+- `ToolOutputEntry` and `ToolOutputFilter`: ordered tool-output views and restricted model-facing replacements.
 - `EngineError`: safe category, message, and optional HTTP status or supported failure detail; no raw third-party exception contract.
 
 Provider factories are the public construction boundary; concrete backend classes are not exported. Public imports do not initialize or import backend implementations and do not require credentials. Public values do not contain client/backend objects, arbitrary vendor-request kwargs, or raw response/transcript dictionaries. Factories and boundary records are intentional public APIs required by callers to construct requests and supply resources; no registry or dependency-injection container is used.
 
 `ModelRequest` supplies optional instructions and text or ordered neutral messages. `Model.complete` validates the provider response before returning a `ModelResult` with extracted text, optional token usage, and best-available completion information. Known incomplete, failed, or refused responses raise `EngineError` and do not return partial text as a usable result. Unknown finish information on an otherwise valid response and unavailable usage remain unknown or absent, not a fabricated successful finish or precise zero measurement.
 
-`AgentRequest` supplies name, instructions, input, tool bindings, an optional output contract, a turn limit, streaming choice, tracing choice, and optional trimming/filter configuration. `AgentResult` contains final output validated by the supplied contract and available usage. Neither result declares a business test passed.
+`AgentRequest` supplies name, instructions, input, tool bindings, an optional output contract, a turn limit, streaming choice, tracing choice, and an optional tool-output filter. `AgentResult` contains final output validated by the supplied contract and available usage. Neither result declares a business test passed.
 
 Tool callbacks receive `ToolCall` with call ID, name, and JSON-object arguments and asynchronously return model-facing text, including caller-formatted JSON. A tool's schema constraint is separate from local business validation. Output contracts carry a caller-owned schema and parser; required constrained output is not silently downgraded to best-effort text parsing.
 
@@ -44,7 +44,7 @@ Tool callbacks receive `ToolCall` with call ID, name, and JSON-object arguments 
 - `_openai_backend.py`: provider/model lifecycle, Responses client access, tool-free requests, and compatible engine construction.
 - `_runner.py`: shared streaming/non-streaming agent continuation, function-tool dispatch, output resolution, and run-owned task cleanup.
 - `_conversion.py`: shared private response validation plus Responses input, output, tool, usage, semantic event, and safe error conversion.
-- `_context.py`: user-turn output trimming and neutral tool-output replacement filtering.
+- `_context.py`: neutral tool-output replacement filtering.
 - `_schema.py`: private strict-schema normalization for tools and output contracts.
 - `_tracing.py`: required trace/span collection, safe compatible export, and exporter resource lifecycle.
 
@@ -83,7 +83,7 @@ Python cancellation and interruption propagate after run-local stream and tool-t
 - `run` preserves the requested streaming/non-streaming choice. Streaming emits neutral agent-start, tool-call, tool-output, message, and available reasoning-summary events; non-streaming does not synthesize streaming callbacks. Partial tool arguments and repeated incremental/completed item representations never cause early or duplicate tool execution. Failed or unterminated streams do not produce successful results. Only available public reasoning summaries are emitted, never hidden thinking or signed provider state.
 - Single-request tracing is disabled. Agent tracing obeys the supplied effective tracing choice; the FSQ adapter owns its export-key readiness gate. Required Agent/response/function spans retain compatible metadata association and real export to the OpenAI tracing ingest endpoint, independently of model-provider authentication. Run-local tracing choices are isolated, and tracing does not rewrite unrelated caller-owned trace data.
 - Trace export uses bounded retries and owned queue/client lifecycle with bounded shutdown/flush handling. Model/tool payloads, credentials, private model state, and raw exception details are excluded from traces and diagnostic logs; exporter failures remain safe and non-fatal.
-- Context processing first applies turn-based string tool-output trimming using user-message boundaries. A caller filter then receives ordered post-trimmer `ToolOutputEntry` values, including entry reference, call ID, name, user-turn position, and output, and returns text replacements for known integer entry IDs only.
+- Context processing supplies the caller filter with ordered raw `ToolOutputEntry` values containing entry reference, call ID, name, and output. The caller returns text replacements for known integer entry IDs only. The engine has no user-turn trimming policy or trimming settings.
 - The context bridge does not reorder/drop messages, change call IDs, or expose/rebuild unrelated messages or private model state. The caller owns tool-count protection, artifact storage, previews, and sensitive-output policy.
 - Private transcript continuation preserves required opaque provider items without exposing vendor transcripts publicly or using server-managed conversation identifiers. Caller-owned inputs and schemas are not mutated.
 - Results use available provider measurements and supported completion information. Missing usage and unknown finish information remain absent or unknown rather than fabricated zero measurements or successful finishes.

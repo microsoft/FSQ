@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from fsq_agent import FsqAgent, Task
-from fsq_agent.adapters.coding_agent._runtime import DefaultCodingAgentRuntime, _RecentToolOutputInputFilter
+from fsq_agent.adapters.coding_agent._runtime import DefaultCodingAgentRuntime, _ToolOutputBudgetFilter
 from fsq_agent.agent import Verifier
 from fsq_agent.agent_engine import ToolCall, ToolOutputEntry
 from fsq_agent.config import Settings
@@ -248,30 +248,28 @@ async def test_agent_rejects_invalid_run_identity_before_side_effects(run_id: st
         await agent.run(Task(description="test"), run_id=run_id)
 
 
-def test_recent_tool_output_filter_does_not_artifact_sensitive_outputs() -> None:
+def test_tool_output_budget_filter_artifacts_ordinary_sensitive_markers() -> None:
     artifact_store = _FakeArtifactStore()
-    input_filter = _RecentToolOutputInputFilter(
-        recent_tool_outputs=0,
+    input_filter = _ToolOutputBudgetFilter(
+        recent_inline_outputs=0,
         max_output_chars=1,
-        preview_chars=1,
-        trimmable_tools=None,
+        max_total_inline_chars=1,
         artifact_store=artifact_store,  # type: ignore[arg-type]
     )
 
-    entry = ToolOutputEntry(1, "call-1", "secret_debug_tool", 1, '{"type":"runtime_secret","name":"TEST_ACCOUNT_PASSWORD","value":"secret","sensitive":true}')
+    entry = ToolOutputEntry(1, "call-1", "secret_debug_tool", '{"type":"runtime_secret","name":"TEST_ACCOUNT_PASSWORD","value":"secret","sensitive":true}')
     path = input_filter._artifact_path_for(entry)
 
-    assert path is None
-    assert artifact_store.writes == []
+    assert path == "artifact.json"
+    assert artifact_store.writes == [("secret_debug_tool", entry.output, {"source": "model_input_filter", "call_id": "call-1"})]
 
 
-def test_recent_tool_output_filter_omits_wrapped_sensitive_history_preview() -> None:
+def test_tool_output_budget_filter_references_sensitive_history_without_preview() -> None:
     artifact_store = _FakeArtifactStore()
-    input_filter = _RecentToolOutputInputFilter(
-        recent_tool_outputs=0,
+    input_filter = _ToolOutputBudgetFilter(
+        recent_inline_outputs=0,
         max_output_chars=1,
-        preview_chars=20,
-        trimmable_tools=None,
+        max_total_inline_chars=1,
         artifact_store=artifact_store,  # type: ignore[arg-type]
     )
     output = (
@@ -280,20 +278,19 @@ def test_recent_tool_output_filter_omits_wrapped_sensitive_history_preview() -> 
         '{"type":"runtime_secret","name":"TEST_ACCOUNT_PASSWORD","value":"secret-password","sensitive":true},'
         '"sensitive":true}}'
     )
-    filtered = input_filter((ToolOutputEntry(1, "call-1", "secret_debug_tool", 1, output),))
+    filtered = input_filter((ToolOutputEntry(1, "call-1", "secret_debug_tool", output),))
 
-    assert artifact_store.writes == []
+    assert artifact_store.writes == [("secret_debug_tool", output, {"source": "model_input_filter", "call_id": "call-1"})]
     assert "secret-password" not in filtered[1]
-    assert filtered[1] == "[Sensitive historical secret_debug_tool output omitted.]"
+    assert filtered[1] == f"[Historical secret_debug_tool output stored as artifact. Artifact path: artifact.json. Content chars: {len(output)}.]"
 
 
-def test_recent_tool_output_filter_omits_small_wrapped_sensitive_history() -> None:
+def test_tool_output_budget_filter_keeps_recent_sensitive_marker_inline() -> None:
     artifact_store = _FakeArtifactStore()
-    input_filter = _RecentToolOutputInputFilter(
-        recent_tool_outputs=0,
+    input_filter = _ToolOutputBudgetFilter(
+        recent_inline_outputs=1,
         max_output_chars=100000,
-        preview_chars=20,
-        trimmable_tools=None,
+        max_total_inline_chars=100000,
         artifact_store=artifact_store,  # type: ignore[arg-type]
     )
     output = (
@@ -302,11 +299,10 @@ def test_recent_tool_output_filter_omits_small_wrapped_sensitive_history() -> No
         '{"type":"runtime_secret","name":"TEST_ACCOUNT_PASSWORD","value":"secret-password","sensitive":true},'
         '"sensitive":true}}'
     )
-    filtered = input_filter((ToolOutputEntry(1, "call-1", "secret_debug_tool", 1, output),))
+    filtered = input_filter((ToolOutputEntry(1, "call-1", "secret_debug_tool", output),))
 
     assert artifact_store.writes == []
-    assert "secret-password" not in filtered[1]
-    assert filtered[1] == "[Sensitive historical secret_debug_tool output omitted.]"
+    assert filtered == {}
 
 
 @pytest.mark.asyncio
