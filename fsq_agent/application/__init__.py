@@ -52,7 +52,16 @@ from fsq_agent.application.contracts import (
 from fsq_agent.application.contracts.cases import CaseFormatDiagnostic, CaseFormatRequest, CaseFormatResult, CaseSaveRequest, CaseSaveResult
 from fsq_agent.application.doctor import diagnose_platform_settings, diagnose_registered_platform, diagnose_workspace
 from fsq_agent.application.environments import list_environments
-from fsq_agent.application.providers import complete_github_configuration, configure_azure_openai, configure_openai, list_openai_models, provider_status, request_github_device_code
+from fsq_agent.application.providers import (
+    complete_github_configuration,
+    configure_azure_openai,
+    configure_google_gemini,
+    configure_openai,
+    list_google_gemini_models,
+    list_openai_models,
+    provider_status,
+    request_github_device_code,
+)
 from fsq_agent.application.runs import generate_run_html, list_runs, read_run_logs, show_run
 from fsq_agent.application.workspace import add_workspace_platform, create_workspace, initialize_workspace, require_initialized_workspace, resolve_workspace_target, update_workspace_platform
 
@@ -107,6 +116,7 @@ __all__ = [
     "add_workspace_platform",
     "complete_github_configuration",
     "configure_azure_openai",
+    "configure_google_gemini",
     "configure_openai",
     "create_case",
     "create_workspace",
@@ -118,6 +128,7 @@ __all__ = [
     "generate_run_html",
     "initialize_workspace",
     "list_environments",
+    "list_google_gemini_models",
     "list_openai_models",
     "list_runs",
     "normalize_application_error",

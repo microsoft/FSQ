@@ -25,6 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "openai==2.34.0",
+    "google-genai==2.21.0",
     "httpx==0.28.1",
     "pydantic==2.13.3",
     "pydantic-settings==2.14.2",

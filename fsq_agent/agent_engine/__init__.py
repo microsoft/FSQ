@@ -44,6 +44,22 @@ def create_agent_engine() -> AgentEngine:
     return OpenAIAgentEngine()
 
 
+def create_google_gemini_model_provider(*, base_url: str, api_key: str) -> ModelProvider:
+    try:
+        from ._google_gemini_backend import GoogleGeminiModelProvider
+    except ImportError:
+        raise EngineError("configuration", "The Google model backend dependencies are unavailable.") from None
+    return GoogleGeminiModelProvider(base_url=base_url, api_key=api_key)
+
+
+def create_agent_engine_for_model(model: Model) -> AgentEngine:
+    from ._backend import BackendModel
+
+    if not isinstance(model, BackendModel):
+        raise EngineError("incompatible_model", "The selected model is incompatible with this agent backend.")
+    return model.create_engine()
+
+
 __all__ = [
     "AgentEngine",
     "AgentEvent",
@@ -67,5 +83,7 @@ __all__ = [
     "ToolOutputEntry",
     "ToolOutputFilter",
     "create_agent_engine",
+    "create_agent_engine_for_model",
+    "create_google_gemini_model_provider",
     "create_model_provider",
 ]

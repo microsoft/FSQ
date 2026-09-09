@@ -23,11 +23,13 @@ from ._cases import discover_cases, resolve_case
 from ._config import (
     ConfigAPIError,
     get_config,
+    list_google_gemini_config_models,
     list_openai_config_models,
     map_config_exception,
     require_config_access,
     require_same_origin_write,
     save_azure_config,
+    save_google_gemini_config,
     save_openai_config,
     test_saved_connection,
 )
@@ -371,6 +373,10 @@ class ControlPlaneServer:
             require_same_origin_write(origin, host)
             if method == "POST" and path == f"{_API_PREFIX}/config/openai/models":
                 return 200, list_openai_config_models(body)
+            if method == "POST" and path == f"{_API_PREFIX}/config/google-gemini/models":
+                return 200, list_google_gemini_config_models(body)
+            if method == "PUT" and path == f"{_API_PREFIX}/config/google-gemini":
+                return 200, save_google_gemini_config(body, self.options.user_config_root)
             if method == "PUT" and path == f"{_API_PREFIX}/config/openai":
                 return 200, save_openai_config(body, self.options.user_config_root)
             if method == "PUT" and path == f"{_API_PREFIX}/config/azure":

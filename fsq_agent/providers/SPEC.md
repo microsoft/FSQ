@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own FSQ supplier adaptation, OpenAI and GitHub Copilot authenticated model discovery, observable GitHub Copilot authentication, non-interactive runtime token refresh, real connection testing, and configured neutral model access. The module resolves OpenAI, Azure OpenAI, and GitHub Copilot connection parameters from validated user-provider snapshots, owns supplier protocol compatibility, endpoint selection, model-list parsing/filtering, and GitHub selected-model activation, and delegates inference-client construction to `agent_engine`.
+Own FSQ supplier adaptation, OpenAI, Google Gemini, and GitHub Copilot authenticated model discovery, observable GitHub Copilot authentication, non-interactive runtime token refresh, real connection testing, and configured neutral model access. The module resolves OpenAI, Azure OpenAI, Google Gemini Developer API, and GitHub Copilot connection parameters from validated user-provider snapshots, owns supplier protocol compatibility, endpoint selection, model-list parsing/filtering, and GitHub selected-model activation, and delegates inference-client construction to `agent_engine`.
 
 The module centralizes provider behavior so the main agent loop, internal pre-planner, evidence-based verifier, and platform AI assertion evaluators reuse the same provider configuration, token cache behavior, model selection, and redaction policy.
 
@@ -13,7 +13,7 @@ The module centralizes provider behavior so the main agent loop, internal pre-pl
 - `agent_engine`: Uses public model/provider protocols, factories, neutral requests/results, and safe engine errors.
 - HTTPX remains the supplier-authentication and model-discovery transport, not an inference SDK boundary.
 
-The providers module must not depend on `ai_services`, `agent`, `tools`, `core`, `cli`, `report`, `knowledge`, `skills`, or `fsq`, and must not construct or consume OpenAI/Agents SDK objects.
+The providers module must not depend on `ai_services`, `agent`, `tools`, `core`, `cli`, `report`, `knowledge`, `skills`, or `fsq`, and must not construct or consume OpenAI, Agents, or Google GenAI SDK objects.
 
 ## Public Interface
 
@@ -21,12 +21,14 @@ Current `__init__.py` exports via `__all__`:
 
 - `ModelProviderFactory`: Builds supplier-configured sessions from resolved `Settings` for neutral model access.
 - `ModelProviderSession`: Holds the configured supplier/model identity and safe metadata. `get_model()` returns the selected neutral `Model`; `complete(request)` and `complete_sync(request)` accept `ModelRequest` and return `ModelResult`; `close()` and `close_sync()` release owned neutral providers. Its optional test factory supplies the neutral provider protocol, never an SDK class.
-- `prepare_model_provider_session(settings: Settings) -> ModelProviderSession`: Builds a configured session for readiness without sending a model request. For GitHub Copilot it may silently exchange a valid cached GitHub OAuth token when the provider token is absent or expired, but never starts device flow. For OpenAI and Azure it validates and constructs supplier-specific client configuration from the resolved user snapshot without model discovery.
-- `refresh_model_provider_session(settings: Settings) -> ModelProviderSession`: Refreshes provider-local runtime credentials at the beginning of a dynamic task without sending a live model request. For GitHub Copilot, it uses only a valid cached GitHub OAuth token to exchange and cache a fresh short-lived Copilot provider token and never starts device authentication. For OpenAI and Azure OpenAI, it validates and constructs supplier-specific client configuration from the resolved user snapshot without model discovery.
+- `prepare_model_provider_session(settings: Settings) -> ModelProviderSession`: Builds a configured session for readiness without sending a model request. For GitHub Copilot it may silently exchange a valid cached GitHub OAuth token when the provider token is absent or expired, but never starts device flow. For OpenAI, Azure, and Google Gemini it validates and constructs supplier-specific client configuration from the resolved user snapshot without model discovery.
+- `refresh_model_provider_session(settings: Settings) -> ModelProviderSession`: Refreshes provider-local runtime credentials at the beginning of a dynamic task without sending a live model request. For GitHub Copilot, it uses only a valid cached GitHub OAuth token to exchange and cache a fresh short-lived Copilot provider token and never starts device authentication. For OpenAI, Azure OpenAI, and Google Gemini, it validates and constructs supplier-specific client configuration from the resolved user snapshot without model discovery.
 - `build_model_provider_session(settings: Settings) -> ModelProviderSession`: Convenience factory for runtime construction. For GitHub Copilot it reads the user-level cached provider token and may silently refresh it from a valid cached OAuth token, but never starts device flow.
 - `check_provider_readiness(settings)`: Validates non-interactive configured session preparation, returns safe normalized readiness facts, and closes any constructed session without inference.
 - `OpenAIModel`: Immutable safe model-list value containing the exact model id and display name; the OpenAI id supplies the display name.
 - `list_openai_models(*, api_key: str) -> tuple[OpenAIModel, ...]`: Discovers eligible models using a complete candidate API key and fixed official endpoint, without persistence or inference. Valid responses with no eligible models return an empty tuple. Protocol validation and failure classification remain supplier-owned.
+- `GoogleGeminiModel`: Immutable safe model-list value containing a normalized exact model id and a bounded display name, using the id when the display name is absent.
+- `list_google_gemini_models(*, api_key: str) -> tuple[GoogleGeminiModel, ...]`: Completes bounded paginated discovery of eligible Gemini Developer API models using the candidate key without persistence or inference. Only a complete valid collection may return an empty tuple.
 - `request_github_copilot_device_code() -> GitHubDeviceCode`: Requests one GitHub device code with the existing explicit Copilot scopes and returns verification URI, user code, polling interval, and expiration without printing to a terminal or starting polling.
 - `GitHubCopilotAuthorization`: Immutable provider-boundary value containing one completed GitHub OAuth/Copilot token exchange for short-lived in-memory use. Credential fields are excluded from representations and are never presentation models.
 - `GitHubCopilotModel`: Immutable safe model-list value containing the exact model id and display name.
@@ -36,16 +38,22 @@ Current `__init__.py` exports via `__all__`:
 - `test_model_provider_connection(user_config_root: str | Path | None = None) -> ProviderConnectionTestResult`: Loads the latest saved provider, creates a fresh session, sends one fixed minimal prompt requesting a short deterministic acknowledgement, returns provider/model/elapsed duration after a valid response, and always closes the session.
 - `ProviderConnectionTestResult`: Safe supplier/model identity and elapsed duration returned by the explicit connection test.
 
-Public inference APIs do not accept SDK factories, arbitrary Responses kwargs, or raw vendor message dictionaries. Visual assertion and Case suggestion services and their factories/readiness are owned by `ai_services`, not re-exported here.
+Public inference APIs do not accept SDK factories, arbitrary vendor kwargs, or raw vendor message dictionaries. Visual assertion and Case suggestion services and their factories/readiness are owned by `ai_services`, not re-exported here.
 
 OpenAI discovery uses HTTPX to request `GET https://api.openai.com/v1/models` with Bearer authentication, bounded timeouts, and bounded response size. It accepts only valid model-list envelopes and exact non-empty ids, removes exact-id duplicates, and sorts eligible ids case-insensitively. Eligibility requires a `gpt-` family id with parsed major version at least 5 and excludes mini, nano, Codex, embedding, audio, realtime, image, search, transcribe/transcription, and TTS specializations. Invalid metadata is a safe malformed-response failure, not a successful empty result. Discovery establishes visibility and local selection eligibility, not proof of every Responses feature; connection testing remains independent. Azure deployment names are not discovered through this operation, and GitHub retains its supplier-specific parsing and service ordering.
+
+Google Gemini discovery uses HTTPX to request `GET https://generativelanguage.googleapis.com/v1beta/models` with the candidate key in `x-goog-api-key`, redirects disabled, and `pageSize=1000`. It follows `nextPageToken` on the same endpoint until absent, preserving all other parameters. The operation has a 60-second overall deadline, at most 20 pages and 4 MiB of cumulative decoded response bytes, with per-request connect/read limits capped by the remaining deadline. Repeated or invalid page tokens, malformed pages, and size/page-limit exhaustion fail safely rather than returning a partial set; a later-page network, authentication, or timeout failure preserves its corresponding category. Keys never appear in query parameters. Discovery does not silently truncate or treat a first-page empty result as complete when a continuation token exists.
+
+Gemini eligibility requires a valid `models/<id>` resource name, `generateContent` in `supportedGenerationMethods`, and an exact lowercase id matching `gemini-<major>[.<minor>]-flash` or `gemini-<major>[.<minor>]-pro` with numeric major at least 3. A missing minor is zero for ordering. Preview, latest, experimental, dated aliases, Lite, media, embedding, and specialized variants do not match. Exact-id duplicates are removed across all pages; results sort by numeric version descending, Flash before Pro for the same version, then exact id. Discovery proves metadata eligibility, not quota, inference permissions, or every native feature. Only explicit connection testing or execution sends inference. Vertex AI, ADC, service accounts, and custom Gemini endpoints are unsupported.
 
 ## Internal Structure
 
 - `__init__.py`: Public exports only.
 - `_factory.py`: Settings-based factory functions and `ModelProviderFactory` implementation.
-- `_session.py`: Neutral provider lifecycle, selected-model access, safe supplier metadata, and synchronous/asynchronous invocation bridging.
+- `_client_config.py`: Private supplier-neutral connection values, safe metadata, and explicit `openai_responses` or `google_interactions` backend selection; credential fields are excluded from representations.
+- `_session.py`: Neutral provider lifecycle, explicit backend-factory selection, selected-model access, safe supplier metadata, and synchronous/asynchronous invocation bridging.
 - `_openai.py`: Official OpenAI connection configuration, bounded candidate-key model discovery, immutable model facts, eligibility filtering, and classified safe failures.
+- `_google_gemini.py`: Official Gemini connection configuration, complete bounded paginated discovery, immutable model facts, eligibility filtering, and classified safe failures.
 - `_azure_openai.py`: Azure OpenAI connection configuration from resolved endpoint/model/API-key values and safe metadata.
 - `_github_copilot.py`: Observable device-code request and cancellable polling, non-interactive cached token inspection/refresh under the user auth root, Copilot token exchange, plan detection, endpoint selection, authenticated model discovery/filtering, selected-model activation, and request/header/timeout compatibility.
 - `_connection_test.py`: Fresh-session minimal neutral model request, nonempty response validation, elapsed-time measurement, safe result shaping, and guaranteed cleanup.
@@ -54,12 +62,12 @@ OpenAI discovery uses HTTPX to request `GET https://api.openai.com/v1/models` wi
 ## Python Architecture
 
 - Architecture level: 2 Simple Package.
-- Public API: session/factory types, non-interactive preparation/refresh/build/readiness helpers, OpenAI discovery and model facts, GitHub authorization/discovery/activation operations and values, and connection testing exported from `__init__.py`.
-- Internal modules: `_factory.py`, `_session.py`, `_openai.py`, `_azure_openai.py`, `_github_copilot.py`, and `_connection_test.py` are private implementation files.
+- Public API: session/factory types, non-interactive preparation/refresh/build/readiness helpers, OpenAI and Gemini discovery/model facts, GitHub authorization/discovery/activation operations and values, and connection testing exported from `__init__.py`.
+- Internal modules: `_factory.py`, `_client_config.py`, `_session.py`, `_openai.py`, `_google_gemini.py`, `_azure_openai.py`, `_github_copilot.py`, and `_connection_test.py` are private implementation files.
 - Domain boundaries: providers owns supplier authentication, connection policy, and configured model access. Config owns files and active-provider persistence; `agent_engine` owns inference protocols; `ai_services` owns assertion/suggestion business rules.
 - Boundary models: settings come from public `config`/`models`, inference values from `agent_engine`, and supplier-specific protocol/result records remain immutable public facts where required.
 - Dependency direction: providers may depend on public `models`, `config`, and `agent_engine`; it must not import business services, agent, entry-layer, execution, report, or frontend modules.
-- Rationale: three supplier integrations share a narrow session abstraction and protocol helpers, but no additional application/service layer is justified.
+- Rationale: four supplier integrations share a narrow session abstraction and protocol helpers, but no additional application/service layer is justified.
 
 ## Error Handling
 
@@ -69,20 +77,23 @@ GitHub device authorization distinguishes request failure, polling/network failu
 
 OpenAI discovery rejects incomplete or placeholder API keys before network access. Expected failures carry `provider="openai"` and an allowlisted `reason` in safe `ConfigurationError` context: invalid candidate, authentication, access denial, rate limiting, timeout, network unavailability, or malformed response. Authentication/access/rate-limit facts derive from HTTP status, not upstream body text. Application preserves these classifications through its public error contract; neither module exposes SDK objects, credentials, raw response bodies, or arbitrary exception context. Empty eligible collections are successful discovery results, not failures.
 
+Gemini discovery uses `provider="google_gemini"` with reasons `invalid_candidate`, `authentication`, `access_denied`, `rate_limited`, `timeout`, `network`, or `malformed_response`. Candidate validation rejects blank, placeholder, non-printable, or oversized keys before network access. Classification uses HTTP status and allowlisted structured Google error codes when needed, not unrestricted message text. Pagination budget or integrity failures use `malformed_response`; overall deadline exhaustion uses `timeout`. No partial collection or unsafe supplier payload crosses the public boundary.
+
 Non-interactive readiness and runtime construction never start device polling. They may call token exchange only when a valid cached OAuth token exists and the short-lived provider token is missing or expired. Readiness helpers do not send model requests; only the explicit connection-test operation sends a live model inference request. Authenticated model discovery requests provider metadata only.
 
 Provider readiness is independent from Workspace platform Target/Runtime diagnosis. It reports selected Provider configuration, model, and local authentication availability without exposing saved values. Missing provider credentials produce a configuration failure, not a silent fallback. Connection errors are mapped from neutral engine categories/status information, not SDK exception classes.
 
 ## Current Invariants
 
-- Provider construction belongs in `providers`, not `agent`, because the main runner, pre-planner, verifier, and platform AI assertion evaluator need the same OpenAI/Azure/Copilot behavior.
+- Provider construction belongs in `providers`, not `agent`, because the main runner, pre-planner, verifier, and platform AI assertion evaluator need the same OpenAI/Azure/Gemini/Copilot behavior.
 - `providers` may depend on `config` because it consumes resolved `Settings`, but `config` must not depend on `providers`.
 - The resolved `agent_runtime.provider` and provider model are the provider/model source for AI assertions. There is no separate AI assertion model override.
-- All configured providers use neutral model access with the non-empty model stored in the user-provider record. There is no default provider or fixed GitHub model; the private engine backend owns the Responses protocol.
+- All configured providers use neutral model access with the non-empty model stored in the user-provider record. There is no default provider or fixed model. Private engine backends own the Responses and Interactions protocols; no concrete SDK object crosses this module.
 - GitHub keeps the existing explicit OAuth scopes, token exchange, plan detection, plan-specific endpoints, Copilot headers, and expiration behavior, but token files live under `~/.fsq/auth`. Runtime surfaces never start device authentication.
 - Azure endpoint, model/deployment name, and API key come from the resolved user-provider snapshot, not fixed environment variables.
 - OpenAI uses only `https://api.openai.com/v1/`, the saved model id and API key, and neutral client configuration without Azure/Copilot-specific headers. Custom OpenAI endpoints and Chat Completions are not supported. Every factory entry dispatches explicitly by Provider; OpenAI never falls through to Azure configuration.
 - OpenAI model discovery is candidate-key metadata access only. It does not activate configuration, cache credentials, send inference, run during readiness/task construction, or introduce Provider fallback. Application owns selected-model validation before Config persistence.
+- Gemini selects only the `google_interactions` engine backend with the fixed Developer API endpoint and its saved key/model. All factory paths dispatch explicitly; Gemini never inherits Azure endpoints, Copilot headers, an OpenAI client, or Provider environment values. Gemini discovery has the same candidate-only and no-inference boundaries as OpenAI, and Application validates selection against its complete result before persistence.
 - Readiness proves local configuration/token readiness only. The explicit connection test is the sole setup surface that sends a live minimal model request.
 - Device-flow operations do not print or prompt. Control Plane owns background transaction state, offered-model allowlisting, expiration, and presentation; `providers` owns protocol timing, cancellation checks, token exchange, model discovery/filtering, and selected-model activation through `config`.
 - Provider sessions own the scope of their neutral model providers. The engine owns concrete clients. Async access reuses a provider only on its owning event loop; close releases it without exposing SDK objects.
@@ -91,3 +102,7 @@ Provider readiness is independent from Workspace platform Target/Runtime diagnos
 - Model requests contain neutral text/image input and return neutral text/usage/completion facts. Model inference does not trigger provider login or refresh; those operations follow the existing explicit preparation policies.
 - `core` must not import `providers`. Platform harnesses receive an evaluator object structurally and call it through an evaluator protocol owned by `core` or supplied by entry-layer code.
 - Provider diagnostics in events and reports should include provider name, model name, endpoint family, and safe status details, but never secret values.
+
+## Verification Scope
+
+Gemini verification covers complete multi-page discovery, later-page failure without partial success, bounded termination, exact model eligibility/order, safe error classification, saved-session backend selection, no-inference readiness, and synchronous/asynchronous resource ownership. Real pinned Google SDK inference is verified at the `agent_engine` boundary over controlled transport rather than by supplier SDK mocks. Live model discovery and inference smoke evidence is opt-in, uses a dedicated isolated user root, and is reported separately from deterministic tests.

@@ -12,7 +12,7 @@ import httpx
 
 from fsq_agent.config import Settings, UserProviderConfig, activate_github_copilot_provider
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers._azure_openai import ProviderClientConfig
+from fsq_agent.providers._client_config import ProviderClientConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable

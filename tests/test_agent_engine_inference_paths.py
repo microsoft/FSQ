@@ -29,10 +29,12 @@ class _NoHelperTools:
 
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
 @pytest.mark.parametrize("failure_kind", [None, "incomplete", "failed", "refusal"])
-@pytest.mark.parametrize("provider", ["azure_openai", "openai"])
+@pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini"])
 async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str) -> None:
     settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False))
     settings.agent_runtime.base_url = "https://api.openai.com/v1/" if provider == "openai" else "https://model.example.test/openai/v1/"
+    if provider == "google_gemini":
+        settings.agent_runtime.base_url = "https://generativelanguage.googleapis.com/v1beta/"
     settings.agent_runtime.api_key = "synthetic-model-key"
     settings.agent_runtime.model = "test-model"
     settings.output.runs_dir = tmp_path
@@ -48,6 +50,24 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     }
 
     def respond(request: httpx.Request) -> httpx.Response:
+        if provider == "google_gemini":
+            assert str(request.url) == settings.agent_runtime.base_url + "interactions"
+            assert request.headers["x-goog-api-key"] == "synthetic-model-key"
+            payload = json.loads(request.content)
+            payloads.append(payload)
+            response = {
+                "id": "interaction_path",
+                "model": "test-model",
+                "status": failure_kind if failure_kind in {"failed", "incomplete"} else "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": results[path]}]}],
+            }
+            if failure_kind == "refusal":
+                response["status"] = "failed"
+                response["errors"] = [{"code": "SAFETY", "message": "private-response"}]
+            if payload.get("stream"):
+                event = {"event_type": "interaction.completed", "interaction": response}
+                return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=f"event: interaction.completed\ndata: {json.dumps(event)}\n\n")
+            return httpx.Response(200, json=response)
         assert str(request.url) == settings.agent_runtime.base_url + "responses"
         assert request.headers["authorization"] == "Bearer synthetic-model-key"
         payload = json.loads(request.content)
@@ -81,11 +101,26 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     original_import = builtins.__import__
 
     def without_sdk(name, *args, **kwargs):
-        if name.split(".")[0] == "agents":
+        level = kwargs.get("level", args[3] if len(args) > 3 else 0)
+        if level == 0 and name.split(".")[0] == "agents":
             raise AssertionError("Inference must not import OpenAI Agents SDK")
         return original_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(_openai_backend, "AsyncOpenAI", make_client)
+    if provider == "google_gemini":
+        from fsq_agent.agent_engine import _google_gemini_backend
+
+        original_client = _google_gemini_backend.genai.Client
+
+        def make_google_client(**kwargs):
+            kwargs["http_options"]["async_client_args"]["transport"] = httpx.MockTransport(respond)
+            kwargs["http_options"]["retry_options"] = {"attempts": 1}
+            client = original_client(**kwargs)
+            clients.append(client._api_client._async_httpx_client)
+            return client
+
+        monkeypatch.setattr(_google_gemini_backend.genai, "Client", make_google_client)
+    else:
+        monkeypatch.setattr(_openai_backend, "AsyncOpenAI", make_client)
     monkeypatch.setattr(builtins, "__import__", without_sdk)
     if path in {"pre_plan", "main", "verification"}:
         runtime = DefaultCodingAgentRuntime(settings, _NoHelperTools(), lambda run_id: _NoActionHarness())
@@ -106,14 +141,17 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
             assert result[-1].status == ("failed" if failure_kind else "success")
             assert result[-1].tool_name == "agent_runtime.verifier"
         assert payloads[0]["stream"] is True
-        assert payloads[0]["text"]["format"]["strict"] is True
+        if provider == "google_gemini":
+            assert payloads[0]["response_format"]["mime_type"] == "application/json"
+        else:
+            assert payloads[0]["text"]["format"]["strict"] is True
     elif path == "assertion":
         screenshot = tmp_path / "sample.png"
         screenshot.write_bytes(b"synthetic-image")
         result = AIAssertionEvaluator(build_model_provider_session(settings)).evaluate(AIAssertionRequest(platform="web", prompt="Visible?", screenshot_path=screenshot))
         assert result.passed is (failure_kind is None)
         assert result.status == ("error" if failure_kind else "passed")
-        assert payloads[0]["input"][0]["content"][1]["type"] == "input_image"
+        assert payloads[0]["input"][0]["content"][1]["type"] == ("image" if provider == "google_gemini" else "input_image")
     elif path == "connection":
         monkeypatch.setattr("fsq_agent.providers._connection_test.refresh_provider_settings", lambda *args: settings)
         if failure_kind is not None:
@@ -133,6 +171,8 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
             assert result.candidate_case_yaml is None
     assert len(payloads) == 1
     assert payloads[0]["model"] == "test-model"
+    if provider == "google_gemini":
+        assert payloads[0]["store"] is False
     if path in {"assertion", "connection", "suggestion"}:
         assert not payloads[0].get("tools")
         assert not payloads[0].get("stream")

@@ -10,6 +10,7 @@ interface ProviderDialogProps {
   deviceFlowError: ApiErrorBody | null;
   onSelectAzure: () => void;
   onSelectOpenAI: () => void;
+  onSelectGemini: () => void;
   onStartGithub: () => Promise<unknown>;
   onRetryModels: () => Promise<unknown>;
   onSaveModel: (modelName: string) => Promise<unknown>;
@@ -54,6 +55,9 @@ export function ProviderDialog(props: ProviderDialogProps) {
       </button>
       <button type="button" className="provider-option" onClick={props.onSelectAzure}>
         <strong>Azure OpenAI</strong><span>Azure resource endpoint, deployment, and API key.</span>
+      </button>
+      <button type="button" className="provider-option" onClick={props.onSelectGemini}>
+        <strong>Google Gemini</strong><span>Gemini Developer API</span>
       </button>
       <button type="button" className="provider-option" onClick={startGithub}>
         <strong>GitHub Copilot GPT</strong><span>Authenticate this computer through GitHub device flow.</span>

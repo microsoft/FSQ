@@ -605,7 +605,8 @@ async def test_provider_rejects_foreign_event_loop_and_concurrent_use(monkeypatc
 
 
 def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
-    from fsq_agent.agent_engine._context import ModelInputData, ModelInputFilter
+    from fsq_agent.agent_engine._context import ModelInputFilter
+    from fsq_agent.agent_engine._openai_backend import OpenAIConversation
 
     items = [
         {"role": "user", "content": "first"},
@@ -624,24 +625,26 @@ def test_context_bridge_preserves_stage_order_ids_and_private_items() -> None:
         return {entries[-1].entry_id: "new bounded output"}
 
     bridge = ModelInputFilter(filter_outputs)
-    result = bridge(ModelInputData(input=items, instructions="instructions"))
+    conversation = OpenAIConversation(None, "test-model", AgentRequest(name="test", input="first", instructions="instructions"))
+    conversation.history = items
+    result = conversation.filtered_input(bridge(conversation.tool_outputs()))
 
     assert observed[0].output == original[2]["output"]
     assert observed[1].output == original[6]["output"]
     assert [entry.call_id for entry in observed] == ["old-call", "new-call"]
-    assert result.input[4] == original[4]
-    assert result.input[6] == {**original[6], "output": "new bounded output"}
-    assert result.instructions == "instructions"
-    assert len(result.input) == len(original)
+    assert result[4] == original[4]
+    assert result[6] == {**original[6], "output": "new bounded output"}
+    assert conversation.parameters["instructions"] == "instructions"
+    assert len(result) == len(original)
     assert items == original
 
 
 def test_context_bridge_rejects_replacing_non_tool_input() -> None:
-    from fsq_agent.agent_engine._context import ModelInputData, ModelInputFilter
+    from fsq_agent.agent_engine._context import ModelInputFilter
 
     bridge = ModelInputFilter(lambda entries: {0: "replaced user content"})
     with pytest.raises(EngineError, match="known entries"):
-        bridge(ModelInputData(input=[{"role": "user", "content": "test"}], instructions=None))
+        bridge(())
 
 
 async def test_backend_accepts_real_macos_tool_schema_without_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -836,9 +839,7 @@ async def test_invalid_preflight_is_configuration_without_model_or_tool_effects(
 
     schema = {"type": "object", "properties": {"field": {"$ref": "#/private_missing", "description": "private schema"}}} if configuration == "tool_ref" else {}
     output = OutputContract(name="Invalid", schema={"type": "object", "properties": {"private_field": False}}, parse=json.loads) if configuration == "output_node" else None
-    request = AgentRequest(
-        name="test", instructions="test", input="test", tools=(ToolBinding(name="unused", description="Unused", parameters_schema=schema, invoke=forbidden),), output=output
-    )
+    request = AgentRequest(name="test", instructions="test", input="test", tools=(ToolBinding(name="unused", description="Unused", parameters_schema=schema, invoke=forbidden),), output=output)
     provider, client = _provider(monkeypatch, respond)
     try:
         with pytest.raises(EngineError) as failure:

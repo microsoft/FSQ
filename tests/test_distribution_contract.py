@@ -67,8 +67,10 @@ def test_agent_engine_distribution_does_not_require_agents_sdk() -> None:
         requirements.extend(optional)
     assert "openai-agents" not in {canonicalize_name(Requirement(requirement).name) for requirement in requirements}
     assert "openai==2.34.0" in metadata["dependencies"]
+    assert "google-genai==2.21.0" in metadata["dependencies"]
     assert "httpx==0.28.1" in metadata["dependencies"]
     assert "OpenAI Agents SDK" not in metadata["description"]
+
 
 def test_default_distribution_contract() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))

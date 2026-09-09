@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import base64
-import json
 from copy import deepcopy
 from typing import TYPE_CHECKING
 
 from openai import APITimeoutError
 
+from ._backend import decode_tool_arguments
 from ._contracts import AgentEvent, EngineError, ImageContent, ModelResult, TextContent, TokenUsage
 from ._schema import ensure_strict_json_schema
 
@@ -58,25 +58,6 @@ def token_usage(usage: object) -> TokenUsage | None:
         requests=1,
         cached_input_tokens=cached_input_tokens,
         reasoning_tokens=reasoning_tokens,
-    )
-
-
-def add_usage(total: TokenUsage | None, measured: TokenUsage | None) -> TokenUsage | None:
-    if total is None:
-        return measured
-    if measured is None:
-        return total
-    return TokenUsage(
-        input_tokens=total.input_tokens + measured.input_tokens,
-        output_tokens=total.output_tokens + measured.output_tokens,
-        total_tokens=total.total_tokens + measured.total_tokens,
-        requests=total.requests + measured.requests,
-        cached_input_tokens=(
-            total.cached_input_tokens + measured.cached_input_tokens
-            if total.cached_input_tokens is not None and measured.cached_input_tokens is not None
-            else None
-        ),
-        reasoning_tokens=(total.reasoning_tokens + measured.reasoning_tokens if total.reasoning_tokens is not None and measured.reasoning_tokens is not None else None),
     )
 
 
@@ -169,20 +150,6 @@ def _item_text(value: object) -> str:
     if not isinstance(content, list):
         return ""
     return "\n".join(text for part in content if isinstance(text := _field(part, "text"), str))
-
-
-def _reject_json_constant(value: str) -> None:
-    raise ValueError("Tool arguments must contain valid JSON values.")
-
-
-def decode_tool_arguments(raw_arguments: object) -> dict | None:
-    if not isinstance(raw_arguments, str):
-        return None
-    try:
-        arguments = json.loads(raw_arguments, parse_constant=_reject_json_constant)
-    except ValueError:
-        return None
-    return arguments if isinstance(arguments, dict) else None
 
 
 def semantic_event(item: dict) -> AgentEvent | None:

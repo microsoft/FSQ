@@ -5,6 +5,7 @@ import type {
   AzureConfigPayload,
   OpenAIConfigPayload,
   OpenAIModelsResponse,
+  GoogleGeminiConfigPayload,
   ConfigResponse,
   ConnectionTestResponse,
   GitHubDeviceFlowResponse,
@@ -44,6 +45,8 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   const [savePending, setSavePending] = useState(false);
   const [saveError, setSaveError] = useState<ApiErrorBody | null>(null);
   const [openaiModels, setOpenAIModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const [geminiModels, setGeminiModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const geminiModelsControllerRef = useRef<AbortController | null>(null);
   const [saveRecovery, setSaveRecovery] = useState<SaveRecovery>('none');
   const recoveryBlocked = saveRecovery === 'loading' || saveRecovery === 'unavailable';
   const modelsControllerRef = useRef<AbortController | null>(null);
@@ -115,6 +118,30 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     }
   }, [client]);
 
+  const clearGeminiModels = useCallback(() => {
+    geminiModelsControllerRef.current?.abort();
+    geminiModelsControllerRef.current = null;
+    setGeminiModels({ state: 'idle', data: null, error: null });
+  }, []);
+
+  const loadGeminiModels = useCallback(async (apiKey: string) => {
+    geminiModelsControllerRef.current?.abort();
+    const controller = new AbortController();
+    geminiModelsControllerRef.current = controller;
+    setGeminiModels({ state: 'loading', data: null, error: null });
+    try {
+      const data = await client.googleGeminiModels(apiKey.trim(), controller.signal);
+      if (!mountedRef.current || geminiModelsControllerRef.current !== controller || controller.signal.aborted) return null;
+      setGeminiModels({ state: 'ready', data, error: null });
+      return data;
+    } catch (error) {
+      if (mountedRef.current && geminiModelsControllerRef.current === controller && !controller.signal.aborted) {
+        setGeminiModels({ state: 'error', data: null, error: error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: 'The Google Gemini configuration request could not be completed.', action: 'Check the local server and retry.' } });
+      }
+      return null;
+    }
+  }, [client]);
+
   const reconcileOpenAI = useCallback(async () => {
     recoveryControllerRef.current?.abort();
     configControllerRef.current?.abort();
@@ -134,7 +161,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     }
   }, [client]);
 
-  const saveOpenAI = useCallback(async (payload: OpenAIConfigPayload) => {
+  const saveOpenAI = useCallback(async (payload: OpenAIConfigPayload, kind: 'openai' | 'google_gemini' = 'openai') => {
     if (saveControllerRef.current || saveRecovery === 'loading' || saveRecovery === 'unavailable') return null;
     const controller = new AbortController();
     saveControllerRef.current = controller;
@@ -142,7 +169,8 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     setSaveError(null);
     setSaveRecovery('none');
     try {
-      const data = await client.saveOpenAIConfig({ modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() }, controller.signal);
+      const save = kind === 'google_gemini' ? client.saveGoogleGeminiConfig : client.saveOpenAIConfig;
+      const data = await save({ modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() }, controller.signal);
       if (!mountedRef.current || saveControllerRef.current !== controller || controller.signal.aborted) return null;
       setConfig({ state: 'ready', data, error: null });
       return data;
@@ -161,6 +189,8 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       }
     }
   }, [client, reconcileOpenAI, saveRecovery]);
+
+  const saveGemini = useCallback((payload: GoogleGeminiConfigPayload) => saveOpenAI(payload, 'google_gemini'), [saveOpenAI]);
 
   const schedulePoll = useCallback((flow: GitHubDeviceFlowResponse, generation: number) => {
     if (!isPolling(flow)) return;
@@ -377,6 +407,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       configControllerRef.current?.abort();
       saveControllerRef.current?.abort();
       modelsControllerRef.current?.abort();
+      geminiModelsControllerRef.current?.abort();
       recoveryControllerRef.current?.abort();
       testControllerRef.current?.abort();
       clearPoll();
@@ -389,6 +420,10 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     config,
     reload: loadConfig,
     openaiModels,
+    geminiModels,
+    loadGeminiModels,
+    clearGeminiModels,
+    saveGemini,
     loadOpenAIModels,
     clearOpenAIModels,
     saveOpenAI,

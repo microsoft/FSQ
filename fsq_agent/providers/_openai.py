@@ -9,7 +9,7 @@ import httpx
 
 from fsq_agent.config import Settings, validate_provider_settings
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers._azure_openai import ProviderClientConfig
+from fsq_agent.providers._client_config import ProviderClientConfig
 
 _BASE_URL = "https://api.openai.com/v1/"
 _MAX_RESPONSE_BYTES = 1024 * 1024

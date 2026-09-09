@@ -194,7 +194,7 @@ def _patch_runtime_engine(monkeypatch: pytest.MonkeyPatch) -> None:
 
     _FakeEngine.requests = []
     monkeypatch.setattr(runtime_module, "build_model_provider_session", lambda _settings: _FakeProviderSession())
-    monkeypatch.setattr(runtime_module, "create_agent_engine", _FakeEngine)
+    monkeypatch.setattr(runtime_module, "create_agent_engine_for_model", lambda model: _FakeEngine())
 
 
 def _test_request(runtime: DefaultCodingAgentRuntime, run_id: str = "") -> AgentRequest:
@@ -514,7 +514,7 @@ async def test_runtime_classifies_engine_content_filter_incomplete(monkeypatch: 
             raise EngineError("incomplete", "Model response incomplete.", reason="content_filter")
 
     _patch_runtime_engine(monkeypatch)
-    monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.create_agent_engine", _ContentFilterEngine)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.create_agent_engine_for_model", lambda model: _ContentFilterEngine())
     runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
     events: list[Any] = []
 

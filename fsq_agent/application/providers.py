@@ -5,11 +5,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fsq_agent.application.contracts import ApplicationError, ApplicationErrorCategory, ApplicationErrorCode, ProviderConfigurationResult, ProviderStatusResult
-from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider, save_openai_provider
+from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider, save_google_gemini_provider, save_openai_provider
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import (
     GitHubCopilotModel,
     GitHubDeviceCode,
+    GoogleGeminiModel,
     OpenAIModel,
     activate_github_copilot_authorization,
     check_provider_readiness,
@@ -17,6 +18,7 @@ from fsq_agent.providers import (
     list_github_copilot_models,
     request_github_copilot_device_code,
 )
+from fsq_agent.providers import list_google_gemini_models as _discover_google_gemini_models
 from fsq_agent.providers import list_openai_models as _discover_openai_models
 
 _OPENAI_FAILURES = {
@@ -82,6 +84,46 @@ def configure_azure_openai(*, base_url: str, model: str, api_key: str, user_conf
     return ProviderConfigurationResult(provider="azure_openai", model=saved.provider.model if saved.provider is not None else "")
 
 
+def _gemini_error(reason: object) -> ApplicationError:
+    error = _openai_error(reason)
+    return ApplicationError(
+        code=error.code,
+        category=error.category,
+        message=error.message.replace("OpenAI", "Google Gemini"),
+        action=(error.action or "").replace("OpenAI", "Google Gemini"),
+        details={"provider": "google_gemini", "reason": error.details["reason"]},
+    )
+
+
+def list_google_gemini_models(*, api_key: str) -> tuple[GoogleGeminiModel, ...]:
+    try:
+        return _discover_google_gemini_models(api_key=api_key)
+    except ConfigurationError as error:
+        raise _gemini_error(error.context.get("reason") if error.context.get("provider") == "google_gemini" else None) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _gemini_error("internal") from None
+
+
+def configure_google_gemini(*, model: str, api_key: str, user_config_root: str | Path | None = None) -> ProviderConfigurationResult:
+    if not isinstance(model, str) or not model.strip():
+        raise _gemini_error("invalid_candidate")
+    normalized_model = model.strip()
+    models = list_google_gemini_models(api_key=api_key)
+    if normalized_model not in {item.id for item in models}:
+        raise _gemini_error("model_not_offered")
+    try:
+        save_google_gemini_provider(model=normalized_model, api_key=api_key, user_config_root=user_config_root)
+    except ConfigurationError as error:
+        raise _gemini_error(error.context.get("reason") if error.context.get("provider") == "google_gemini" else None) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _gemini_error("internal") from None
+    return ProviderConfigurationResult(provider="google_gemini", model=normalized_model)
+
+
 def request_github_device_code() -> GitHubDeviceCode:
     try:
         return request_github_copilot_device_code()
@@ -130,4 +172,13 @@ def _validate_selected_model(selected: str, models: tuple[GitHubCopilotModel, ..
         raise ValueError("selected model is not offered")
 
 
-__all__ = ["complete_github_configuration", "configure_azure_openai", "configure_openai", "list_openai_models", "provider_status", "request_github_device_code"]
+__all__ = [
+    "complete_github_configuration",
+    "configure_azure_openai",
+    "configure_google_gemini",
+    "configure_openai",
+    "list_google_gemini_models",
+    "list_openai_models",
+    "provider_status",
+    "request_github_device_code",
+]

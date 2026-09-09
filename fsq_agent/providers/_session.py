@@ -6,9 +6,9 @@ import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from fsq_agent.agent_engine import EngineError, Model, ModelProvider, ModelRequest, ModelResult, create_model_provider
+from fsq_agent.agent_engine import EngineError, Model, ModelProvider, ModelRequest, ModelResult, create_google_gemini_model_provider, create_model_provider
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers._azure_openai import ProviderClientConfig
+from fsq_agent.providers._client_config import ProviderClientConfig
 
 
 class ModelProviderSession:
@@ -17,7 +17,7 @@ class ModelProviderSession:
         self.provider = client_config.provider
         self.model = client_config.model
         self.metadata = dict(client_config.metadata)
-        self._provider_factory = provider_factory or create_model_provider
+        self._provider_factory = provider_factory or (create_google_gemini_model_provider if client_config.backend == "google_interactions" else create_model_provider)
         self._model_provider: ModelProvider | None = None
 
     def get_model(self) -> Model:
@@ -50,6 +50,8 @@ class ModelProviderSession:
 
     def _new_provider(self) -> ModelProvider:
         try:
+            if self.client_config.backend == "google_interactions":
+                return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url)
             return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url, headers=self.client_config.default_headers or None)
         except EngineError as error:
             if error.category == "configuration":

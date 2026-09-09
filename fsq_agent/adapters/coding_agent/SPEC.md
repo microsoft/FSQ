@@ -14,7 +14,7 @@ Implement public SDK-neutral Agent runtime protocols through `agent_engine`. Thi
 - `config`: runtime settings and validation.
 - `tools`: AgentTool definitions and execution adapters.
 - `core`: capability registry, StepRunner, and public harness/factory contracts.
-- Standard-library runtime, JSON, timing, and filesystem helpers; no SDK/OpenAI imports or injected SDK constructor types.
+- Standard-library runtime, JSON, timing, and filesystem helpers; no OpenAI/Google SDK imports or injected SDK constructor types.
 
 The adapter must not be imported by Application, Agent, Execution, Core, Case DSL, Drivers, Harnesses, Environments, Config, Models, or other inward packages.
 
@@ -52,7 +52,8 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 - Main and verification provenance records use `agent_runtime.runner` and `agent_runtime.verifier`. They are runtime summaries, not capability invocations or recordable Case commands.
 - Startup readiness uses the `Agent runtime ready` title, and runtime failures use `Agent run failed`; event types and payload field shapes are stable.
 - All three operations call `AgentEngine.run` with the selected neutral model. Main execution requests streaming; output contracts are derived from the authoritative FSQ Pydantic models and their parsers, not duplicated schemas or SDK classes.
-- Tracing readiness is computed from the configured switch and OpenAI export-key presence, then passed as an effective neutral choice. The private backend supplies fixed GPT agent parameters.
+- Production composition obtains the engine through `create_agent_engine_for_model` using the neutral model from the frozen Provider session. It does not assume every model accepts the OpenAI engine, inspect SDK objects, or reuse an incompatible engine across sessions. Injected neutral test collaborators retain their documented composition behavior. Pre-plan, main execution, and verification remain on the prepared task's Provider snapshot; a saved Provider replacement affects only subsequently constructed tasks.
+- Tracing readiness is computed from the configured switch and OpenAI export-key presence, then passed as an effective neutral choice. Private engine backends own provider-specific generation parameters; Google inference credentials do not authorize OpenAI trace export.
 - Context policy receives ordered raw tool-output entries and returns output replacements only; vendor transcripts and private reasoning state are not exposed. It applies the same recency and size rules to all tool-output text and does not interpret tool sensitivity markers. Runtime-secret redaction remains owned by the existing upstream execution boundaries and occurs before context processing. No user-turn trimming policy is configured.
 - The most recent three tool outputs remain inline only when each output is within the 30,000-character per-output limit and the retained outputs together fit the 60,000-character cumulative inline budget. The policy selects inline outputs newest-first. Every other historical output is represented by a bounded artifact reference, regardless of its individual size, so model-facing tool history remains bounded as tool calls accumulate.
 - Historical replacements contain concise artifact references without copying output previews into every later model request. Unnamed historical tool-output entries use `runtime_tool` when a new artifact must be written. Existing artifact references retain their saved paths and are never renamed, nested inside replacement artifacts, or reconstructed from current tool labels. Repeated filtering reuses the artifact associated with the original call ID.
@@ -63,3 +64,7 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 - Harness construction remains lazy and browser/application lifecycle remains explicit capability behavior.
 - CLI and Control Plane inject the same runtime factory at composition boundaries.
 - The adapter does not migrate user configuration or historical Run files. CLI and HTTP/SSE field shapes, report schemas, evidence paths, and business verdict semantics remain independent of the concrete Python runtime name.
+
+## Verification Scope
+
+Model-paired engine construction, all three runtime operations, output contracts, tool events, context-budget replacements, and measured main-only usage work through both private engine backends without SDK imports in the adapter. Shared real-client transport tests exercise actual FSQ schemas and tool/result continuation; isolated runtime tests preserve neutral collaborator injection, task snapshot isolation, and existing OpenAI/Azure/Copilot behavior.

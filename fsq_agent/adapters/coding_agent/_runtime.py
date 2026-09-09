@@ -25,7 +25,7 @@ from fsq_agent.agent_engine import (
     ToolBinding,
     ToolCall,
     ToolOutputEntry,
-    create_agent_engine,
+    create_agent_engine_for_model,
 )
 from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.config import Settings, validate_runtime_settings
@@ -820,8 +820,7 @@ class DefaultCodingAgentRuntime:
         )
 
     async def _run_agent(self, model: Model, request: AgentRequest, run_id: str, task_id: str, event_sink: RunEventSink | None) -> AgentResult:
-        if self._engine is None:
-            self._engine = create_agent_engine()
+        engine = self._engine if self._engine is not None else create_agent_engine_for_model(model)
 
         async def on_event(event: AgentEvent) -> None:
             run_event = self._map_stream_event(event, run_id, task_id)
@@ -829,7 +828,7 @@ class DefaultCodingAgentRuntime:
                 await self._emit(event_sink, run_event)
 
         try:
-            return await self._engine.run(model, request, on_event=on_event)
+            return await engine.run(model, request, on_event=on_event)
         finally:
             for key in list(self._stream_tool_calls):
                 if key[:2] == (run_id, task_id):

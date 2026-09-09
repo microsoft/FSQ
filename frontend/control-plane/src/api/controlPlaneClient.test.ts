@@ -195,6 +195,17 @@ it('accepts empty OpenAI model discovery', async () => {
   await expect(controlPlaneClient.openaiModels('local-key')).resolves.toEqual({ models: [] });
 });
 
+it('validates Gemini config and discovery with exact fields', async () => {
+  const config = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'local-key' } };
+  vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ id: 'gemini-3.8-flash', name: 'Flash' }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify(config)))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, provider: 'google_gemini', modelName: 'gemini-3.8-flash', durationMs: 12, apiKey: 'must-not-leak' })));
+  await expect(controlPlaneClient.googleGeminiModels('local-key')).resolves.toEqual({ models: [{ id: 'gemini-3.8-flash', name: 'Flash' }] });
+  await expect(controlPlaneClient.saveGoogleGeminiConfig({ apiKey: 'local-key', modelName: 'gemini-3.8-flash' })).resolves.toEqual(config);
+  await expect(controlPlaneClient.testConnection()).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
 it('rejects an OpenAI configuration with a custom endpoint', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'local-key', baseUrl: 'https://untrusted.example' } })));
   await expect(controlPlaneClient.config()).rejects.toMatchObject({ body: { code: 'invalid_response' } });

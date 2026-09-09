@@ -8,7 +8,7 @@ This guide takes a new user from installation to a deterministic Web run against
 - A supported installed Chromium-family browser. The examples use stable Chrome.
 - An empty directory you can use as a local FSQ Workspace.
 
-AI exploration and suggestion analysis also require OpenAI, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
+AI exploration and suggestion analysis also require OpenAI, Google Gemini, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
 
 ## Install
 
@@ -55,12 +55,16 @@ Alternatively run `fsq providers configure openai` for the official OpenAI API, 
 
 For browser configuration, run `fsq ui` and open **Settings**:
 
-1. Choose **Add configuration** or **Change provider**, then **OpenAI**.
+1. Choose **Add configuration** or **Change provider**, then **OpenAI** or **Google Gemini**.
 2. Enter an API key and select **Load models**. Select one offered model, then **Save changes**.
 3. Select **Test connection** to send a minimal request using the saved configuration.
 4. Return to **Home** to see the Provider summary, then open **Test Runner**, choose a Workspace/platform/target, and start an Explore task explicitly.
 
 OpenAI always uses `https://api.openai.com/v1/` and the Responses API. Its picker offers general-purpose GPT major version 5 or later, excluding mini, nano, Codex, embedding, audio, realtime, image, search, transcription, and TTS variants. An empty list cannot be saved. Changing the key invalidates the list and selection; reload before saving. Azure instead requires a resource endpoint, **deployment name** (not necessarily an OpenAI model id), and API key.
+
+For Gemini, obtain an API key from [Google AI Studio](https://aistudio.google.com/apikey). Use the browser flow above or run `fsq providers configure google_gemini`; the interactive command hides the key and requires an explicit model selection. The picker loads all bounded model-list pages and offers only stable Gemini 3-or-later general-purpose Flash/Pro ids with content-generation support. Preview, Latest, Experimental, Lite, image/audio/embedding and other specialized variants are excluded. An incomplete discovery is an error, not a partial selectable list. The fixed Developer API uses native Interactions with `store=false` and local conversation history; Vertex AI, ADC/service accounts, and custom endpoints are not supported.
+
+Gemini metadata lives in the version-3 user configuration and its plaintext key in `~/.fsq/auth/google-gemini.json`. The same saved Provider serves pre-planning, execution, final verification, AI visual assertions, suggestions, and connection tests. **Test connection** proves a minimal saved-model request, not every tool/schema feature or Case. Start Explore explicitly, inspect its evidence, and save the generated Case using the normal flow; Strict Replay uses Gemini only when its Case requires AI assertions.
 
 Saving rechecks model visibility but does not run inference. Readiness/status is a local configuration check, not a connection test. API keys are plaintext local credentials, masked in Settings by default but returned in full by the trusted-loopback Config API. Successful Provider replacement removes inactive credentials. Neither configuration nor execution falls back to environment variables or another Provider.
 

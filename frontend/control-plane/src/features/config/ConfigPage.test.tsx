@@ -42,6 +42,92 @@ function client(config: ConfigResponse = unconfigured, overrides: Partial<Contro
 const openai: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'candidate-key' } };
 const openaiModels = { models: [{ id: 'gpt-5', name: 'gpt-5' }, { id: 'gpt-5.4', name: 'gpt-5.4' }] };
 
+it('configures Gemini using explicit discovery and tests the saved provider', async () => {
+  const saved: ConfigResponse = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'google-key' } };
+  const api = client(unconfigured, {
+    googleGeminiModels: vi.fn().mockResolvedValue({ models: [{ id: 'gemini-3.8-flash', name: 'Gemini Flash' }] }),
+    saveGoogleGeminiConfig: vi.fn().mockResolvedValue(saved),
+    testConnection: vi.fn().mockResolvedValue({ success: true, provider: 'google_gemini', modelName: 'gemini-3.8-flash', durationMs: 12 }),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: /Google Gemini/ }));
+  expect(screen.getByRole('heading', { name: 'Google Gemini configuration' })).toBeVisible();
+  expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('API key'), 'google-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  const select = await screen.findByRole('combobox', { name: 'Model' });
+  expect(select).toHaveValue('');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  await user.selectOptions(select, 'gemini-3.8-flash');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(api.saveGoogleGeminiConfig).toHaveBeenCalledWith({ apiKey: 'google-key', modelName: 'gemini-3.8-flash' }, expect.any(AbortSignal));
+  const test = await screen.findByRole('button', { name: 'Test connection' });
+  await user.click(test);
+  expect(await screen.findByRole('dialog')).toHaveTextContent('Google Gemini');
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+  await waitFor(() => expect(test).toHaveFocus());
+});
+
+it('does not borrow an OpenAI key when changing to Gemini and invalidates discovered models', async () => {
+  const api = client(openai, { googleGeminiModels: vi.fn().mockResolvedValue({ models: [{ id: 'gemini-3.8-flash', name: 'Flash' }] }) });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Change provider' }));
+  await user.click(screen.getByRole('button', { name: /Google Gemini/ }));
+  expect(screen.getByLabelText('API key')).toHaveValue('');
+  await user.type(screen.getByLabelText('API key'), 'google-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'gemini-3.8-flash');
+  await user.type(screen.getByLabelText('API key'), '-changed');
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+});
+
+it('preserves Gemini drafts after a delayed unknown save and hydrates a later successful save', async () => {
+  const saved: ConfigResponse = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'old-key' } };
+  const updated: ConfigResponse = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.7-flash', apiKey: 'new-key' } };
+  let fail!: (error: Error) => void;
+  let readback!: (value: ConfigResponse) => void;
+  const api = client(saved, {
+    config: vi.fn().mockResolvedValueOnce(saved).mockReturnValueOnce(new Promise(resolve => { readback = resolve; })),
+    googleGeminiModels: vi.fn().mockResolvedValue({ models: [{ id: 'gemini-3.7-flash', name: 'Flash' }] }),
+    saveGoogleGeminiConfig: vi.fn().mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; })).mockResolvedValueOnce(updated),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  const key = await screen.findByLabelText('API key');
+  await user.clear(key);
+  await user.type(key, ' new-key ');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'gemini-3.7-flash');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(screen.getByRole('button', { name: 'Change provider' })).toBeDisabled();
+  fail(new Error('lost response'));
+  await screen.findByText('Reading current configuration...');
+  expect(key).toBeDisabled();
+  readback(saved);
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+  expect(key).toHaveValue(' new-key ');
+  expect(api.saveGoogleGeminiConfig).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => expect(key).toHaveValue('new-key'));
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled();
+});
+
+it('keeps Gemini discovery errors unsaveable without a partial list', async () => {
+  const saved: ConfigResponse = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'key' } };
+  const api = client(saved, { googleGeminiModels: vi.fn().mockRejectedValue(new ControlPlaneApiError(502, { code: 'provider_response_invalid', message: 'Discovery is incomplete.', action: 'Retry models.' })) });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Load models' }));
+  expect(await screen.findByText('Discovery is incomplete.')).toBeVisible();
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+});
+
 it('configures OpenAI through explicit model discovery and tests only saved configuration', async () => {
   const api = client(unconfigured, { openaiModels: vi.fn().mockResolvedValue(openaiModels), saveOpenAIConfig: vi.fn().mockResolvedValue(openai), testConnection: vi.fn().mockResolvedValue({ success: true, provider: 'openai', modelName: 'gpt-5', durationMs: 35 }) });
   const user = userEvent.setup();

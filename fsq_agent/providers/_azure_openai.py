@@ -1,21 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from fsq_agent.config import Settings
 from fsq_agent.models import ConfigurationError
-
-
-@dataclass(frozen=True)
-class ProviderClientConfig:
-    provider: str
-    model: str
-    api_key: str = field(repr=False)
-    base_url: str
-    default_headers: dict[str, str] = field(default_factory=dict, repr=False)
-    metadata: dict[str, Any] = field(default_factory=dict)
+from fsq_agent.providers._client_config import ProviderClientConfig
 
 
 def build_azure_openai_client_config(settings: Settings) -> ProviderClientConfig:

@@ -5,7 +5,7 @@ export function ConnectionResultDialog({ result, onClose, returnFocus }: { resul
   const title = result.success ? 'Connection successful' : 'Connection failed';
   return <DialogFrame title={title} onClose={onClose} returnFocus={returnFocus}>
     {result.success ? <dl className="connection-result">
-      <div><dt>Provider</dt><dd>{{ openai: 'OpenAI', azure_openai: 'Azure OpenAI', github_copilot: 'GitHub Copilot' }[result.data.provider]}</dd></div>
+      <div><dt>Provider</dt><dd>{{ openai: 'OpenAI', azure_openai: 'Azure OpenAI', google_gemini: 'Google Gemini', github_copilot: 'GitHub Copilot' }[result.data.provider]}</dd></div>
       <div><dt>Model</dt><dd className="mono">{result.data.modelName}</dd></div>
       <div><dt>Duration</dt><dd>{result.data.durationMs} ms</dd></div>
     </dl> : <div className="config-error" role="alert"><strong>{result.error.message}</strong><span>{result.error.action}</span></div>}

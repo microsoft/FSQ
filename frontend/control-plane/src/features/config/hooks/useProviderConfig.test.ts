@@ -37,6 +37,40 @@ function client(overrides: Partial<ControlPlaneClient> = {}) {
 
 const openaiConfig: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'saved-openai-key' } };
 
+it('invalidates Gemini discovery without touching OpenAI discovery', async () => {
+  let finish!: (value: { models: { id: string; name: string }[] }) => void;
+  const api = client({ googleGeminiModels: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  act(() => { void result.current.loadGeminiModels('google-key'); });
+  act(() => result.current.clearGeminiModels());
+  await act(async () => finish({ models: [{ id: 'gemini-3.8-flash', name: 'Flash' }] }));
+  expect(result.current.geminiModels.state).toBe('idle');
+  expect(result.current.openaiModels.state).toBe('idle');
+  expect(vi.mocked(api.googleGeminiModels).mock.calls[0][1]?.aborted).toBe(true);
+});
+
+it('blocks every provider replacement after an unknown Gemini save until readback', async () => {
+  const api = client({ config: vi.fn().mockResolvedValueOnce(openaiConfig).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(openaiConfig), saveGoogleGeminiConfig: vi.fn().mockRejectedValue(new TypeError('lost response')), saveOpenAIConfig: vi.fn() });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  await act(async () => { await result.current.saveGemini({ modelName: 'gemini-3.8-flash', apiKey: 'google-key' }); });
+  expect(result.current.saveRecovery).toBe('unavailable');
+  await act(async () => {
+    await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'other-key' });
+    await result.current.saveGemini({ modelName: 'gemini-3.8-flash', apiKey: 'google-key' });
+    await result.current.saveAzure({ baseUrl: 'https://example.test', modelName: 'deployment', apiKey: 'other-key' });
+    await result.current.startGithub();
+  });
+  expect(api.saveOpenAIConfig).not.toHaveBeenCalled();
+  expect(api.saveAzureConfig).not.toHaveBeenCalled();
+  expect(api.startGithubDeviceFlow).not.toHaveBeenCalled();
+  expect(api.saveGoogleGeminiConfig).toHaveBeenCalledTimes(1);
+  await act(async () => { await result.current.reconcileOpenAI(); });
+  expect(result.current.saveRecovery).toBe('reconciled');
+  expect(result.current.config.data).toEqual(openaiConfig);
+});
+
 it('loads OpenAI models and ignores a result invalidated by a key change', async () => {
   let finish!: (value: { models: { id: string; name: string }[] }) => void;
   const api = client({ openaiModels: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });

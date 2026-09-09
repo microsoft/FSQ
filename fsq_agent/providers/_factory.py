@@ -4,6 +4,7 @@
 from fsq_agent.config import Settings
 from fsq_agent.providers._azure_openai import build_azure_openai_client_config
 from fsq_agent.providers._github_copilot import build_github_copilot_client_config, refresh_github_copilot_client_config
+from fsq_agent.providers._google_gemini import build_google_gemini_client_config
 from fsq_agent.providers._openai import build_openai_client_config
 from fsq_agent.providers._session import ModelProviderSession
 
@@ -14,6 +15,8 @@ class ModelProviderFactory:
 
     def build_session(self) -> ModelProviderSession:
         provider = self.settings.agent_runtime.provider
+        if provider == "google_gemini":
+            return ModelProviderSession(build_google_gemini_client_config(self.settings))
         if provider == "github_copilot":
             return ModelProviderSession(build_github_copilot_client_config(self.settings))
         if provider == "azure_openai":

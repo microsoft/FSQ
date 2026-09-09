@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ControlPlaneClient } from '../../api/controlPlaneClient';
-import type { AzureConfigPayload, ConfigResponse, OpenAIConfigPayload } from '../../api/types';
+import type { AzureConfigPayload, ConfigResponse, GoogleGeminiConfigPayload, OpenAIConfigPayload } from '../../api/types';
 import { AzureConfigForm } from './components/AzureConfigForm';
 import { OpenAIConfigForm } from './components/OpenAIConfigForm';
+import { GoogleGeminiConfigForm } from './components/GoogleGeminiConfigForm';
 import { ConnectionResultDialog } from './components/ConnectionResultDialog';
 import { ProviderDialog } from './components/ProviderDialog';
 import { useProviderConfig } from './hooks/useProviderConfig';
@@ -40,6 +41,7 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
   };
   const [azureDraft, setAzureDraft] = useState<AzureConfigPayload | null>(null);
   const [openaiDraft, setOpenAIDraft] = useState<OpenAIConfigPayload | null>(null);
+  const [geminiDraft, setGeminiDraft] = useState<GoogleGeminiConfigPayload | null>(null);
   const appliedConfig = useRef<ConfigResponse | null>(null);
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
   const loadedAzure = useMemo(() => persistedAzure(provider.config.data), [provider.config.data]);
@@ -48,10 +50,13 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     return config?.configured && config.provider.type === 'openai' ? { modelName: config.provider.modelName, apiKey: config.provider.apiKey } : null;
   }, [provider.config.data]);
   const loadedProvider = provider.config.data?.configured ? provider.config.data.provider : null;
-  const dirty = openaiDraft !== null
+  const loadedGemini = useMemo(() => loadedProvider?.type === 'google_gemini' ? { modelName: loadedProvider.modelName, apiKey: loadedProvider.apiKey } : null, [loadedProvider]);
+  const dirty = geminiDraft !== null
+    ? loadedGemini ? geminiDraft.modelName.trim() !== loadedGemini.modelName || geminiDraft.apiKey.trim() !== loadedGemini.apiKey : Boolean(geminiDraft.modelName.trim() || geminiDraft.apiKey.trim())
+    : openaiDraft !== null
     ? loadedOpenAI ? openaiDraft.modelName.trim() !== loadedOpenAI.modelName || openaiDraft.apiKey.trim() !== loadedOpenAI.apiKey : Boolean(openaiDraft.modelName.trim() || openaiDraft.apiKey.trim())
     : azureDraft !== null && (loadedAzure ? !sameAzure(azureDraft, loadedAzure) : Object.values(normalized(azureDraft)).some(Boolean));
-  const draftType = openaiDraft ? 'openai' : azureDraft ? 'azure_openai' : null;
+  const draftType = geminiDraft ? 'google_gemini' : openaiDraft ? 'openai' : azureDraft ? 'azure_openai' : null;
   const replacementDraft = draftType !== null && loadedProvider !== null && loadedProvider.type !== draftType;
   const recoveryBlocked = provider.saveRecovery === 'loading' || provider.saveRecovery === 'unavailable';
   const saveUncertain = provider.saveRecovery !== 'none';
@@ -61,9 +66,10 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     if (!provider.config.data || appliedConfig.current === provider.config.data) return;
     appliedConfig.current = provider.config.data;
     if (provider.saveRecovery !== 'none') return;
-    if (loadedAzure) { setAzureDraft(loadedAzure); setOpenAIDraft(null); }
-    else if (loadedOpenAI) { setOpenAIDraft(loadedOpenAI); setAzureDraft(null); }
-  }, [loadedAzure, loadedOpenAI, provider.config.data, provider.saveRecovery]);
+    if (loadedAzure) { setAzureDraft(loadedAzure); setOpenAIDraft(null); setGeminiDraft(null); }
+    else if (loadedOpenAI) { setOpenAIDraft(loadedOpenAI); setAzureDraft(null); setGeminiDraft(null); }
+    else if (loadedGemini) { setGeminiDraft(loadedGemini); setAzureDraft(null); setOpenAIDraft(null); }
+  }, [loadedAzure, loadedOpenAI, loadedGemini, provider.config.data, provider.saveRecovery]);
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => { onSavePendingChange?.(provider.savePending); return () => onSavePendingChange?.(false); }, [provider.savePending, onSavePendingChange]);
   useEffect(() => { onSaveUncertainChange?.(saveUncertain); return () => onSaveUncertainChange?.(false); }, [saveUncertain, onSaveUncertainChange]);
@@ -71,6 +77,7 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     if (provider.deviceFlow?.status !== 'success' || !provider.config.data?.configured || provider.config.data.provider.type !== 'github_copilot') return;
     setAzureDraft(null);
     setOpenAIDraft(null);
+    setGeminiDraft(null);
     setProviderDialogOpen(false);
     void provider.clearDeviceFlow();
   }, [provider.config.data, provider.deviceFlow?.status, provider.clearDeviceFlow]);
@@ -78,7 +85,9 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
   const discardDraft = () => {
     setAzureDraft(loadedAzure ? { ...loadedAzure } : null);
     setOpenAIDraft(loadedOpenAI ? { ...loadedOpenAI } : null);
+    setGeminiDraft(loadedGemini ? { ...loadedGemini } : null);
     provider.clearOpenAIModels();
+    provider.clearGeminiModels();
   };
   const confirmDiscard = () => !provider.savePending && (!saveUncertain || window.confirm('The save result is unknown. Leaving does not cancel it. Continue?')) && (!dirty || window.confirm('Discard unsaved Provider changes?'));
   const openProviderDialog = () => {
@@ -93,6 +102,8 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     discardDraft();
   };
   const selectAzure = () => {
+    setGeminiDraft(null);
+    provider.clearGeminiModels();
     setOpenAIDraft(null);
     provider.clearOpenAIModels();
     setAzureDraft(loadedAzure ? { ...loadedAzure } : { ...emptyAzure });
@@ -100,6 +111,8 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     void provider.clearDeviceFlow();
   };
   const selectOpenAI = () => {
+    setGeminiDraft(null);
+    provider.clearGeminiModels();
     setAzureDraft(null);
     setOpenAIDraft(loadedOpenAI ? { ...loadedOpenAI } : { modelName: '', apiKey: '' });
     provider.clearOpenAIModels();
@@ -119,6 +132,30 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
       ...current,
       modelName: data.models.some(model => model.id === current.modelName) ? current.modelName
         : loadedOpenAI?.apiKey === key.trim() && data.models.some(model => model.id === loadedOpenAI.modelName) ? loadedOpenAI.modelName : '',
+    } : current);
+  };
+  const selectGemini = () => {
+    setOpenAIDraft(null);
+    setAzureDraft(null);
+    setGeminiDraft(loadedGemini ? { ...loadedGemini } : { modelName: '', apiKey: '' });
+    provider.clearOpenAIModels();
+    provider.clearGeminiModels();
+    setProviderDialogOpen(false);
+    void provider.clearDeviceFlow();
+  };
+  const changeGemini = (draft: GoogleGeminiConfigPayload) => {
+    if (draft.apiKey !== geminiDraft?.apiKey) provider.clearGeminiModels();
+    setGeminiDraft(draft);
+  };
+  const loadGeminiModels = async () => {
+    if (!geminiDraft) return;
+    const key = geminiDraft.apiKey;
+    const data = await provider.loadGeminiModels(key);
+    if (!data) return;
+    setGeminiDraft(current => current?.apiKey === key ? {
+      ...current,
+      modelName: data.models.some(model => model.id === current.modelName) ? current.modelName
+        : loadedGemini?.apiKey === key.trim() && data.models.some(model => model.id === loadedGemini.modelName) ? loadedGemini.modelName : '',
     } : current);
   };
   const closeProviderDialog = async () => {
@@ -143,7 +180,7 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
   }
 
   const configured = provider.config.data?.configured === true;
-  const canTest = configured && !dirty && !replacementDraft && !provider.savePending && !deviceBusy && !provider.testPending && !recoveryBlocked && provider.openaiModels.state !== 'loading';
+  const canTest = configured && !dirty && !replacementDraft && !provider.savePending && !deviceBusy && !provider.testPending && !recoveryBlocked && provider.openaiModels.state !== 'loading' && provider.geminiModels.state !== 'loading';
   return <div className="config-page">
     {saveUncertain && <div className="config-recovery" role="status">
       <strong>The save result could not be confirmed.</strong>
@@ -151,7 +188,11 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
       <button className="button" type="button" disabled={provider.savePending || provider.saveRecovery === 'loading'} onClick={() => void provider.reconcileOpenAI()}>Reload configuration</button>
     </div>}
     {provider.config.error && <div className="config-error" role="alert"><strong>{provider.config.error.message}</strong><span>{provider.config.error.action}</span></div>}
-    {openaiDraft ? <OpenAIConfigForm draft={openaiDraft} configured={loadedProvider?.type === 'openai'} dirty={dirty}
+    {geminiDraft ? <GoogleGeminiConfigForm draft={geminiDraft} configured={loadedProvider?.type === 'google_gemini'} dirty={dirty}
+      models={provider.geminiModels} blocked={recoveryBlocked} savePending={provider.savePending} saveError={provider.saveError}
+      testPending={provider.testPending} canTest={canTest} onChange={changeGemini} onLoadModels={() => void loadGeminiModels()}
+      onSave={() => void provider.saveGemini(geminiDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog} onTest={testConnection}
+    /> : openaiDraft ? <OpenAIConfigForm draft={openaiDraft} configured={loadedProvider?.type === 'openai'} dirty={dirty}
       models={provider.openaiModels} blocked={recoveryBlocked} savePending={provider.savePending} saveError={provider.saveError}
       testPending={provider.testPending} canTest={canTest} onChange={changeOpenAI} onLoadModels={() => void loadOpenAIModels()}
       onSave={() => void provider.saveOpenAI(openaiDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog} onTest={testConnection}
@@ -174,7 +215,7 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     </section>}
     {providerDialogOpen && <ProviderDialog
       deviceFlow={provider.deviceFlow} deviceFlowPending={provider.deviceFlowPending} deviceFlowError={provider.deviceFlowError}
-      onSelectOpenAI={selectOpenAI} onSelectAzure={selectAzure} onStartGithub={provider.startGithub} onRetryModels={provider.retryGithubModels}
+      onSelectOpenAI={selectOpenAI} onSelectAzure={selectAzure} onSelectGemini={selectGemini} onStartGithub={provider.startGithub} onRetryModels={provider.retryGithubModels}
       onSaveModel={provider.saveGithubModel} onCancelAuthentication={cancelAuthentication}
       onClose={() => void closeProviderDialog()}
     />}

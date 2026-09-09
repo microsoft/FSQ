@@ -16,6 +16,8 @@ Adapters may import public APIs from `application`, `execution`, `models`, `conf
 
 The installed scripts target canonical `fsq_agent.adapters.cli:main`. Existing `fsq_agent.cli` and `fsq_agent.control_plane` packages remain compatibility entries for documented public symbols only, and each compatibility symbol references the canonical adapter object. Old private transport submodule imports are unsupported and absent.
 
+Detailed CLI and Control Plane transport contracts remain specified in `fsq_agent/cli/SPEC.md` and `fsq_agent/control_plane/SPEC.md`. Both surfaces configure and use the single `google_gemini` Provider through Application/Providers, and explicitly project its identity instead of falling through to another supplier. Model eligibility, pagination, credentials, and inference remain inward-owned.
+
 ## Internal Structure
 
 - `cli/`: CLI parsing, presentation, output modes, and exit mapping.
@@ -44,6 +46,6 @@ Adapters map stable inward failures into documented exit codes or safe HTTP/SSE 
 - Control Plane HTML, JavaScript, CSS, `entry-assets.json`, and all referenced generated assets are runtime package data included in both wheel and source distribution. Installed `fsq ui` resolves these resources from the installed package without a frontend source tree, Node.js, or runtime asset download.
 - CLI and Control Plane use the same public Execution services; adapter-private modules do not implement lifecycle or recording policy.
 - CLI and Control Plane composition roots inject the same Coding Agent runtime implementation into SDK-neutral Agent orchestration. Application and inward packages never import `adapters.coding_agent`.
-- Assertion evaluator construction consumes `ai_services`; configured supplier access consumes `providers`. Neither transport nor runtime adapters invoke OpenAI/Agents SDK inference directly.
+- Assertion evaluator construction consumes `ai_services`; configured supplier access consumes `providers`. Neither transport nor runtime adapters invoke OpenAI, Agents, or Google GenAI SDK inference directly.
 - CLI keeps this composition in a private helper rather than in command handlers. The helper may construct `FsqAgent` with the public Coding Agent runtime factory and return the SDK-neutral collaborator expected by Application, but it does not validate requests or own execution policy.
 - Module relocation does not change CLI, HTTP, SSE, frontend, workspace, Case, evidence, report, Provider, or Runs contracts.
