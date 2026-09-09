@@ -15,6 +15,8 @@ type DevicesLaunchRequest =
 export function ControlPlaneApp() {
   const [activePage, setActivePage] = useState<'overview' | 'workspace' | 'devices' | 'config'>('overview');
   const [configDirty, setConfigDirty] = useState(false);
+  const [configPending, setConfigPending] = useState(false);
+  const [configUncertain, setConfigUncertain] = useState(false);
   const [workspacePending,setWorkspacePending] = useState(false);
   const [workspaceDirty, setWorkspaceDirty] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceRegistryEntry[]>([]);
@@ -82,6 +84,8 @@ export function ControlPlaneApp() {
         setOverviewProvider({ status: 'unconfigured' });
       } else if (response.provider.type === 'github_copilot') {
         setOverviewProvider({ status: 'configured', provider: 'GitHub Copilot', modelName: response.provider.modelName, authenticated: true });
+      } else if (response.provider.type === 'openai') {
+        setOverviewProvider({ status: 'configured', provider: 'OpenAI', modelName: response.provider.modelName });
       } else {
         setOverviewProvider({ status: 'configured', provider: 'Azure OpenAI', modelName: response.provider.modelName });
       }
@@ -107,8 +111,9 @@ export function ControlPlaneApp() {
   }, [selectedWorkspaceName, selectedWorkspace]);
 
   const canDiscardDraft = (destination: ControlPlanePageId) => {
-    if (startPendingRef.current || workspacePending) return false;
-    if (activePage === 'config' && destination !== 'config' && configDirty && !window.confirm('Discard unsaved Azure changes?')) return false;
+    if (startPendingRef.current || workspacePending || configPending) return false;
+    if (activePage === 'config' && destination !== 'config' && configUncertain && !window.confirm('The save result is unknown. Leaving does not cancel it. Continue?')) return false;
+    if (activePage === 'config' && destination !== 'config' && configDirty && !window.confirm('Discard unsaved Provider changes?')) return false;
     if (activePage === 'workspace' && workspaceDirty && !window.confirm('Discard unsaved workspace changes?')) return false;
     return true;
   };
@@ -210,7 +215,7 @@ export function ControlPlaneApp() {
     message: workspace.status === 'unavailable' ? `${workspace.message} ${workspace.action}` : undefined,
   }));
   const shellWorkspaceProps = {
-    interactionLocked: startPending || workspacePending,
+    interactionLocked: startPending || workspacePending || configPending,
     workspaces: workspaceNavigation,
     selectedWorkspaceId: selectedWorkspace?.name ?? null,
     workspaceRegistryStatus: workspaceRegistryLoading ? 'loading' as const : workspaceRegistryError ? 'error' as const : 'ready' as const,
@@ -271,7 +276,7 @@ export function ControlPlaneApp() {
   if (activePage === 'config') return <ControlPlaneShell
     activePage="config" title="Settings" description="Manage the active model provider used by the next complete FSQ task."
     onNavigate={navigate} {...shellWorkspaceProps}
-  ><ConfigPage onDirtyChange={setConfigDirty} /></ControlPlaneShell>;
+  ><ConfigPage onDirtyChange={setConfigDirty} onSavePendingChange={setConfigPending} onSaveUncertainChange={setConfigUncertain} /></ControlPlaneShell>;
 
   return <DevicesPage workspaces={authoritativeWorkspaces} workspaceRegistryReady={workspaceRegistryReady} selectedWorkspaceName={diagnosticWorkspace?.name ?? selectedWorkspace?.name ?? null} onWorkspaceChange={selectDeviceWorkspace}
     onStartPendingChange={handleStartPendingChange}

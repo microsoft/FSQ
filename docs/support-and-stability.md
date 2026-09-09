@@ -10,7 +10,9 @@ FSQ v0.1.0 is an alpha release for evaluation and early contribution, not a 1.0 
 
 ## Supported environment
 
-Package metadata supports Python 3.11, 3.12, and 3.13. CI currently tests Python 3.11 on Linux and Python 3.13 on Linux, macOS, and Windows; Python 3.12 is supported but does not have a dedicated CI matrix cell. Web, Android, Windows, and macOS require external applications, devices, or services. The current Providers are GitHub Copilot and Azure OpenAI.
+Package metadata supports Python 3.11, 3.12, and 3.13. CI currently tests Python 3.11 on Linux and Python 3.13 on Linux, macOS, and Windows; Python 3.12 is supported but does not have a dedicated CI matrix cell. Web, Android, Windows, and macOS require external applications, devices, or services. The current Providers are OpenAI (official API), GitHub Copilot, and Azure OpenAI.
+
+Direct OpenAI uses Responses with account-visible GPT-5-or-later general models, excluding specialized and mini/nano variants. Model discovery is not proof of every runtime capability; perform the explicit saved connection test. Custom OpenAI-compatible endpoints and Chat Completions are not supported. Existing Azure/GitHub v2/v3 user configuration remains readable; version 3 also supports `type: openai`. Older FSQ binaries without that discriminator cannot read an active OpenAI configuration. Historical release notes describe their released versions rather than the current Provider set.
 
 ## Local data and privacy
 

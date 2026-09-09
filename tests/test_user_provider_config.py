@@ -193,6 +193,97 @@ def test_load_user_provider_config_rejects_symlinked_workspace_registry_root(tmp
         load_user_provider_config(user_root)
 
 
+@pytest.mark.parametrize("previous", [None, "azure_openai", "github_copilot"])
+def test_save_openai_provider_replaces_credentials_and_resolves_saved_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, previous: str | None) -> None:
+    from fsq_agent.config import save_openai_provider
+
+    user_root = tmp_path / "user"
+    if previous == "azure_openai":
+        save_azure_openai_provider(base_url="https://example.openai.azure.com", model="deployment", api_key="azure-key", user_config_root=user_root)
+    elif previous == "github_copilot":
+        activate_github_copilot_provider(model="gpt-5", github_token={"access_token": "github-token"}, provider_token={"token": "copilot-token", "plan": "individual"}, user_config_root=user_root)
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://other.example/v1/")
+    saved = save_openai_provider(model=" gpt-5 ", api_key=" saved-openai-key ", user_config_root=user_root)
+    loaded = load_user_provider_config(user_root)
+    assert saved.provider is not None
+    assert saved.provider.model_dump() == {"type": "openai", "model": "gpt-5"}
+    assert loaded.provider == saved.provider
+    assert loaded.api_key == "saved-openai-key"
+    assert "saved-openai-key" not in loaded.model_dump_json()
+    assert json.loads((user_root / "auth" / "openai.json").read_text(encoding="utf-8")) == {"api_key": "saved-openai-key"}
+    assert {path.name for path in (user_root / "auth").iterdir()} == {"openai.json"}
+    settings = load_settings(_runtime_config(tmp_path), user_config_root=user_root)
+    validate_provider_settings(settings)
+    assert settings.agent_runtime.provider == "openai"
+    assert settings.agent_runtime.base_url == "https://api.openai.com/v1/"
+    assert settings.agent_runtime.model == "gpt-5"
+    assert settings.agent_runtime.api_key == "saved-openai-key"
+    assert settings.agent_runtime.github_token is None
+    assert settings.agent_runtime.provider_token is None
+    assert "saved-openai-key" not in settings.model_dump_json()
+
+
+@pytest.mark.parametrize("replacement", ["azure_openai", "github_copilot"])
+def test_replacing_openai_removes_its_credentials(tmp_path: Path, replacement: str) -> None:
+    from fsq_agent.config import save_openai_provider
+
+    save_openai_provider(model="gpt-5", api_key="openai-key", user_config_root=tmp_path)
+    if replacement == "azure_openai":
+        save_azure_openai_provider(base_url="https://example.openai.azure.com", model="deployment", api_key="azure-key", user_config_root=tmp_path)
+    else:
+        activate_github_copilot_provider(model="gpt-5", github_token={"access_token": "github-token"}, provider_token={"token": "copilot-token", "plan": "individual"}, user_config_root=tmp_path)
+    assert not (tmp_path / "auth" / "openai.json").exists()
+    assert load_user_provider_config(tmp_path).provider.type == replacement
+
+
+@pytest.mark.parametrize("api_key", ["", " ", "replace-with-key"])
+def test_invalid_openai_candidate_preserves_active_provider(tmp_path: Path, api_key: str) -> None:
+    from fsq_agent.config import save_openai_provider
+
+    original = save_azure_openai_provider(base_url="https://example.openai.azure.com", model="deployment", api_key="azure-key", user_config_root=tmp_path)
+    with pytest.raises(ConfigurationError) as caught:
+        save_openai_provider(model="gpt-5", api_key=api_key, user_config_root=tmp_path)
+    assert caught.value.context == {"provider": "openai", "reason": "invalid_candidate"}
+    assert load_user_provider_config(tmp_path).provider == original.provider
+    assert load_user_provider_config(tmp_path).api_key == "azure-key"
+
+
+def test_save_openai_preserves_workspace_registry(tmp_path: Path) -> None:
+    from fsq_agent.config import save_openai_provider
+
+    workspace_root = (tmp_path / "workspace").resolve()
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({"version": 3, "provider": None, "workspaces": [{"name": "workspace", "root_path": str(workspace_root)}]}), encoding="utf-8")
+    save_openai_provider(model="gpt-5", api_key="openai-key", user_config_root=tmp_path)
+    assert [(entry.name, entry.root_path) for entry in list_workspace_registry(tmp_path)] == [("workspace", workspace_root)]
+
+
+@pytest.mark.parametrize("rollback_succeeds", [True, False])
+def test_openai_failed_transaction_reports_only_confirmed_rollback_as_storage(tmp_path, monkeypatch, rollback_succeeds):
+    from fsq_agent.config import _user_provider, save_openai_provider
+
+    original = save_azure_openai_provider(base_url="https://example.openai.azure.com", model="deployment", api_key="old-key", user_config_root=tmp_path)
+    original_stage = _user_provider._stage_write
+    attempts = 0
+
+    def fail_candidate_once(path, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("synthetic storage failure")
+        return original_stage(path, payload)
+
+    monkeypatch.setattr(_user_provider, "_stage_write", fail_candidate_once)
+    if not rollback_succeeds:
+        monkeypatch.setattr(_user_provider, "_restore_snapshots", lambda snapshots: False)
+    with pytest.raises(ConfigurationError) as caught:
+        save_openai_provider(model="gpt-5", api_key="candidate-key", user_config_root=tmp_path)
+    assert caught.value.context == {"provider": "openai", "reason": "storage" if rollback_succeeds else "internal"}
+    assert load_user_provider_config(tmp_path).provider == original.provider
+    assert load_user_provider_config(tmp_path).api_key == "old-key"
+    assert "candidate-key" not in str(caught.value)
+
+
 def test_save_azure_provider_normalizes_and_keeps_secret_out_of_serialization(tmp_path: Path) -> None:
     user_root = tmp_path / "user"
 

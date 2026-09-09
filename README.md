@@ -125,6 +125,8 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
+For direct official OpenAI access, run `fsq providers configure openai` and enter the API key at the hidden prompt, then select an offered GPT-5-or-later model. Azure deployments use `fsq providers configure azure_openai`. The browser's Settings page offers the same three Providers; see [the setup guide](docs/getting-started.md#configure-ai-exploration).
+
 Then return to the Workspace:
 
 ```bash
@@ -207,7 +209,7 @@ Platform target options for `fsq init`:
 
 Use `fsq runs list`, `fsq runs show RUN_ID`, and `fsq runs logs RUN_ID`. `fsq runs show RUN_ID --open` creates an offline static HTML report without calling a Provider or operating the UI. Evidence can contain visible application data; review it before sharing. Do not commit `.fsq`, credentials, reports, screenshots, or private target data.
 
-Provider configuration is stored under `~/.fsq` and shared by the CLI and local Control Plane. Supported first-release Providers are GitHub Copilot and Azure OpenAI.
+Provider configuration is stored under `~/.fsq` and shared by the CLI and local Control Plane. Supported Providers are OpenAI (official API), Azure OpenAI, and GitHub Copilot. One Provider is active at a time; successful replacement removes inactive credentials.
 
 ## Documentation
 

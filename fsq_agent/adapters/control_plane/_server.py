@@ -20,7 +20,17 @@ from fsq_agent.case_dsl import FSQ_CASE_SUFFIX
 from fsq_agent.models import ConfigurationError, FsqAgentError
 
 from ._cases import discover_cases, resolve_case
-from ._config import ConfigAPIError, get_config, map_config_exception, require_config_access, require_same_origin_write, save_azure_config, test_saved_connection
+from ._config import (
+    ConfigAPIError,
+    get_config,
+    list_openai_config_models,
+    map_config_exception,
+    require_config_access,
+    require_same_origin_write,
+    save_azure_config,
+    save_openai_config,
+    test_saved_connection,
+)
 from ._directory_picker import DirectoryPicker, DirectoryPickerAPIError
 from ._evidence import EvidenceProjection, read_replay_frames, read_screenshot, read_step_artifacts, read_ui_snapshot, safe_exception_message, safe_text
 from ._execution import ExecutionHandle, prepare_run, start_execution
@@ -359,6 +369,10 @@ class ControlPlaneServer:
         try:
             self._require_config_access(peer_host)
             require_same_origin_write(origin, host)
+            if method == "POST" and path == f"{_API_PREFIX}/config/openai/models":
+                return 200, list_openai_config_models(body)
+            if method == "PUT" and path == f"{_API_PREFIX}/config/openai":
+                return 200, save_openai_config(body, self.options.user_config_root)
             if method == "PUT" and path == f"{_API_PREFIX}/config/azure":
                 return 200, save_azure_config(body, self.options.user_config_root)
             if method == "POST" and path == f"{_API_PREFIX}/config/github/device-flow":

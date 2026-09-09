@@ -55,7 +55,7 @@ def _bind_package_skill_resources(settings: Settings) -> None:
 
 
 PLATFORM_CONFIG_PATHS = {platform: _package_config_root() / filename for platform, filename in _PLATFORM_CONFIG_FILENAMES.items()}
-SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai")
+SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai", "openai")
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -309,6 +309,11 @@ def _validate_model_provider_settings(settings: Settings) -> None:
             context={"base_url": settings.agent_runtime.base_url},
         )
     api_key = settings.agent_runtime.api_key
+    if settings.agent_runtime.provider == "openai":
+        if settings.agent_runtime.base_url != "https://api.openai.com/v1/":
+            raise ConfigurationError("OpenAI requires the official API endpoint.", context={"provider": "openai", "reason": "invalid_candidate"})
+        if not api_key.strip() or api_key.strip().lower().startswith("replace-with"):
+            raise ConfigurationError("OpenAI API key is missing or contains a placeholder.", context={"provider": "openai", "reason": "invalid_candidate"})
     if settings.agent_runtime.provider == "azure_openai" and not api_key:
         raise ConfigurationError("Azure OpenAI API key is not configured.")
     if settings.agent_runtime.provider == "azure_openai" and api_key and api_key.lower().startswith("replace-with"):

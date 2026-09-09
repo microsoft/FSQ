@@ -27,12 +27,14 @@ from fsq_agent.application import (
     WorkspaceRequest,
     complete_github_configuration,
     configure_azure_openai,
+    configure_openai,
     create_case,
     diagnose_workspace,
     event_record,
     format_case,
     generate_run_html,
     initialize_workspace,
+    list_openai_models,
     list_runs,
     normalize_application_error,
     provider_status,
@@ -322,7 +324,7 @@ def providers() -> None:
 
 
 @providers.command(name="configure")
-@click.argument("name", type=click.Choice(["github_copilot", "azure_openai"]))
+@click.argument("name", type=click.Choice(["github_copilot", "azure_openai", "openai"]))
 @click.option("--base-url", default=None)
 @click.option("--model", default=None)
 @click.option("--api-key", default=None)
@@ -331,7 +333,7 @@ def providers_configure(context: click.Context, name: str, base_url: str | None,
     machine = context.obj["output"] != "human"
     if name == "github_copilot":
         if base_url is not None or api_key is not None:
-            raise click.UsageError("--base-url and --api-key apply only to azure_openai")
+            raise click.UsageError("--base-url and --api-key do not apply to github_copilot")
         if machine or context.obj["non_interactive"]:
             raise click.UsageError("GitHub Copilot configuration requires Human interactive mode")
         device = request_github_device_code()
@@ -349,6 +351,27 @@ def providers_configure(context: click.Context, name: str, base_url: str | None,
             return choices[click.prompt("Select model", type=click.Choice(list(choices)))]
 
         result = complete_github_configuration(device, model=model, select_model=select_model, cancel_requested=lambda: False)
+    elif name == "openai":
+        if base_url is not None:
+            raise click.UsageError("--base-url applies only to azure_openai; OpenAI uses the official endpoint")
+        if (machine or context.obj["non_interactive"]) and (not model or not api_key):
+            raise click.UsageError("--model and --api-key are required")
+        if not api_key:
+            api_key = click.prompt("OpenAI API key", hide_input=True)
+        if not model:
+            models = list_openai_models(api_key=api_key)
+            if not models:
+                raise ApplicationError(
+                    code=ApplicationErrorCode.PROVIDER_UNAVAILABLE,
+                    category=ApplicationErrorCategory.UNAVAILABLE,
+                    message="No eligible OpenAI models are available.",
+                    action="Check model access or use another Provider.",
+                )
+            choices = {str(index): item.id for index, item in enumerate(models, start=1)}
+            for index, item in enumerate(models, start=1):
+                click.echo(f"{index}. {item.name}")
+            model = choices[click.prompt("Select model", type=click.Choice(list(choices)))]
+        result = configure_openai(model=model, api_key=api_key)
     else:
         if not base_url:
             if machine or context.obj["non_interactive"]:

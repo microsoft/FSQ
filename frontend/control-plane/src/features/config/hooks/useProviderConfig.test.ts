@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { ControlPlaneClient } from '../../../api/controlPlaneClient';
+import { ControlPlaneApiError, type ControlPlaneClient } from '../../../api/controlPlaneClient';
 import type { ConfigResponse, GitHubDeviceFlowResponse } from '../../../api/types';
 import { useProviderConfig } from './useProviderConfig';
 
@@ -34,6 +34,88 @@ function client(overrides: Partial<ControlPlaneClient> = {}) {
     ...overrides,
   } as unknown as ControlPlaneClient;
 }
+
+const openaiConfig: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'saved-openai-key' } };
+
+it('loads OpenAI models and ignores a result invalidated by a key change', async () => {
+  let finish!: (value: { models: { id: string; name: string }[] }) => void;
+  const api = client({ openaiModels: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  act(() => { void result.current.loadOpenAIModels('candidate-key'); });
+  expect(result.current.openaiModels.state).toBe('loading');
+  act(() => result.current.clearOpenAIModels());
+  await act(async () => finish({ models: [{ id: 'gpt-5', name: 'gpt-5' }] }));
+  expect(result.current.openaiModels.state).toBe('idle');
+  expect(vi.mocked(api.openaiModels).mock.calls[0][1]?.aborted).toBe(true);
+});
+
+it('reconciles an unknown OpenAI save without resubmitting or claiming save success', async () => {
+  const api = client({ config: vi.fn().mockResolvedValueOnce(azure).mockResolvedValueOnce(openaiConfig), saveOpenAIConfig: vi.fn().mockRejectedValue(new TypeError('connection lost')) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  let saved: ConfigResponse | null | undefined;
+  await act(async () => { saved = await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'saved-openai-key' }); });
+  expect(saved).toBeNull();
+  expect(result.current.saveRecovery).toBe('reconciled');
+  expect(result.current.config.data).toEqual(openaiConfig);
+  expect(api.config).toHaveBeenCalledTimes(2);
+  expect(api.saveOpenAIConfig).toHaveBeenCalledTimes(1);
+  expect(result.current.saveError).toBeNull();
+});
+
+it('keeps OpenAI save recovery unavailable until an explicit configuration read succeeds', async () => {
+  const api = client({ config: vi.fn().mockResolvedValueOnce(azure).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(azure), saveOpenAIConfig: vi.fn().mockRejectedValue(new Error('offline')) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  await act(async () => { await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'candidate-key' }); });
+  expect(result.current.saveRecovery).toBe('unavailable');
+  expect(result.current.config.data).toBeNull();
+  await act(async () => { await result.current.reconcileOpenAI(); });
+  expect(result.current.saveRecovery).toBe('reconciled');
+  expect(result.current.config.data).toEqual(azure);
+  expect(api.saveOpenAIConfig).toHaveBeenCalledTimes(1);
+});
+
+it('blocks Azure and GitHub mutations while OpenAI recovery has no valid snapshot', async () => {
+  const api = client({ config: vi.fn().mockResolvedValueOnce(openaiConfig).mockRejectedValue(new Error('offline')), saveOpenAIConfig: vi.fn().mockRejectedValue(new Error('lost')) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  await act(async () => { await result.current.startGithub(); });
+  await act(async () => { await result.current.saveOpenAI({ modelName: 'gpt-5.4', apiKey: 'candidate-key' }); });
+  expect(result.current.saveRecovery).toBe('unavailable');
+  await act(async () => { await result.current.saveAzure({ baseUrl: 'https://example.openai.azure.com', modelName: 'deployment', apiKey: 'azure-key' }); });
+  await act(async () => { await result.current.saveGithubModel('gpt-5'); });
+  await act(async () => { await result.current.startGithub(); });
+  expect(api.saveAzureConfig).not.toHaveBeenCalled();
+  expect(api.saveGithubModel).not.toHaveBeenCalled();
+  expect(api.startGithubDeviceFlow).toHaveBeenCalledTimes(1);
+});
+
+it('preserves saved truth on a classified OpenAI pre-commit rejection', async () => {
+  const api = client({ config: vi.fn().mockResolvedValue(azure), saveOpenAIConfig: vi.fn().mockRejectedValue(new ControlPlaneApiError(400, { code: 'provider_model_not_offered', message: 'Model not offered.', action: 'Reload models.' })) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  await act(async () => { await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'candidate-key' }); });
+  expect(result.current.config.data).toEqual(azure);
+  expect(result.current.saveRecovery).toBe('none');
+  expect(result.current.saveError?.code).toBe('provider_model_not_offered');
+  expect(api.config).toHaveBeenCalledTimes(1);
+});
+
+it('blocks duplicate OpenAI submission and ignores save completion after unmount', async () => {
+  let finish!: (value: ConfigResponse) => void;
+  const api = client({ saveOpenAIConfig: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });
+  const { result, unmount } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  act(() => { void result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'candidate-key' }); });
+  await act(async () => { await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'candidate-key' }); });
+  expect(api.saveOpenAIConfig).toHaveBeenCalledTimes(1);
+  unmount();
+  await act(async () => finish(openaiConfig));
+  expect(vi.mocked(api.saveOpenAIConfig).mock.calls[0][1]?.aborted).toBe(true);
+  expect(api.config).toHaveBeenCalledTimes(1);
+});
 
 afterEach(() => {
   vi.useRealTimers();

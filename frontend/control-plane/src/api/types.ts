@@ -173,6 +173,9 @@ export interface SaveYamlResponse {
 }
 export interface SaveYamlPayload { caseName: string }
 
+export interface OpenAIConfigPayload { modelName: string; apiKey: string }
+export interface OpenAIProviderConfig extends OpenAIConfigPayload { type: 'openai' }
+export interface OpenAIModelsResponse { models: { id: string; name: string }[] }
 export interface AzureProviderConfig {
   type: 'azure_openai';
   modelName: string;
@@ -184,7 +187,7 @@ export interface GitHubProviderConfig {
   modelName: string;
   authenticated: true;
 }
-export type ProviderConfig = AzureProviderConfig | GitHubProviderConfig;
+export type ProviderConfig = OpenAIProviderConfig | AzureProviderConfig | GitHubProviderConfig;
 export type ConfigResponse =
   | { configured: false; provider: null }
   | { configured: true; provider: ProviderConfig };
@@ -198,7 +201,7 @@ export type GitHubDeviceFlowResponse =
   | { authRequestId: string; status: 'success' | 'failed' | 'expired' | 'cancelled'; message?: string };
 export interface ConnectionTestResponse {
   success: true;
-  provider: 'azure_openai' | 'github_copilot';
+  provider: 'openai' | 'azure_openai' | 'github_copilot';
   modelName: string;
   durationMs: number;
 }

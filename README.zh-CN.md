@@ -108,6 +108,8 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
+使用 OpenAI 官方 API 时，运行 `fsq providers configure openai`，在隐藏输入提示中输入 API Key，再选择账户可用的 GPT-5 或更高版本通用模型。Azure 部署使用 `fsq providers configure azure_openai`。浏览器 Settings 页面也提供这三种 Provider，详见[配置指南](docs/getting-started.zh-CN.md#配置-ai-探索)。配置保存在 `~/.fsq`，由 CLI 和 Control Plane 共享；同一时间只有一个活动 Provider。
+
 然后回到 Workspace：
 
 ```bash

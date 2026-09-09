@@ -18,6 +18,7 @@ from fsq_agent.providers._github_copilot import (
     list_github_copilot_models,
     request_github_copilot_device_code,
 )
+from fsq_agent.providers._openai import OpenAIModel, list_openai_models
 from fsq_agent.providers._session import ModelProviderSession
 
 __all__ = [
@@ -26,12 +27,14 @@ __all__ = [
     "GitHubDeviceCode",
     "ModelProviderFactory",
     "ModelProviderSession",
+    "OpenAIModel",
     "ProviderConnectionTestResult",
     "activate_github_copilot_authorization",
     "build_model_provider_session",
     "check_provider_readiness",
     "complete_github_copilot_device_flow",
     "list_github_copilot_models",
+    "list_openai_models",
     "prepare_model_provider_session",
     "refresh_model_provider_session",
     "request_github_copilot_device_code",

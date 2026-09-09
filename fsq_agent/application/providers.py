@@ -5,16 +5,73 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fsq_agent.application.contracts import ApplicationError, ApplicationErrorCategory, ApplicationErrorCode, ProviderConfigurationResult, ProviderStatusResult
-from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider
+from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider, save_openai_provider
+from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import (
     GitHubCopilotModel,
     GitHubDeviceCode,
+    OpenAIModel,
     activate_github_copilot_authorization,
     check_provider_readiness,
     complete_github_copilot_device_flow,
     list_github_copilot_models,
     request_github_copilot_device_code,
 )
+from fsq_agent.providers import list_openai_models as _discover_openai_models
+
+_OPENAI_FAILURES = {
+    "invalid_candidate": ("OpenAI model or API key is invalid.", "Complete the model and API key fields and retry."),
+    "model_not_offered": ("The selected OpenAI model is not available.", "Reload models for this API key and select an offered model."),
+    "authentication": ("OpenAI rejected the API key.", "Check the candidate API key and retry."),
+    "access_denied": ("OpenAI model access was denied.", "Check the key's project permissions and model access."),
+    "rate_limited": ("OpenAI model discovery was rate limited.", "Check quota or wait before retrying model discovery."),
+    "timeout": ("OpenAI model discovery timed out.", "Check network access and retry loading or saving the model."),
+    "network": ("OpenAI model discovery is unavailable.", "Check network access and retry."),
+    "malformed_response": ("OpenAI returned an invalid model response.", "Retry model discovery later."),
+    "storage": ("OpenAI configuration could not be stored.", "Check local configuration permissions and retry."),
+    "internal": ("OpenAI configuration could not be completed.", "Reload the current configuration before retrying."),
+}
+
+
+def _openai_error(reason: object) -> ApplicationError:
+    reason = reason if isinstance(reason, str) and reason in _OPENAI_FAILURES else "internal"
+    if reason in {"invalid_candidate", "model_not_offered", "storage"}:
+        code, category = ApplicationErrorCode.CONFIGURATION_INVALID, ApplicationErrorCategory.CONFIGURATION
+    elif reason == "internal":
+        code, category = ApplicationErrorCode.INTERNAL_ERROR, ApplicationErrorCategory.INTERNAL
+    else:
+        code, category = ApplicationErrorCode.PROVIDER_UNAVAILABLE, ApplicationErrorCategory.UNAVAILABLE
+    message, action = _OPENAI_FAILURES[reason]
+    return ApplicationError(code=code, category=category, message=message, action=action, details={"provider": "openai", "reason": reason})
+
+
+def list_openai_models(*, api_key: str) -> tuple[OpenAIModel, ...]:
+    try:
+        return _discover_openai_models(api_key=api_key)
+    except ConfigurationError as error:
+        raise _openai_error(error.context.get("reason") if error.context.get("provider") == "openai" else None) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _openai_error("internal") from None
+
+
+def configure_openai(*, model: str, api_key: str, user_config_root: str | Path | None = None) -> ProviderConfigurationResult:
+    if not isinstance(model, str) or not model.strip():
+        raise _openai_error("invalid_candidate")
+    normalized_model = model.strip()
+    models = list_openai_models(api_key=api_key)
+    if normalized_model not in {item.id for item in models}:
+        raise _openai_error("model_not_offered")
+    try:
+        save_openai_provider(model=normalized_model, api_key=api_key, user_config_root=user_config_root)
+    except ConfigurationError as error:
+        raise _openai_error(error.context.get("reason") if error.context.get("provider") == "openai" else None) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _openai_error("internal") from None
+    return ProviderConfigurationResult(provider="openai", model=normalized_model)
 
 
 def configure_azure_openai(*, base_url: str, model: str, api_key: str, user_config_root: str | Path | None = None) -> ProviderConfigurationResult:
@@ -73,4 +130,4 @@ def _validate_selected_model(selected: str, models: tuple[GitHubCopilotModel, ..
         raise ValueError("selected model is not offered")
 
 
-__all__ = ["complete_github_configuration", "configure_azure_openai", "provider_status", "request_github_device_code"]
+__all__ = ["complete_github_configuration", "configure_azure_openai", "configure_openai", "list_openai_models", "provider_status", "request_github_device_code"]

@@ -39,6 +39,122 @@ function client(config: ConfigResponse = unconfigured, overrides: Partial<Contro
   } as unknown as ControlPlaneClient;
 }
 
+const openai: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'candidate-key' } };
+const openaiModels = { models: [{ id: 'gpt-5', name: 'gpt-5' }, { id: 'gpt-5.4', name: 'gpt-5.4' }] };
+
+it('configures OpenAI through explicit model discovery and tests only saved configuration', async () => {
+  const api = client(unconfigured, { openaiModels: vi.fn().mockResolvedValue(openaiModels), saveOpenAIConfig: vi.fn().mockResolvedValue(openai), testConnection: vi.fn().mockResolvedValue({ success: true, provider: 'openai', modelName: 'gpt-5', durationMs: 35 }) });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  const choice = screen.getByRole('button', { name: /^OpenAI / });
+  expect(choice).toHaveFocus();
+  await user.click(choice);
+  expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('API key'), 'candidate-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  const model = await screen.findByRole('combobox', { name: 'Model' });
+  expect(model).toHaveValue('');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  await user.selectOptions(model, 'gpt-5');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(api.saveOpenAIConfig).toHaveBeenCalledWith({ modelName: 'gpt-5', apiKey: 'candidate-key' }, expect.any(AbortSignal));
+  const test = await screen.findByRole('button', { name: 'Test connection' });
+  await user.click(test);
+  expect(await screen.findByRole('dialog')).toHaveTextContent('OpenAI');
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+  await waitFor(() => expect(test).toHaveFocus());
+});
+
+it('invalidates OpenAI model selection on key edits and supports empty/error discovery retry', async () => {
+  const api = client(openai, { openaiModels: vi.fn().mockResolvedValueOnce(openaiModels).mockResolvedValueOnce({ models: [] }).mockRejectedValueOnce(new ControlPlaneApiError(401, { code: 'provider_authorization_failed', message: 'Key rejected.', action: 'Replace key.' })).mockResolvedValueOnce(openaiModels) });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Load models' }));
+  expect(await screen.findByRole('combobox', { name: 'Model' })).toHaveValue('gpt-5');
+  await user.type(screen.getByLabelText('API key'), '-new');
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Test connection' })).toBeDisabled();
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  expect(await screen.findByText('No eligible models are available.')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Retry models' }));
+  expect(await screen.findByText('Key rejected.')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Retry models' }));
+  expect(await screen.findByRole('combobox', { name: 'Model' })).toHaveValue('');
+});
+
+it('masks a revealed OpenAI key again when cancelling the saved form', async () => {
+  const user = userEvent.setup();
+  render(<ConfigPage client={client(openai)} />);
+  await user.click(await screen.findByRole('button', { name: 'Show API key' }));
+  expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'text');
+  await user.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
+});
+
+it('locks OpenAI saving and preserves the candidate after an unknown result is reconciled', async () => {
+  let fail!: (reason: Error) => void;
+  const pending = new Promise<ConfigResponse>((_resolve, reject) => { fail = reject; });
+  const api = client(openai, { config: vi.fn().mockResolvedValue(openai), openaiModels: vi.fn().mockResolvedValue(openaiModels), saveOpenAIConfig: vi.fn().mockReturnValueOnce(pending).mockRejectedValueOnce(new ControlPlaneApiError(400, { code: 'provider_model_not_offered', message: 'Selected model is no longer offered.', action: 'Reload models.' })) });
+  const busy = vi.fn();
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} onSavePendingChange={busy} />);
+  await user.click(await screen.findByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'gpt-5.4');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Change provider' })).toBeDisabled();
+  expect(busy).toHaveBeenLastCalledWith(true);
+  fail(new Error('connection lost'));
+  expect(await screen.findByText('The save result could not be confirmed.')).toBeVisible();
+  expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('gpt-5.4');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  expect(api.saveOpenAIConfig).toHaveBeenCalledTimes(1);
+  expect(busy).toHaveBeenLastCalledWith(false);
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByText('Selected model is no longer offered.')).toBeVisible();
+  expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('gpt-5.4');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+});
+
+it('blocks Azure edits during failed reconciliation and applies a later successful normalized Azure save', async () => {
+  const normalizedAzure: ConfigResponse = { configured: true, provider: { type: 'azure_openai', baseUrl: 'https://demo.openai.azure.com/openai/v1/', modelName: 'deployment', apiKey: 'azure-key' } };
+  const api = client(openai, {
+    config: vi.fn().mockResolvedValueOnce(openai).mockResolvedValueOnce(openai).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(openai),
+    openaiModels: vi.fn().mockResolvedValue(openaiModels),
+    saveOpenAIConfig: vi.fn().mockRejectedValue(new Error('lost response')),
+    saveAzureConfig: vi.fn().mockResolvedValue(normalizedAzure),
+  });
+  const dirty = vi.fn();
+  const user = userEvent.setup();
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  render(<ConfigPage client={api} onDirtyChange={dirty} />);
+  await user.click(await screen.findByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'gpt-5.4');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  await screen.findByText('The save result could not be confirmed.');
+  await user.click(screen.getByRole('button', { name: 'Change provider' }));
+  await user.click(screen.getByRole('button', { name: /Azure OpenAI/ }));
+  await user.type(screen.getByLabelText('Base URL'), 'https://demo.openai.azure.com');
+  await user.type(screen.getByLabelText('Model name'), 'deployment');
+  await user.type(screen.getByLabelText('API key'), 'azure-key');
+  await user.click(screen.getByRole('button', { name: 'Reload configuration' }));
+  await screen.findByText('Current configuration is unavailable. Changes remain blocked.');
+  expect(screen.getByLabelText('API key')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Change provider' })).toBeDisabled();
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(api.saveAzureConfig).not.toHaveBeenCalled();
+  await user.click(screen.getByRole('button', { name: 'Reload configuration' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  await waitFor(() => expect(screen.getByLabelText('Base URL')).toHaveValue('https://demo.openai.azure.com/openai/v1/'));
+  expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled();
+  expect(dirty).toHaveBeenLastCalledWith(false);
+});
+
 afterEach(() => vi.restoreAllMocks());
 
 it('adds Azure configuration, masks its populated key, and saves the complete draft', async () => {
@@ -46,7 +162,7 @@ it('adds Azure configuration, masks its populated key, and saves the complete dr
   const user = userEvent.setup();
   render(<ConfigPage client={api} />);
   await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
-  await user.click(screen.getByRole('button', { name: /Azure GPT/ }));
+  await user.click(screen.getByRole('button', { name: /Azure OpenAI/ }));
 
   const key = screen.getByLabelText('API key');
   expect(key).toHaveAttribute('type', 'password');
@@ -68,9 +184,9 @@ it('traps provider-dialog focus and restores it to the invoking action on Escape
   render(<ConfigPage client={client()} />);
   const add = await screen.findByRole('button', { name: 'Add configuration' });
   await user.click(add);
-  const azureChoice = screen.getByRole('button', { name: /Azure GPT/ });
+  const openaiChoice = screen.getByRole('button', { name: /^OpenAI / });
   const cancel = screen.getByRole('button', { name: 'Cancel' });
-  expect(azureChoice).toHaveFocus();
+  expect(openaiChoice).toHaveFocus();
 
   await user.keyboard('{Shift>}{Tab}{/Shift}');
   expect(cancel).toHaveFocus();

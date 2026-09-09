@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { controlPlaneClient, toApiError, type ControlPlaneClient } from '../../../api/controlPlaneClient';
+import { ControlPlaneApiError, controlPlaneClient, toApiError, type ControlPlaneClient } from '../../../api/controlPlaneClient';
 import type {
   ApiErrorBody,
   AzureConfigPayload,
+  OpenAIConfigPayload,
+  OpenAIModelsResponse,
   ConfigResponse,
   ConnectionTestResponse,
   GitHubDeviceFlowResponse,
@@ -10,6 +12,17 @@ import type {
 } from '../../../api/types';
 
 export type DeviceFlowPending = 'starting' | 'waiting' | 'loading_models' | 'retrying_models' | 'saving' | 'cancelling' | null;
+export type OpenAIModelsState = { state: 'idle' | 'loading' | 'ready' | 'error'; data: OpenAIModelsResponse | null; error: ApiErrorBody | null };
+export type SaveRecovery = 'none' | 'loading' | 'unavailable' | 'reconciled';
+const rejectedOpenAISaves: Record<string, number> = {
+  invalid_request: 400, invalid_provider_config: 400, provider_model_not_offered: 400,
+  provider_authorization_failed: 401, provider_access_denied: 403, config_unavailable: 403, cross_origin_forbidden: 403,
+  provider_rate_limited: 429, provider_timeout: 504, provider_unavailable: 503, provider_response_invalid: 502, provider_storage_unavailable: 503,
+};
+
+function openaiRequestError(error: unknown): ApiErrorBody {
+  return error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: 'The OpenAI configuration request could not be completed.', action: 'Check the local server and retry.' };
+}
 export type ConnectionResult =
   | { success: true; data: ConnectionTestResponse }
   | { success: false; error: ApiErrorBody };
@@ -30,6 +43,11 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   const [config, setConfig] = useState<RequestResource<ConfigResponse>>({ state: 'loading', data: null, error: null });
   const [savePending, setSavePending] = useState(false);
   const [saveError, setSaveError] = useState<ApiErrorBody | null>(null);
+  const [openaiModels, setOpenAIModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const [saveRecovery, setSaveRecovery] = useState<SaveRecovery>('none');
+  const recoveryBlocked = saveRecovery === 'loading' || saveRecovery === 'unavailable';
+  const modelsControllerRef = useRef<AbortController | null>(null);
+  const recoveryControllerRef = useRef<AbortController | null>(null);
   const [deviceFlow, setDeviceFlowState] = useState<GitHubDeviceFlowResponse | null>(null);
   const [deviceFlowPending, setDeviceFlowPending] = useState<DeviceFlowPending>(null);
   const [deviceFlowError, setDeviceFlowError] = useState<ApiErrorBody | null>(null);
@@ -73,6 +91,77 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     }
   }, [client]);
 
+  const clearOpenAIModels = useCallback(() => {
+    modelsControllerRef.current?.abort();
+    modelsControllerRef.current = null;
+    setOpenAIModels({ state: 'idle', data: null, error: null });
+  }, []);
+
+  const loadOpenAIModels = useCallback(async (apiKey: string) => {
+    modelsControllerRef.current?.abort();
+    const controller = new AbortController();
+    modelsControllerRef.current = controller;
+    setOpenAIModels({ state: 'loading', data: null, error: null });
+    try {
+      const data = await client.openaiModels(apiKey.trim(), controller.signal);
+      if (!mountedRef.current || modelsControllerRef.current !== controller || controller.signal.aborted) return null;
+      setOpenAIModels({ state: 'ready', data, error: null });
+      return data;
+    } catch (error) {
+      if (mountedRef.current && modelsControllerRef.current === controller && !controller.signal.aborted) {
+        setOpenAIModels({ state: 'error', data: null, error: openaiRequestError(error) });
+      }
+      return null;
+    }
+  }, [client]);
+
+  const reconcileOpenAI = useCallback(async () => {
+    recoveryControllerRef.current?.abort();
+    configControllerRef.current?.abort();
+    const controller = new AbortController();
+    recoveryControllerRef.current = controller;
+    setSaveRecovery('loading');
+    setConfig({ state: 'loading', data: null, error: null });
+    try {
+      const data = await client.config(controller.signal);
+      if (!mountedRef.current || recoveryControllerRef.current !== controller || controller.signal.aborted) return;
+      setConfig({ state: 'ready', data, error: null });
+      setSaveRecovery('reconciled');
+    } catch {
+      if (!mountedRef.current || recoveryControllerRef.current !== controller || controller.signal.aborted) return;
+      setConfig({ state: 'error', data: null, error: { code: 'save_outcome_unknown', message: 'The current configuration could not be read.', action: 'Reload configuration before making another change.' } });
+      setSaveRecovery('unavailable');
+    }
+  }, [client]);
+
+  const saveOpenAI = useCallback(async (payload: OpenAIConfigPayload) => {
+    if (saveControllerRef.current || saveRecovery === 'loading' || saveRecovery === 'unavailable') return null;
+    const controller = new AbortController();
+    saveControllerRef.current = controller;
+    setSavePending(true);
+    setSaveError(null);
+    setSaveRecovery('none');
+    try {
+      const data = await client.saveOpenAIConfig({ modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() }, controller.signal);
+      if (!mountedRef.current || saveControllerRef.current !== controller || controller.signal.aborted) return null;
+      setConfig({ state: 'ready', data, error: null });
+      return data;
+    } catch (error) {
+      if (!mountedRef.current || saveControllerRef.current !== controller) return null;
+      if (error instanceof ControlPlaneApiError && rejectedOpenAISaves[error.body.code] === error.status) {
+        setSaveError(error.body);
+      } else {
+        await reconcileOpenAI();
+      }
+      return null;
+    } finally {
+      if (saveControllerRef.current === controller) {
+        saveControllerRef.current = null;
+        if (mountedRef.current) setSavePending(false);
+      }
+    }
+  }, [client, reconcileOpenAI, saveRecovery]);
+
   const schedulePoll = useCallback((flow: GitHubDeviceFlowResponse, generation: number) => {
     if (!isPolling(flow)) return;
     const delay = Math.min(10, Math.max(1, flow.pollIntervalSeconds)) * 1000;
@@ -103,7 +192,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   }, [client, setDeviceFlow]);
 
   const saveAzure = useCallback(async (payload: AzureConfigPayload) => {
-    saveControllerRef.current?.abort();
+    if (saveControllerRef.current || recoveryBlocked) return null;
     const controller = new AbortController();
     saveControllerRef.current = controller;
     setSavePending(true);
@@ -115,17 +204,24 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     };
     try {
       const data = await client.saveAzureConfig(normalized, controller.signal);
-      if (mountedRef.current && saveControllerRef.current === controller) setConfig({ state: 'ready', data, error: null });
+      if (mountedRef.current && saveControllerRef.current === controller) {
+        setSaveRecovery('none');
+        setConfig({ state: 'ready', data, error: null });
+      }
       return data;
     } catch (error) {
       if (!isAbort(error) && mountedRef.current && saveControllerRef.current === controller) setSaveError(toApiError(error));
       return null;
     } finally {
-      if (mountedRef.current && saveControllerRef.current === controller) setSavePending(false);
+      if (saveControllerRef.current === controller) {
+        saveControllerRef.current = null;
+        if (mountedRef.current) setSavePending(false);
+      }
     }
-  }, [client]);
+  }, [client, recoveryBlocked]);
 
   const startGithub = useCallback(async () => {
+    if (saveControllerRef.current || recoveryBlocked) return null;
     clearPoll();
     const generation = ++deviceGenerationRef.current;
     const controller = new AbortController();
@@ -153,7 +249,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     } finally {
       if (deviceControllerRef.current === controller) deviceControllerRef.current = null;
     }
-  }, [clearPoll, client, schedulePoll, setDeviceFlow]);
+  }, [clearPoll, client, schedulePoll, setDeviceFlow, recoveryBlocked]);
 
   const retryGithubModels = useCallback(async () => {
     const active = deviceFlowRef.current;
@@ -187,6 +283,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   }, [clearPoll, client, schedulePoll, setDeviceFlow]);
 
   const saveGithubModel = useCallback(async (modelName: string) => {
+    if (saveControllerRef.current || recoveryBlocked) return null;
     const active = deviceFlowRef.current;
     const selectedModel = modelName.trim();
     if (!active || active.status !== 'ready' || !selectedModel) return null;
@@ -199,6 +296,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     try {
       const data = await client.saveGithubModel(active.authRequestId, selectedModel, controller.signal);
       if (!mountedRef.current || generation !== deviceGenerationRef.current) return null;
+      setSaveRecovery('none');
       setConfig({ state: 'ready', data, error: null });
       setDeviceFlow({ authRequestId: active.authRequestId, status: 'success', message: 'GitHub Copilot Provider saved.' });
       return data;
@@ -209,7 +307,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       if (mountedRef.current && generation === deviceGenerationRef.current) setDeviceFlowPending(null);
       if (deviceControllerRef.current === controller) deviceControllerRef.current = null;
     }
-  }, [clearPoll, client, setDeviceFlow]);
+  }, [clearPoll, client, setDeviceFlow, recoveryBlocked]);
 
   const cancelGithub = useCallback(async () => {
     const active = deviceFlowRef.current;
@@ -278,6 +376,8 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       ++deviceGenerationRef.current;
       configControllerRef.current?.abort();
       saveControllerRef.current?.abort();
+      modelsControllerRef.current?.abort();
+      recoveryControllerRef.current?.abort();
       testControllerRef.current?.abort();
       clearPoll();
       const active = deviceFlowRef.current;
@@ -288,6 +388,12 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   return {
     config,
     reload: loadConfig,
+    openaiModels,
+    loadOpenAIModels,
+    clearOpenAIModels,
+    saveOpenAI,
+    saveRecovery,
+    reconcileOpenAI,
     saveAzure,
     savePending,
     saveError,

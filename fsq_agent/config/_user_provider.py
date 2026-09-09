@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 USER_CONFIG_VERSION = 3
 USER_CONFIG_FILENAME = "config.yaml"
 AUTH_DIRECTORY = "auth"
+OPENAI_AUTH_FILENAME = "openai.json"
 AZURE_AUTH_FILENAME = "azure-openai.json"
 GITHUB_AUTH_FILENAME = "github-copilot-token.json"
 GITHUB_PROVIDER_AUTH_FILENAME = "github-copilot-provider-token.json"
@@ -52,6 +53,18 @@ def _normalize_azure_base_url(value: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or not normalized.endswith("/openai/v1/"):
         raise ValueError("Azure OpenAI base URL must use the /openai/v1/ form")
     return normalized
+
+
+class _OpenAIProviderRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["openai"]
+    model: str
+
+    @field_validator("model")
+    @classmethod
+    def _validate_model(cls, value: str) -> str:
+        return _required_text(value, "Model name")
 
 
 class _AzureOpenAIProviderRecord(BaseModel):
@@ -85,7 +98,7 @@ class _GitHubCopilotProviderRecord(BaseModel):
 
 
 _ProviderRecord = Annotated[
-    _AzureOpenAIProviderRecord | _GitHubCopilotProviderRecord,
+    _OpenAIProviderRecord | _AzureOpenAIProviderRecord | _GitHubCopilotProviderRecord,
     Field(discriminator="type"),
 ]
 
@@ -194,6 +207,45 @@ def _register_workspace(entry: WorkspaceRegistryEntry, user_config_root: str | P
             raise ConfigurationError("Unable to register workspace.", context={"name": entry.name}) from exc
 
 
+def _openai_key(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("API key must be a string")
+    normalized = _required_text(value, "OpenAI API key")
+    if normalized.lower().startswith("replace-with"):
+        raise ValueError("API key contains a placeholder")
+    return normalized
+
+
+def save_openai_provider(
+    *,
+    model: str,
+    api_key: str,
+    user_config_root: str | Path | None = None,
+) -> UserProviderConfig:
+    try:
+        provider = _OpenAIProviderRecord(type="openai", model=model)
+        normalized_api_key = _openai_key(api_key)
+    except (ValidationError, ValueError, TypeError):
+        raise ConfigurationError("Invalid OpenAI model or API key.", context={"provider": "openai", "reason": "invalid_candidate"}) from None
+    root = _user_config_root(user_config_root)
+    with _user_config_lock(root, provider="openai"):
+        try:
+            current, config_path, auth_dir = _load_user_document(root)
+        except ConfigurationError:
+            raise ConfigurationError("Unable to read local Provider configuration.", context={"provider": "openai", "reason": "storage"}) from None
+        config = current.model_copy(update={"provider": provider})
+        config._api_key = normalized_api_key
+        _commit_replacement(
+            {
+                auth_dir / OPENAI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
+                config_path: _yaml_bytes(config),
+            },
+            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            provider="openai",
+        )
+        return config
+
+
 def save_azure_openai_provider(
     *,
     base_url: str,
@@ -220,7 +272,7 @@ def save_azure_openai_provider(
                 auth_dir / AZURE_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
         )
         return _load_complete_user_config(root)
 
@@ -251,7 +303,7 @@ def activate_github_copilot_provider(
                 auth_dir / GITHUB_PROVIDER_AUTH_FILENAME: _json_bytes(provider_payload),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / AZURE_AUTH_FILENAME],
+            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / OPENAI_AUTH_FILENAME],
         )
         return _load_complete_user_config(root)
 
@@ -266,7 +318,12 @@ def refresh_provider_settings(
     provider_settings = refreshed.agent_runtime
     provider_settings.provider = config.provider.type if config.provider is not None else None
     provider_settings.model = config.provider.model if config.provider is not None else ""
-    provider_settings.base_url = config.provider.base_url if isinstance(config.provider, _AzureOpenAIProviderRecord) else ""
+    if isinstance(config.provider, _AzureOpenAIProviderRecord):
+        provider_settings.base_url = config.provider.base_url
+    elif isinstance(config.provider, _OpenAIProviderRecord):
+        provider_settings.base_url = "https://api.openai.com/v1/"
+    else:
+        provider_settings.base_url = ""
     provider_settings.api_key = config.api_key
     provider_settings.github_token = config.github_token
     provider_settings.provider_token = config.provider_token
@@ -279,7 +336,7 @@ def _user_config_root(value: str | Path | None) -> Path:
 
 
 @contextmanager
-def _user_config_lock(root: Path) -> Iterator[None]:
+def _user_config_lock(root: Path, *, provider: str | None = None) -> Iterator[None]:
     with _WRITE_LOCK:
         try:
             root.mkdir(parents=True, exist_ok=True)
@@ -287,7 +344,7 @@ def _user_config_lock(root: Path) -> Iterator[None]:
         except OSError as exc:
             raise ConfigurationError(
                 "Unable to lock user Provider configuration.",
-                context={"path": str(root)},
+                context={"provider": provider, "reason": "storage"} if provider else {"path": str(root)},
             ) from exc
         with lock_file:
             try:
@@ -295,7 +352,7 @@ def _user_config_lock(root: Path) -> Iterator[None]:
             except OSError as exc:
                 raise ConfigurationError(
                     "Unable to lock user Provider configuration.",
-                    context={"path": str(root)},
+                    context={"provider": provider, "reason": "storage"} if provider else {"path": str(root)},
                 ) from exc
             try:
                 yield
@@ -389,6 +446,13 @@ def _load_complete_user_config(root: Path) -> UserProviderConfig:
     config, _, auth_dir = _load_user_document(root)
     if config.provider is None:
         return config
+    if config.provider.type == "openai":
+        try:
+            credentials = _read_json_object(auth_dir / OPENAI_AUTH_FILENAME, "OpenAI credentials")
+            config._api_key = _openai_key(_credential_text(credentials, "api_key", "OpenAI API key"))
+        except (ConfigurationError, ValueError, TypeError):
+            raise ConfigurationError("Unable to load valid OpenAI credentials.", context={"provider": "openai", "reason": "invalid_candidate"}) from None
+        return config
     if config.provider.type == "azure_openai":
         credentials = _read_json_object(auth_dir / AZURE_AUTH_FILENAME, "Azure OpenAI credentials")
         config._api_key = _credential_text(credentials, "api_key", "Azure OpenAI API key")
@@ -429,7 +493,7 @@ def _json_bytes(data: Mapping[str, object]) -> bytes:
     return json.dumps(dict(data), separators=(",", ":")).encode("utf-8")
 
 
-def _commit_replacement(payloads: Mapping[Path, bytes], removals: list[Path]) -> None:
+def _commit_replacement(payloads: Mapping[Path, bytes], removals: list[Path], *, provider: str | None = None) -> None:
     affected = list(dict.fromkeys([*payloads, *removals]))
     snapshots: dict[Path, bytes | None] = {}
     staged: dict[Path, Path] = {}
@@ -443,14 +507,16 @@ def _commit_replacement(payloads: Mapping[Path, bytes], removals: list[Path]) ->
         for path in removals:
             path.unlink(missing_ok=True)
     except OSError as exc:
-        _restore_snapshots(snapshots)
-        raise ConfigurationError("Unable to persist user Provider configuration.") from exc
+        restored = _restore_snapshots(snapshots)
+        context = {"provider": provider, "reason": "storage" if restored else "internal"} if provider else None
+        raise ConfigurationError("Unable to persist user Provider configuration.", context=context) from exc
     finally:
         for temporary_path in staged.values():
             temporary_path.unlink(missing_ok=True)
 
 
-def _restore_snapshots(snapshots: Mapping[Path, bytes | None]) -> None:
+def _restore_snapshots(snapshots: Mapping[Path, bytes | None]) -> bool:
+    restored = True
     for path, payload in snapshots.items():
         try:
             if payload is None:
@@ -458,7 +524,8 @@ def _restore_snapshots(snapshots: Mapping[Path, bytes | None]) -> None:
             else:
                 _atomic_write(path, payload)
         except OSError:
-            continue
+            restored = False
+    return restored
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:

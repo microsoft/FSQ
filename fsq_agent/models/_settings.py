@@ -234,7 +234,7 @@ class AgentPromptConfig(BaseModel):
 class AgentRuntimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["azure_openai", "github_copilot"] | None = None
+    provider: Literal["openai", "azure_openai", "github_copilot"] | None = None
     max_turns: int = Field(default=50, ge=1)
     tracing_enabled: bool = True
     prompt: AgentPromptConfig = Field(default_factory=AgentPromptConfig)

@@ -29,9 +29,10 @@ class _NoHelperTools:
 
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
 @pytest.mark.parametrize("failure_kind", [None, "incomplete", "failed", "refusal"])
-async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None) -> None:
-    settings = Settings(agent_runtime=AgentRuntimeSettings(provider="azure_openai", tracing_enabled=False))
-    settings.agent_runtime.base_url = "https://model.example.test/openai/v1/"
+@pytest.mark.parametrize("provider", ["azure_openai", "openai"])
+async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str) -> None:
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False))
+    settings.agent_runtime.base_url = "https://api.openai.com/v1/" if provider == "openai" else "https://model.example.test/openai/v1/"
     settings.agent_runtime.api_key = "synthetic-model-key"
     settings.agent_runtime.model = "test-model"
     settings.output.runs_dir = tmp_path
@@ -47,6 +48,8 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     }
 
     def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == settings.agent_runtime.base_url + "responses"
+        assert request.headers["authorization"] == "Bearer synthetic-model-key"
         payload = json.loads(request.content)
         payloads.append(payload)
         response = {

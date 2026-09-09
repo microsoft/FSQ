@@ -8,7 +8,7 @@ This guide takes a new user from installation to a deterministic Web run against
 - A supported installed Chromium-family browser. The examples use stable Chrome.
 - An empty directory you can use as a local FSQ Workspace.
 
-AI exploration and suggestion analysis also require GitHub Copilot or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
+AI exploration and suggestion analysis also require OpenAI, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
 
 ## Install
 
@@ -51,7 +51,20 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
-Alternatively run `fsq providers configure azure_openai`. Provider configuration is user-level, stored below `~/.fsq`, and shared with the local Control Plane.
+Alternatively run `fsq providers configure openai` for the official OpenAI API, or `fsq providers configure azure_openai` for an Azure deployment. Provider configuration is user-level, stored below `~/.fsq`, and shared with the local Control Plane. OpenAI prompts privately for an API key and offers eligible models; even a single model requires explicit selection.
+
+For browser configuration, run `fsq ui` and open **Settings**:
+
+1. Choose **Add configuration** or **Change provider**, then **OpenAI**.
+2. Enter an API key and select **Load models**. Select one offered model, then **Save changes**.
+3. Select **Test connection** to send a minimal request using the saved configuration.
+4. Return to **Home** to see the Provider summary, then open **Test Runner**, choose a Workspace/platform/target, and start an Explore task explicitly.
+
+OpenAI always uses `https://api.openai.com/v1/` and the Responses API. Its picker offers general-purpose GPT major version 5 or later, excluding mini, nano, Codex, embedding, audio, realtime, image, search, transcription, and TTS variants. An empty list cannot be saved. Changing the key invalidates the list and selection; reload before saving. Azure instead requires a resource endpoint, **deployment name** (not necessarily an OpenAI model id), and API key.
+
+Saving rechecks model visibility but does not run inference. Readiness/status is a local configuration check, not a connection test. API keys are plaintext local credentials, masked in Settings by default but returned in full by the trusted-loopback Config API. Successful Provider replacement removes inactive credentials. Neither configuration nor execution falls back to environment variables or another Provider.
+
+If the save response is lost, the page reports an unknown outcome and re-reads configuration. Use **Reload configuration** to retry recovery. Closing the page does not cancel a server save; the current snapshot is not proof that an earlier request finished. FSQ does not automatically resubmit or undo the save. After recovery, review the current Provider and any remaining unsaved draft before continuing.
 
 ## Explore and inspect
 

@@ -9,6 +9,7 @@ interface ProviderDialogProps {
   deviceFlowPending: DeviceFlowPending;
   deviceFlowError: ApiErrorBody | null;
   onSelectAzure: () => void;
+  onSelectOpenAI: () => void;
   onStartGithub: () => Promise<unknown>;
   onRetryModels: () => Promise<unknown>;
   onSaveModel: (modelName: string) => Promise<unknown>;
@@ -48,8 +49,11 @@ export function ProviderDialog(props: ProviderDialogProps) {
   if (step === 'choice') return <DialogFrame title="Choose model provider" onClose={props.onClose}>
     <p className="config-dialog-intro">One provider is active at a time. A replacement takes effect only after it is saved.</p>
     <div className="provider-options">
-      <button type="button" className="provider-option" data-dialog-initial onClick={props.onSelectAzure}>
-        <strong>Azure GPT</strong><span>Use an Azure OpenAI-compatible endpoint and API key.</span>
+      <button type="button" className="provider-option" data-dialog-initial aria-label="OpenAI official API" onClick={props.onSelectOpenAI}>
+        <strong>OpenAI</strong><span>Official API access with an API key.</span>
+      </button>
+      <button type="button" className="provider-option" onClick={props.onSelectAzure}>
+        <strong>Azure OpenAI</strong><span>Azure resource endpoint, deployment, and API key.</span>
       </button>
       <button type="button" className="provider-option" onClick={startGithub}>
         <strong>GitHub Copilot GPT</strong><span>Authenticate this computer through GitHub device flow.</span>

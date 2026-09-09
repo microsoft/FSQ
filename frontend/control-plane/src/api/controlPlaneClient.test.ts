@@ -172,6 +172,34 @@ it('requires step artifacts to contain readable content or an item error', async
   await expect(controlPlaneClient.stepArtifacts('request-1', 'step-1')).rejects.toMatchObject({ body: expect.objectContaining({ code: 'invalid_response' }) });
 });
 
+it('loads and saves the strict OpenAI configuration and model-list contracts', async () => {
+  const config = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'local-key' } };
+  const fetch = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ id: 'gpt-5', name: 'gpt-5' }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify(config)))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, provider: 'openai', modelName: 'gpt-5', durationMs: 15 })));
+  await expect(controlPlaneClient.openaiModels('local-key')).resolves.toEqual({ models: [{ id: 'gpt-5', name: 'gpt-5' }] });
+  await expect(controlPlaneClient.saveOpenAIConfig({ modelName: 'gpt-5', apiKey: 'local-key' })).resolves.toEqual(config);
+  await expect(controlPlaneClient.testConnection()).resolves.toMatchObject({ provider: 'openai' });
+  expect(fetch).toHaveBeenNthCalledWith(1, '/api/control-plane/config/openai/models', expect.objectContaining({ method: 'POST', body: JSON.stringify({ apiKey: 'local-key' }) }));
+  expect(fetch).toHaveBeenNthCalledWith(2, '/api/control-plane/config/openai', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ modelName: 'gpt-5', apiKey: 'local-key' }) }));
+});
+
+it.each([{ models: null }, { models: [{ id: 'gpt-5', name: '' }] }, { models: [{ id: 'gpt-5', name: 'gpt-5', apiKey: 'unexpected' }] }])('rejects invalid OpenAI model-list responses', async payload => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(payload)));
+  await expect(controlPlaneClient.openaiModels('local-key')).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
+it('accepts empty OpenAI model discovery', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ models: [] })));
+  await expect(controlPlaneClient.openaiModels('local-key')).resolves.toEqual({ models: [] });
+});
+
+it('rejects an OpenAI configuration with a custom endpoint', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'local-key', baseUrl: 'https://untrusted.example' } })));
+  await expect(controlPlaneClient.config()).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
 it('accepts Config responses without admitting GitHub token fields into the contract', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
     configured: true,

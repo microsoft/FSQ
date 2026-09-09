@@ -1,5 +1,10 @@
 .config-page { width: min(100%, 940px); min-height: 100%; padding: clamp(12px, 3vw, 34px); overflow: auto; overflow-wrap: anywhere; }
 .config-page h1, .config-page h2, .config-page p { margin-top: 0; }
+.config-model-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.config-model-actions .button { min-width: 160px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.config-recovery { display: grid; gap: 10px; padding: 16px; margin-bottom: 24px; border-left: 3px solid var(--cp-warning); background: var(--cp-surface-soft); }
+.config-recovery p { margin: 0; }
+.config-recovery .button { justify-self: start; }
 .config-state { max-width: 620px; padding-top: clamp(32px, 9vh, 92px); }
 .config-state h1, .config-section-heading h1 { margin-bottom: 10px; font-size: var(--cp-type-page); line-height: var(--cp-leading-page); font-weight: 600; letter-spacing: -.6px; }
 .config-state > p:not(.config-eyebrow) { max-width: 520px; margin-bottom: 24px; color: var(--cp-muted); line-height: 1.6; }
