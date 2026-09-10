@@ -1,5 +1,5 @@
 agent_runtime:
-  max_turns: 50
+  max_turns: 100
   tracing_enabled: true
 
 harness:

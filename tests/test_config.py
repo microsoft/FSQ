@@ -355,25 +355,17 @@ def test_config_example_is_reference_only_and_shows_case_lifecycle(tmp_path: Pat
     assert settings.agent_context.knowledge.skills.dir == repository_root / "fsq_agent" / "resources" / "skills"
 
 
-@pytest.mark.parametrize(
-    ("platform", "expected_max_turns"),
-    [
-        ("android", 100),
-        ("web", 50),
-        ("windows", 100),
-        ("macos", 50),
-    ],
-)
-def test_committed_platform_presets_define_max_turns_and_bind_package_skills(platform: str, expected_max_turns: int, tmp_path: Path) -> None:
+@pytest.mark.parametrize("platform", ["android", "web", "windows", "macos"])
+def test_committed_platform_presets_define_max_turns_and_bind_package_skills(platform: str, tmp_path: Path) -> None:
     config_path = PLATFORM_CONFIG_PATHS[platform]
+    preset = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-    settings = load_settings(config_path, workspace=tmp_path / config_path.stem)
+    settings = load_settings(config_path, workspace=tmp_path / config_path.stem, user_config_root=tmp_path / "user")
 
-    assert settings.agent_runtime.max_turns == expected_max_turns
+    assert settings.agent_runtime.max_turns == preset["agent_runtime"]["max_turns"]
     skills = settings.agent_context.knowledge.skills
     assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
     assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
-    preset = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert "dir" not in preset["agent_context"]["knowledge"]["skills"]
 
 
@@ -396,12 +388,13 @@ caseLifecycle:
 
 
 def test_load_platform_settings_loads_committed_platform_preset(tmp_path: Path) -> None:
-    settings = load_platform_settings("web", workspace=tmp_path / "legacy-web")
+    preset = yaml.safe_load(PLATFORM_CONFIG_PATHS["web"].read_text(encoding="utf-8"))
+    settings = load_platform_settings("web", workspace=tmp_path / "legacy-web", user_config_root=tmp_path / "user")
 
     assert settings.harness.platform == "web"
     assert settings.harness.web.backend == "playwright"
     assert settings.harness.web.base_url is None
-    assert settings.agent_runtime.max_turns == 50
+    assert settings.agent_runtime.max_turns == preset["agent_runtime"]["max_turns"]
     skills = settings.agent_context.knowledge.skills
     assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
     assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
