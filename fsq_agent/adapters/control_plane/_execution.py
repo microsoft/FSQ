@@ -197,17 +197,14 @@ def _execution_thread(prepared: PreparedRun, state: ControlPlaneState, handle: E
     if prepared.mode == "strict":
         _run_strict(prepared, state)
         return
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    task = loop.create_task(_run_explore(prepared, state))
-    handle.attach(loop, task)
-    try:
-        loop.run_until_complete(task)
-    except asyncio.CancelledError:
-        state.finish(prepared.request_id, status="cancelled", summary="Run cancelled.")
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
+    with asyncio.Runner() as runner:
+        loop = runner.get_loop()
+        task = loop.create_task(_run_explore(prepared, state))
+        handle.attach(loop, task)
+        try:
+            loop.run_until_complete(task)
+        except asyncio.CancelledError:
+            state.finish(prepared.request_id, status="cancelled", summary="Run cancelled.")
 
 
 async def _run_explore(prepared: PreparedRun, state: ControlPlaneState) -> None:
