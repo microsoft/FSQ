@@ -20,7 +20,7 @@ from ._google_gemini_conversion import GoogleStream, google_error, google_parame
 from ._runner import _close_stream, run_agent
 
 if TYPE_CHECKING:
-    from ._contracts import AgentEventSink, AgentRequest, Model, ModelRequest
+    from ._contracts import AgentEventSink, AgentRequest, Model, ModelRequest, ModelResult, OutputT
 
 _safe_logging: ContextVar[bool] = ContextVar("google_model_safe_logging", default=False)
 
@@ -136,11 +136,11 @@ class _GoogleGeminiModel(BackendModel):
     def create_engine(self):
         return GoogleGeminiAgentEngine()
 
-    async def complete(self, request: ModelRequest):
+    async def complete(self, request: ModelRequest[OutputT]) -> ModelResult[OutputT]:
         parameters = google_parameters(self._name, request)
         async with self._provider._use_client() as resource:
             response = await resource.create(**parameters)
-            return google_result(response.model_dump(mode="json", by_alias=True, exclude_none=True))
+            return google_result(response.model_dump(mode="json", by_alias=True, exclude_none=True), request.output)
 
 
 class GoogleGeminiAgentEngine:

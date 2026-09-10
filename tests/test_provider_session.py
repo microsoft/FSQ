@@ -6,7 +6,7 @@ from typing import ClassVar
 
 import pytest
 
-from fsq_agent.agent_engine import EngineError, ModelRequest, ModelResult
+from fsq_agent.agent_engine import EngineError, ModelRequest, ModelResult, OutputContract, TokenUsage
 from fsq_agent.providers import ModelProviderSession
 from fsq_agent.providers._azure_openai import ProviderClientConfig
 
@@ -189,3 +189,48 @@ async def test_cleanup_cancellation_without_primary_error_propagates() -> None:
     with pytest.raises(asyncio.CancelledError):
         await session.close()
     assert session.get_model() is provider
+
+
+@pytest.mark.parametrize("synchronous", [False, True])
+async def test_session_forwards_contract_and_result_without_parsing(synchronous):
+    parsed = object()
+    usage = TokenUsage(1, 2, 3)
+    expected = ModelResult("original text", usage, "stop", parsed)
+    requests = []
+
+    def forbidden_parser(text):
+        raise AssertionError("Provider sessions must not invoke the output parser")
+
+    contract = OutputContract("contract", {"type": "object"}, forbidden_parser)
+    request = ModelRequest("Check", "Instructions", contract)
+
+    class ParsedProvider(_LoopBoundProvider):
+        async def complete(self, actual):
+            await super().complete(actual)
+            requests.append(actual)
+            return expected
+
+    session = ModelProviderSession(_client_config(), provider_factory=ParsedProvider)
+    try:
+        result = session.complete_sync(request) if synchronous else await session.complete(request)
+        assert result is expected
+        assert result.parsed_output is parsed
+        assert result.usage is usage
+        assert requests == [request]
+        assert requests[0] is request
+        assert requests[0].output is contract
+    finally:
+        await session.close()
+
+
+def test_neutral_positional_constructors_remain_compatible():
+    usage = TokenUsage(1, 2, 3)
+    request = ModelRequest("Check", "Instructions")
+    result = ModelResult("original", usage, "stop")
+    assert request.input == "Check"
+    assert request.instructions == "Instructions"
+    assert request.output is None
+    assert result.text == "original"
+    assert result.usage is usage
+    assert result.finish_reason == "stop"
+    assert result.parsed_output is None

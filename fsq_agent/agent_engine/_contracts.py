@@ -29,9 +29,10 @@ class Message:
 
 
 @dataclass(frozen=True)
-class ModelRequest:
+class ModelRequest(Generic[OutputT]):
     input: str | tuple[Message, ...]
     instructions: str | None = None
+    output: OutputContract[OutputT] | None = None
 
 
 @dataclass(frozen=True)
@@ -45,10 +46,11 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
-class ModelResult:
+class ModelResult(Generic[OutputT]):
     text: str
     usage: TokenUsage | None = None
     finish_reason: str = "unknown"
+    parsed_output: OutputT | None = None
 
 
 @dataclass(frozen=True)
@@ -136,7 +138,7 @@ class EngineError(Exception):
 
 
 class Model(Protocol):
-    async def complete(self, request: ModelRequest) -> ModelResult: ...
+    async def complete(self, request: ModelRequest[OutputT]) -> ModelResult[OutputT]: ...
 
 
 class ModelProvider(Protocol):

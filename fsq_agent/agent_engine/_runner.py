@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, TypeVar
 from ._backend import add_usage, decode_tool_arguments
 from ._context import ModelInputFilter
 from ._contracts import AgentEvent, AgentResult, EngineError, ToolCall, ToolInputFailure
+from ._output import parse_output
 from ._tracing import TraceSession, span
 
 if TYPE_CHECKING:
@@ -168,9 +169,6 @@ async def run_agent(backend: BackendConversation, request: AgentRequest, on_even
                 if request.output is None:
                     return AgentResult(final_output=text, usage=usage)
                 if text:
-                    try:
-                        final_output = request.output.parse(text)
-                    except (ValueError, TypeError):
-                        raise EngineError("invalid_output", "Model provider returned an invalid response or structured output.") from None
+                    final_output = parse_output(text, request.output)
                     return AgentResult(final_output=final_output, usage=usage)
             raise EngineError("max_turns", "Agent exceeded the configured turn limit.")

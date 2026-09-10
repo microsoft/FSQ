@@ -102,6 +102,7 @@ async def test_complete_uses_one_tool_free_sdk_request_and_closes(monkeypatch: p
     try:
         result = await model.complete(ModelRequest(input="check"))
         assert result.text == "done"
+        assert result.parsed_output is None
         assert result.finish_reason == "unknown"
         assert result.usage is not None
         assert result.usage.input_tokens == 3
@@ -111,6 +112,7 @@ async def test_complete_uses_one_tool_free_sdk_request_and_closes(monkeypatch: p
         assert not payload.get("tools")
         assert not payload.get("stream")
         assert not payload.get("reasoning")
+        assert not payload.get("text")
         assert not payload.get("conversation")
         assert not payload.get("previous_response_id")
         assert requests[0].headers["x-test-provider"] == "configured"
@@ -159,6 +161,47 @@ class _FinalOutput(BaseModel):
     value: str
 
 
+@pytest.mark.parametrize("strict", [True, False])
+@pytest.mark.parametrize("parsed_none", [True, False])
+async def test_complete_parses_output_once_and_preserves_text(monkeypatch: pytest.MonkeyPatch, strict: bool, parsed_none: bool) -> None:
+    text = '  {"value": "done"}\n'
+    parsed = None if parsed_none else _FinalOutput(value="done")
+    candidates = []
+    payloads = []
+    schema = _FinalOutput.model_json_schema()
+    original_schema = deepcopy(schema)
+
+    def parse(candidate):
+        candidates.append(candidate)
+        return parsed
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json=_response(text))
+
+    provider, client = _provider(monkeypatch, respond)
+    try:
+        contract = OutputContract("single_output", schema, parse, strict)
+        result = await provider.get_model("test-model").complete(ModelRequest("check", "instructions", output=contract))
+        assert result.text == text
+        assert result.parsed_output is parsed
+        assert candidates == [text]
+        assert schema == original_schema
+        assert result.usage.total_tokens == 5
+        assert len(payloads) == 1
+        payload = payloads[0]
+        assert payload["text"]["format"]["type"] == "json_schema"
+        assert payload["text"]["format"]["name"] == "final_output"
+        assert payload["text"]["format"]["strict"] is strict
+        assert payload["text"]["format"]["schema"]["required"] == ["value"]
+        assert "verbosity" not in payload["text"]
+        assert not payload.get("tools")
+        assert not payload.get("reasoning")
+    finally:
+        await provider.aclose()
+    assert client.is_closed
+
+
 def _http_response(payload: dict, *, stream: bool) -> httpx.Response:
     if not stream:
         return httpx.Response(200, json=payload)
@@ -169,9 +212,153 @@ def _http_response(payload: dict, *, stream: bool) -> httpx.Response:
     return _sse_response(events)
 
 
+@pytest.mark.parametrize("constraint", ["oneOf", "allOf", "reference"])
+async def test_single_output_rejects_lossy_schema_conversion(monkeypatch, constraint):
+    field = {"oneOf": [{"type": "number"}, {"type": "integer"}]}
+    if constraint == "allOf":
+        field = {"type": "number", "minimum": 10, "allOf": [{"minimum": 1}]}
+    if constraint == "reference":
+        field = {"$ref": "#/$defs/Text", "minLength": 1}
+    schema = {"type": "object", "properties": {"value": field}, "$defs": {"Text": {"type": "string", "minLength": 5}}}
+    original = deepcopy(schema)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=_response('{"value": 1}'))
+
+    provider, _client = _provider(monkeypatch, respond)
+    try:
+        with pytest.raises(EngineError) as failure:
+            await provider.get_model("test-model").complete(ModelRequest("Check", output=OutputContract("output", schema, json.loads)))
+        assert failure.value.category == "configuration"
+        assert requests == []
+        assert schema == original
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        {"not": {"const": "blocked"}},
+        {"if": {"const": "yes"}, "then": {"minLength": 5}, "else": {"minLength": 3}},
+        {"dependentRequired": {"first": ["second"]}},
+        {"dependentSchemas": {"first": {"required": ["second"]}}},
+        {"patternProperties": {"^name": {"type": "string"}}},
+        {"propertyNames": {"pattern": "^name"}},
+        {"contains": {"const": "required"}},
+        {"uniqueItems": True},
+        {"unevaluatedProperties": False},
+        {"prefixItems": [{"type": "string"}]},
+        {"format": "unsupported-private-format"},
+    ],
+)
+@pytest.mark.parametrize("location", ["property", "definition", "items", "anyOf"])
+@pytest.mark.parametrize("entry", ["single", "agent"])
+async def test_strict_output_rejects_unsupported_nested_constraints(monkeypatch, constraint, location, entry):
+    field = {"type": "string", **constraint}
+    schema = {"type": "object", "properties": {"value": field}}
+    if location == "definition":
+        schema = {"type": "object", "properties": {"value": {"$ref": "#/$defs/Value"}}, "$defs": {"Value": field}}
+    elif location == "items":
+        schema["properties"]["value"] = {"type": "array", "items": field}
+    elif location == "anyOf":
+        schema["properties"]["value"] = {"anyOf": [field, {"type": "null"}]}
+    original = deepcopy(schema)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=_response('{"value":"ok"}'))
+
+    provider, _client = _provider(monkeypatch, respond)
+    model = provider.get_model("test-model")
+    contract = OutputContract("output", schema, json.loads)
+    try:
+        if entry == "single":
+            operation = model.complete(ModelRequest("Check", output=contract))
+        else:
+            operation = create_agent_engine().run(model, AgentRequest(name="Check", instructions="Check", input="Check", output=contract))
+        with pytest.raises(EngineError) as failure:
+            await operation
+        assert failure.value.category == "configuration"
+        assert "private" not in str(failure.value)
+        assert requests == []
+        assert schema == original
+    finally:
+        await provider.aclose()
+
+
 def _sse_response(events: list[dict]) -> httpx.Response:
     content = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"type": "array", "items": [{"type": "string", "not": {"const": "blocked"}}]},
+        {"type": "array", "items": []},
+        {"type": "array", "items": True},
+        {"type": "array", "items": False},
+        {"type": "array", "items": None},
+        {"type": "array", "items": "private-schema"},
+        {"type": "object", "properties": []},
+        {"type": "object", "properties": None},
+        {"type": "object", "properties": {"nested": False}},
+        {"type": "object", "additionalProperties": None},
+        {"type": "object", "additionalProperties": 0},
+        {"type": "string", "$defs": []},
+        {"type": "string", "$defs": {"Value": False}},
+        {"type": "string", "definitions": False},
+        {"anyOf": {}},
+        {"anyOf": []},
+        {"anyOf": [False]},
+        {"allOf": {}},
+        {"allOf": []},
+        {"allOf": [None]},
+        {"$ref": None},
+        {"$ref": "#/$defs/Missing"},
+        {"type": False},
+        {"type": []},
+        {"type": ["string", False]},
+        {"type": "private-type"},
+        {"type": "string", "format": []},
+        {"type": "string", "pattern": {}},
+        {"type": "string", "minLength": True},
+        {"type": "number", "minimum": "0"},
+        {"type": "number", "maximum": float("inf")},
+        {"type": "number", "multipleOf": 0},
+        {"type": "object", "properties": {}, "required": "private-required"},
+    ],
+)
+@pytest.mark.parametrize("entry", ["single", "agent"])
+async def test_strict_output_rejects_unsupported_schema_shapes(monkeypatch, field, entry):
+    schema = {"type": "object", "properties": {"value": field}}
+    original = deepcopy(schema)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json=_response('{"value":"ok"}'))
+
+    provider, _client = _provider(monkeypatch, respond)
+    model = provider.get_model("test-model")
+    contract = OutputContract("output", schema, json.loads)
+    try:
+        if entry == "single":
+            operation = model.complete(ModelRequest("Check", output=contract))
+        else:
+            operation = create_agent_engine().run(model, AgentRequest(name="Check", instructions="Check", input="Check", output=contract))
+        with pytest.raises(EngineError) as failure:
+            await operation
+        assert failure.value.category == "configuration"
+        assert "private" not in str(failure.value)
+        assert requests == []
+        assert schema == original
+    finally:
+        await provider.aclose()
 
 
 class _ChunkedSseStream(httpx.AsyncByteStream):

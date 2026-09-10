@@ -9,12 +9,28 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fsq_agent.agent_engine import ImageContent, Message, ModelRequest, TextContent
+from pydantic import BaseModel, ConfigDict, Field
+
+from fsq_agent.agent_engine import EngineError, ImageContent, Message, ModelRequest, OutputContract, TextContent
 from fsq_agent.models import AIAssertionRequest, AIAssertionResult, ConfigurationError
 
 if TYPE_CHECKING:
     from fsq_agent.agent_engine import ModelResult
     from fsq_agent.providers import ModelProviderSession
+
+
+class _AssertionOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True, allow_inf_nan=False)
+
+    passed: bool
+    explanation: str = Field(min_length=1)
+    confidence: float | None = Field(ge=0, le=1)
+
+
+def _assertion_output(response: ModelResult) -> _AssertionOutput:
+    if not isinstance(response.parsed_output, _AssertionOutput):
+        raise EngineError("invalid_output", "Model provider returned an invalid assertion output.")
+    return response.parsed_output
 
 
 class AIAssertionEvaluator:
@@ -23,18 +39,17 @@ class AIAssertionEvaluator:
 
     def evaluate(self, request: AIAssertionRequest) -> AIAssertionResult:
         started = time.perf_counter()
+        failed = False
         try:
             response = self.session.complete_sync(self._build_input(request))
-            payload = self._parse_response(response)
-            passed = payload["passed"]
+            payload = _assertion_output(response)
+            passed = payload.passed
             status = "passed" if passed else "failed"
-            explanation = str(payload.get("explanation") or payload.get("summary") or "AI assertion evaluated.")
-            confidence = payload.get("confidence")
             return AIAssertionResult(
                 status=status,
                 passed=passed,
-                explanation=explanation,
-                confidence=confidence if isinstance(confidence, int | float) else None,
+                explanation=payload.explanation,
+                confidence=payload.confidence,
                 provider=self.session.provider,
                 model=self.session.model,
                 latency_ms=int((time.perf_counter() - started) * 1000),
@@ -43,8 +58,14 @@ class AIAssertionEvaluator:
                 metadata={"provider_metadata": self.session.metadata},
             )
         except Exception as exc:
+            failed = True
             if isinstance(exc, ConfigurationError):
                 raise
+            metadata: dict[str, Any] = {"provider_metadata": self.session.metadata}
+            if isinstance(exc, EngineError):
+                metadata["engine_error"] = {"category": exc.category}
+                if exc.reason is not None:
+                    metadata["engine_error"]["reason"] = exc.reason
             return AIAssertionResult(
                 status="error",
                 passed=False,
@@ -53,19 +74,26 @@ class AIAssertionEvaluator:
                 model=self.session.model,
                 latency_ms=int((time.perf_counter() - started) * 1000),
                 artifact_refs=[request.screenshot_artifact_ref] if request.screenshot_artifact_ref else [],
-                error=str(exc) or exc.__class__.__name__,
-                metadata={"provider_metadata": self.session.metadata},
+                error="AI assertion evaluation failed.",
+                metadata=metadata,
             )
+        except BaseException:
+            failed = True
+            raise
         finally:
-            self.session.close_sync()
+            try:
+                self.session.close_sync()
+            except BaseException:
+                if not failed:
+                    raise
 
     def close(self) -> None:
         self.session.close_sync()
 
-    def _build_input(self, request: AIAssertionRequest) -> ModelRequest:
+    def _build_input(self, request: AIAssertionRequest) -> ModelRequest[_AssertionOutput]:
         text = (
             "Evaluate this explicit platform visual assertion. "
-            "Return JSON only with keys passed (boolean), explanation (short string), and confidence (0 to 1).\n\n"
+            "Return JSON only with keys passed (boolean), explanation (nonblank string), and confidence (0 to 1 or null).\n\n"
             f"Platform: {request.platform}\n"
             f"Prompt: {request.prompt}\n"
             f"Context: {json.dumps(request.ui_context, ensure_ascii=False, default=str)}"
@@ -75,30 +103,10 @@ class AIAssertionEvaluator:
         if screenshot_path and screenshot_path.exists():
             mime_type = mimetypes.guess_type(str(screenshot_path))[0] or "image/png"
             content.append(ImageContent(data=screenshot_path.read_bytes(), mime_type=mime_type))
-        return ModelRequest(input=(Message(content=tuple(content)),))
-
-    def _parse_response(self, response: ModelResult) -> dict[str, Any]:
-        text = response.text
-        try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
-            payload = self._json_object_from_text(text)
-        if not isinstance(payload, dict):
-            return {"passed": False, "explanation": text[:1000] or "AI assertion returned no parseable verdict."}
-        if not isinstance(payload.get("passed"), bool):
-            raise TypeError("AI assertion returned an invalid boolean verdict.")
-        return payload
-
-    def _json_object_from_text(self, text: str) -> dict[str, Any]:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end <= start:
-            return {"passed": False, "explanation": text[:1000] or "AI assertion returned no parseable verdict."}
-        try:
-            payload = json.loads(text[start : end + 1])
-        except json.JSONDecodeError:
-            return {"passed": False, "explanation": text[:1000] or "AI assertion returned no parseable verdict."}
-        return payload if isinstance(payload, dict) else {"passed": False, "explanation": text[:1000]}
+        return ModelRequest(
+            input=(Message(content=tuple(content)),),
+            output=OutputContract(name="visual_assertion", schema=_AssertionOutput.model_json_schema(), parse=_AssertionOutput.model_validate_json),
+        )
 
     def _token_usage(self, response: ModelResult) -> dict[str, int]:
         usage = response.usage

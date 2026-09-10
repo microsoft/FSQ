@@ -7,10 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from fsq_agent.agent_engine import EngineError
 from fsq_agent.ai_services import CaseSuggestionAnalysis
 from fsq_agent.application import ApplicationError, ApplicationErrorCode, CaseTestRequest
 from fsq_agent.application import _case_test as case_test_module
-from fsq_agent.models import ConfigurationError
 
 
 @pytest.mark.parametrize("platform", ["android", "web", "windows", "macos"])
@@ -157,7 +157,7 @@ def test_bounded_execution_facts_limit_items_strings_and_total_size() -> None:
 
 
 @pytest.mark.parametrize("execution_status", ["passed", "failed"])
-@pytest.mark.parametrize("analysis_error", [TimeoutError("provider unavailable"), ConfigurationError("Invalid suggestion JSON")])
+@pytest.mark.parametrize("analysis_error", [TimeoutError("provider unavailable"), EngineError("invalid_output", "Invalid suggestion output")])
 @pytest.mark.parametrize("finalization_fails", [False, True])
 def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_status: str, analysis_error: Exception, finalization_fails: bool
@@ -259,6 +259,9 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
     assert error.value.details["report_path"] == str(report_path)
     assert error.value.__cause__ is analysis_error
     assert report_path.read_text(encoding="utf-8") == "report"
+    assert case_path.read_text(encoding="utf-8") == source
+    assert len(list(run_dir.glob("*.fsq.yaml"))) == 0
+    assert order == ["execute", "analyze", "execute"]
     if not finalization_fails:
         assert transitions[-1][0] == expected_status
         assert transitions[-1][1]["artifacts"].report_markdown == report_path.name

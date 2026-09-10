@@ -11,12 +11,13 @@ from openai import APITimeoutError
 
 from ._backend import decode_tool_arguments
 from ._contracts import AgentEvent, EngineError, ImageContent, ModelResult, TextContent, TokenUsage
+from ._output import parse_output
 from ._schema import ensure_strict_json_schema
 
 if TYPE_CHECKING:
     from openai.types.responses import Response
 
-    from ._contracts import Message, OutputContract, ToolBinding
+    from ._contracts import Message, OutputContract, OutputT, ToolBinding
 
 
 def model_input(value: str | tuple[Message, ...]) -> list[dict]:
@@ -86,10 +87,12 @@ def check_response(response: Response) -> None:
                 raise EngineError("refusal", "Model provider refused the request.")
 
 
-def model_result(response: Response) -> ModelResult:
+def model_result(response: Response, output: OutputContract[OutputT] | None = None) -> ModelResult[OutputT]:
     check_response(response)
     pieces = [part.text for item in response.output if item.type == "message" for part in item.content if part.type == "output_text"]
-    return ModelResult(text="\n".join(pieces), usage=token_usage(response.usage))
+    text = "\n".join(pieces)
+    parsed = parse_output(text, output) if output is not None else None
+    return ModelResult(text=text, usage=token_usage(response.usage), parsed_output=parsed)
 
 
 def response_parameters(
@@ -120,15 +123,14 @@ def response_parameters(
         parameters["instructions"] = instructions
     if agent:
         parameters["reasoning"] = {"effort": "medium"}
-        text = {"verbosity": "medium"}
-        if output is not None:
-            text["format"] = {
-                "type": "json_schema",
-                "name": "final_output",
-                "schema": ensure_strict_json_schema(output.schema) if output.strict else deepcopy(output.schema),
-                "strict": output.strict,
-            }
-        parameters["text"] = text
+        parameters["text"] = {"verbosity": "medium"}
+    if output is not None:
+        parameters.setdefault("text", {})["format"] = {
+            "type": "json_schema",
+            "name": "final_output",
+            "schema": ensure_strict_json_schema(output.schema) if output.strict else deepcopy(output.schema),
+            "strict": output.strict,
+        }
     return parameters
 
 

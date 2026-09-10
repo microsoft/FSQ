@@ -21,7 +21,7 @@ from ._runner import _close_stream, run_agent
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
-    from ._contracts import AgentEventSink, AgentRequest, Model, ModelRequest, ModelResult
+    from ._contracts import AgentEventSink, AgentRequest, Model, ModelRequest, ModelResult, OutputT
 
 _safe_model_logging: ContextVar[bool] = ContextVar("agent_engine_safe_model_logging", default=False)
 
@@ -120,11 +120,11 @@ class _OpenAIModel(BackendModel):
     def create_engine(self):
         return OpenAIAgentEngine()
 
-    async def complete(self, request: ModelRequest) -> ModelResult:
+    async def complete(self, request: ModelRequest[OutputT]) -> ModelResult[OutputT]:
         try:
             async with self._provider._use_client() as client:
-                response = await client.responses.create(**response_parameters(self._name, model_input(request.input), request.instructions))
-                return model_result(response)
+                response = await client.responses.create(**response_parameters(self._name, model_input(request.input), request.instructions, output=request.output))
+                return model_result(response, request.output)
         except EngineError:
             raise
         except Exception as error:

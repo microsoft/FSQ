@@ -14,9 +14,10 @@ from google.genai._gaos.lib.compat_errors import APIConnectionError, APIResponse
 from ._backend import BackendTurn, decode_tool_arguments
 from ._contracts import AgentEvent, EngineError, ImageContent, ModelResult, TextContent, TokenUsage
 from ._google_gemini_schema import google_schema
+from ._output import parse_output
 
 if TYPE_CHECKING:
-    from ._contracts import AgentRequest, Message, ModelRequest
+    from ._contracts import AgentRequest, Message, ModelRequest, OutputContract, OutputT
 
 
 def google_input(value: str | tuple[Message, ...]) -> list[dict]:
@@ -42,8 +43,8 @@ def google_parameters(model: str, request: ModelRequest | AgentRequest) -> dict:
         result["system_instruction"] = request.instructions
     if hasattr(request, "tools"):
         result["tools"] = [{"type": "function", "name": tool.name, "description": tool.description, "parameters": google_schema(tool.parameters_schema)} for tool in request.tools]
-        if request.output is not None:
-            result["response_format"] = {"type": "text", "mime_type": "application/json", "schema": google_schema(request.output.schema)}
+    if request.output is not None:
+        result["response_format"] = {"type": "text", "mime_type": "application/json", "schema": google_schema(request.output.schema)}
     return result
 
 
@@ -122,9 +123,10 @@ def google_turn(response: dict, *, allow_tools: bool) -> BackendTurn:
     return BackendTurn(text=messages[-1] if messages else "", calls=tuple(calls), events=tuple(events), usage=google_usage(response.get("usage")))
 
 
-def google_result(response: dict) -> ModelResult:
+def google_result(response: dict, output: OutputContract[OutputT] | None = None) -> ModelResult[OutputT]:
     turn = google_turn(response, allow_tools=False)
-    return ModelResult(text=turn.text, usage=turn.usage)
+    parsed = parse_output(turn.text, output) if output is not None else None
+    return ModelResult(text=turn.text, usage=turn.usage, parsed_output=parsed)
 
 
 def google_error(error: Exception) -> EngineError:

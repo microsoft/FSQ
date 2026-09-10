@@ -124,6 +124,7 @@ async def test_gemini_direct_request_and_closed_model(monkeypatch):
     model = provider.get_model("gemini-3.8-flash")
     result = await model.complete(ModelRequest(input="Check"))
     assert result.text == "done"
+    assert result.parsed_output is None
     assert result.usage.total_tokens == 5
     await provider.aclose()
     await provider.aclose()
@@ -131,6 +132,42 @@ async def test_gemini_direct_request_and_closed_model(monkeypatch):
     assert all(client.is_closed for client in transport)
     with pytest.raises(EngineError, match="closed"):
         await model.complete(ModelRequest(input="again"))
+
+
+async def test_gemini_direct_structured_output_without_tools(monkeypatch):
+    payloads, candidates = [], []
+    text = ' {"value": null}\n'
+    parsed = {"value": None}
+    schema = {"type": "object", "properties": {"value": {"anyOf": [{"type": "string"}, {"type": "null"}]}}, "required": ["value"], "additionalProperties": False}
+    original = deepcopy(schema)
+
+    def parse(candidate):
+        candidates.append(candidate)
+        return parsed
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        return _http(_interaction([_output(text)]), False)
+
+    provider, transport = _provider(monkeypatch, respond)
+    try:
+        result = await provider.get_model("gemini-3.8-flash").complete(ModelRequest("Check", output=OutputContract("single", schema, parse)))
+        assert result.parsed_output is parsed
+        assert result.text == text
+        assert result.usage.total_tokens == 5
+        assert candidates == [text]
+        assert schema == original
+        assert len(payloads) == 1
+        payload = payloads[0]
+        assert payload["store"] is False
+        assert "tools" not in payload
+        assert "previous_interaction_id" not in payload
+        assert payload["response_format"]["type"] == "text"
+        assert payload["response_format"]["mime_type"] == "application/json"
+        assert payload["response_format"]["schema"]["required"] == ["value"]
+    finally:
+        await provider.aclose()
+    assert all(client.is_closed for client in transport)
 
 
 @pytest.mark.parametrize("terminal", [True, False])

@@ -1,8 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import asyncio
 import builtins
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -10,7 +12,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from fsq_agent.adapters.coding_agent import DefaultCodingAgentRuntime
-from fsq_agent.agent_engine import EngineError, _openai_backend
+from fsq_agent.agent_engine import EngineError, ModelRequest, OutputContract, _openai_backend
 from fsq_agent.ai_services import AIAssertionEvaluator, CaseSuggestionAnalyzer
 from fsq_agent.config import Settings
 from fsq_agent.models import AgentFinalOutput, AgentRuntimeSettings, AIAssertionRequest, ConfigurationError, GoalPrePlan, KnowledgeBundle, PlanningError, Task
@@ -29,7 +31,7 @@ class _NoHelperTools:
 
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
 @pytest.mark.parametrize("failure_kind", [None, "incomplete", "failed", "refusal"])
-@pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini"])
+@pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini", "github_copilot"])
 async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str) -> None:
     settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False))
     settings.agent_runtime.base_url = "https://api.openai.com/v1/" if provider == "openai" else "https://model.example.test/openai/v1/"
@@ -38,6 +40,11 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     settings.agent_runtime.api_key = "synthetic-model-key"
     settings.agent_runtime.model = "test-model"
     settings.output.runs_dir = tmp_path
+    if provider == "github_copilot":
+        settings.agent_runtime.base_url = "https://api.enterprise.githubcopilot.com/"
+        settings.agent_runtime.provider_token = {"token": "synthetic-model-key", "expires_at": time.time() + 3600, "plan": "enterprise"}
+        settings.agent_runtime.github_token = None
+        settings.agent_runtime.user_config_root = tmp_path / "isolated-user"
     payloads = []
     clients = []
     results = {
@@ -70,6 +77,11 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
             return httpx.Response(200, json=response)
         assert str(request.url) == settings.agent_runtime.base_url + "responses"
         assert request.headers["authorization"] == "Bearer synthetic-model-key"
+        if provider == "github_copilot":
+            assert request.headers["copilot-integration-id"] == "vscode-chat"
+            assert request.headers["openai-intent"] == "conversation-agent"
+            assert request.headers["editor-version"].startswith("vscode/")
+            assert request.headers["editor-plugin-version"].startswith("copilot-chat/")
         payload = json.loads(request.content)
         payloads.append(payload)
         response = {
@@ -177,5 +189,219 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
         assert not payloads[0].get("tools")
         assert not payloads[0].get("stream")
         assert not payloads[0].get("reasoning")
+        output_format = payloads[0].get("response_format") if provider == "google_gemini" else payloads[0].get("text", {}).get("format")
+        if path == "connection":
+            assert output_format is None
+        else:
+            assert output_format is not None
+            schema = output_format["schema"]
+            expected = {"passed", "explanation", "confidence"} if path == "assertion" else {"summary", "suggestions", "candidate_case_yaml"}
+            assert set(schema["properties"]) == expected
+            assert set(schema["required"]) == expected
+            assert schema["additionalProperties"] is False
     assert clients
     assert all(client.is_closed for client in clients)
+    if provider == "github_copilot":
+        assert not settings.agent_runtime.user_config_root.exists()
+
+
+@pytest.fixture(params=["openai", "google_gemini", "github_copilot"])
+def structured_session(request, monkeypatch, tmp_path):
+    provider = request.param
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False))
+    settings.agent_runtime.base_url = "https://api.openai.com/v1/" if provider == "openai" else "https://generativelanguage.googleapis.com/v1beta/"
+    settings.agent_runtime.api_key = "synthetic-model-key"
+    settings.agent_runtime.model = "test-model"
+    if provider == "github_copilot":
+        settings.agent_runtime.base_url = "https://api.enterprise.githubcopilot.com/"
+        settings.agent_runtime.provider_token = {"token": "synthetic-model-key", "expires_at": time.time() + 3600, "plan": "enterprise"}
+        settings.agent_runtime.github_token = None
+        settings.agent_runtime.user_config_root = tmp_path / "isolated-user"
+    control = {"text": '{"value":"private-candidate"}', "failure": None}
+    payloads, clients = [], []
+
+    def respond(http_request):
+        if provider == "github_copilot":
+            assert str(http_request.url) == "https://api.enterprise.githubcopilot.com/responses"
+            assert http_request.headers["authorization"] == "Bearer synthetic-model-key"
+            assert http_request.headers["copilot-integration-id"] == "vscode-chat"
+            assert http_request.headers["openai-intent"] == "conversation-agent"
+        payloads.append(json.loads(http_request.content))
+        failure = control["failure"]
+        if provider == "google_gemini":
+            response = {"id": "single", "model": "test-model", "status": "completed", "steps": [{"type": "model_output", "content": [{"type": "text", "text": control["text"]}]}]}
+            if failure == "refusal":
+                response.update(status="failed", errors=[{"code": "SAFETY", "message": "private-refusal"}])
+            elif failure == "incomplete":
+                response["status"] = "incomplete"
+        else:
+            response = {
+                "id": "single",
+                "object": "response",
+                "created_at": 1,
+                "model": "test-model",
+                "status": "completed",
+                "output": [{"id": "message", "type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": control["text"], "annotations": []}]}],
+            }
+            if failure == "refusal":
+                response["output"][0]["content"].append({"type": "refusal", "refusal": "private-refusal"})
+            elif failure == "incomplete":
+                response.update(status="incomplete", incomplete_details={"reason": "content_filter"})
+        return httpx.Response(200, json=response)
+
+    if provider == "google_gemini":
+        from fsq_agent.agent_engine import _google_gemini_backend
+
+        original = _google_gemini_backend.genai.Client
+
+        def make_client(**kwargs):
+            kwargs["http_options"]["async_client_args"]["transport"] = httpx.MockTransport(respond)
+            kwargs["http_options"]["retry_options"] = {"attempts": 1}
+            client = original(**kwargs)
+            clients.append(client._api_client._async_httpx_client)
+            return client
+
+        monkeypatch.setattr(_google_gemini_backend.genai, "Client", make_client)
+    else:
+
+        def make_client(**kwargs):
+            client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+            clients.append(client)
+            return AsyncOpenAI(http_client=client, max_retries=0, **kwargs)
+
+        monkeypatch.setattr(_openai_backend, "AsyncOpenAI", make_client)
+    session = build_model_provider_session(settings)
+    yield session, control, payloads
+    session.close_sync()
+    assert all(client.is_closed for client in clients)
+    if provider == "github_copilot":
+        assert not settings.agent_runtime.user_config_root.exists()
+
+
+@pytest.mark.parametrize("failure_kind", [None, "refusal", "incomplete"])
+def test_single_parser_runs_only_after_protocol_checks(structured_session, failure_kind):
+    session, control, payloads = structured_session
+    control["failure"] = failure_kind
+    candidates = []
+    parsed = object()
+
+    def parse(text):
+        candidates.append(text)
+        return parsed
+
+    request = ModelRequest("Check", output=OutputContract("output", {"type": "object", "properties": {"value": {"type": "string"}}}, parse))
+    if failure_kind is None:
+        result = session.complete_sync(request)
+        assert result.parsed_output is parsed
+        assert result.text == control["text"]
+        assert candidates == [control["text"]]
+    else:
+        with pytest.raises(EngineError) as failure:
+            session.complete_sync(request)
+        assert failure.value.category == failure_kind
+        assert candidates == []
+        assert "private" not in str(failure.value)
+    assert len(payloads) == 1
+
+
+@pytest.mark.parametrize(
+    "parser_error,category", [(ValueError("private-validator"), "invalid_output"), (TypeError("private-validator"), "invalid_output"), (RuntimeError("private-programming"), "runtime")]
+)
+def test_single_parser_failures_are_safe_and_not_retried(structured_session, parser_error, category):
+    session, _control, payloads = structured_session
+    candidates = []
+
+    def parse(text):
+        candidates.append(text)
+        raise parser_error
+
+    with pytest.raises(EngineError) as failure:
+        session.complete_sync(ModelRequest("Check", output=OutputContract("output", {"type": "object"}, parse)))
+    assert failure.value.category == category
+    assert "private" not in str(failure.value)
+    assert failure.value.__cause__ is None
+    assert len(candidates) == len(payloads) == 1
+
+
+def test_single_parser_cancellation_propagates_and_closes(structured_session):
+    session, _control, payloads = structured_session
+    interruption = asyncio.CancelledError()
+
+    def parse(text):
+        raise interruption
+
+    with pytest.raises(asyncio.CancelledError) as failure:
+        session.complete_sync(ModelRequest("Check", output=OutputContract("output", {"type": "object"}, parse)))
+    assert failure.value is interruption
+    assert len(payloads) == 1
+
+
+def test_single_unsupported_schema_fails_before_request(structured_session):
+    session, _control, payloads = structured_session
+    schema = {"type": "object", "properties": {"value": False}}
+    with pytest.raises(EngineError) as failure:
+        session.complete_sync(ModelRequest("Check", output=OutputContract("output", schema, json.loads)))
+    assert failure.value.category == "configuration"
+    assert payloads == []
+    assert schema == {"type": "object", "properties": {"value": False}}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        " \n",
+        "null",
+        "[]",
+        "not JSON",
+        '{"passed":false,"explanation":"Absent"}',
+        '{"passed":"false","explanation":"Absent","confidence":null}',
+        '{"passed":1,"explanation":"Absent","confidence":null}',
+        '{"passed":true,"explanation":1,"confidence":null}',
+        '{"passed":true,"explanation":" ","confidence":null}',
+        '{"passed":true,"explanation":"Visible","confidence":true}',
+        '{"passed":true,"explanation":"Visible","confidence":"0.9"}',
+        '{"passed":true,"explanation":"Visible","confidence":1.1}',
+        '{"passed":true,"explanation":"Visible","confidence":NaN}',
+        '{"passed":true,"explanation":"Visible","confidence":Infinity}',
+        '{"passed":true,"explanation":"Visible","confidence":null,"extra":true}',
+        '```json\n{"passed":true,"explanation":"Visible","confidence":null}\n```',
+        'prose {"passed":true,"explanation":"Visible","confidence":null}',
+    ],
+)
+def test_assertion_invalid_output_through_real_clients(structured_session, text):
+    session, control, payloads = structured_session
+    control["text"] = text
+    result = AIAssertionEvaluator(session).evaluate(AIAssertionRequest(platform="web", prompt="Check"))
+    assert result.status == "error"
+    assert result.passed is False
+    assert result.metadata["engine_error"]["category"] == "invalid_output"
+    assert len(payloads) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        " \n",
+        "null",
+        "[]",
+        "not JSON",
+        '{"summary":"Good","suggestions":[]}',
+        '{"summary":1,"suggestions":[],"candidate_case_yaml":null}',
+        '{"summary":" ","suggestions":[],"candidate_case_yaml":null}',
+        '{"summary":"Good","suggestions":[{"kind":"custom","message":" "}],"candidate_case_yaml":null}',
+        '{"summary":"Good","suggestions":[{"kind":"custom","message":"Good","extra":1}],"candidate_case_yaml":null}',
+        '{"summary":"Good","suggestions":[],"candidate_case_yaml":1}',
+        '{"summary":"Good","suggestions":[],"candidate_case_yaml":" "}',
+        '{"summary":"Good","suggestions":[],"candidate_case_yaml":null,"extra":1}',
+        '```json\n{"summary":"Good","suggestions":[],"candidate_case_yaml":null}\n```',
+    ],
+)
+def test_suggestion_invalid_output_through_real_clients(structured_session, text):
+    session, control, payloads = structured_session
+    control["text"] = text
+    with pytest.raises(EngineError) as failure:
+        CaseSuggestionAnalyzer(session).analyze(parsed_case={}, execution_report={})
+    assert failure.value.category == "invalid_output"
+    assert len(payloads) == 1

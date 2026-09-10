@@ -5,10 +5,13 @@ import asyncio
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import TypeVar
 
 from fsq_agent.agent_engine import EngineError, Model, ModelProvider, ModelRequest, ModelResult, create_google_gemini_model_provider, create_model_provider
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers._client_config import ProviderClientConfig
+
+_OutputT = TypeVar("_OutputT")
 
 
 class ModelProviderSession:
@@ -25,10 +28,10 @@ class ModelProviderSession:
             self._model_provider = self._new_provider()
         return self._model_provider.get_model(self.model)
 
-    async def complete(self, request: ModelRequest) -> ModelResult:
+    async def complete(self, request: ModelRequest[_OutputT]) -> ModelResult[_OutputT]:
         return await self.get_model().complete(request)
 
-    def complete_sync(self, request: ModelRequest) -> ModelResult:
+    def complete_sync(self, request: ModelRequest[_OutputT]) -> ModelResult[_OutputT]:
         return _run_async_sync(self._complete_once(request))
 
     async def close(self) -> None:
@@ -41,7 +44,7 @@ class ModelProviderSession:
         if self._model_provider is not None:
             _run_async_sync(self.close())
 
-    async def _complete_once(self, request: ModelRequest) -> ModelResult:
+    async def _complete_once(self, request: ModelRequest[_OutputT]) -> ModelResult[_OutputT]:
         provider = self._new_provider()
         try:
             return await provider.get_model(self.model).complete(request)
