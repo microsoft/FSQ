@@ -22,6 +22,8 @@ Own FSQ visual assertion and completed-Case suggestion business services over ne
 - `build_ai_assertion_evaluator(settings)` and `build_case_suggestion_analyzer(settings)`: create services from the selected supplier without inference.
 - `check_case_suggestion_readiness(settings)`: safely constructs and closes a configured analyzer without inference or UI actions.
 
+Both service constructors accept a keyword-only `reasoning_effort: ReasoningEffort = "mid"` option while preserving existing constructor arguments. The factories pass the resolved `settings.agent_runtime.reasoning_effort`; direct callers that omit it remain supported. Each evaluation/analysis places that neutral value in its `ModelRequest`, without selecting a native enum or relying on SDK/server defaults.
+
 The stable services, factories/readiness helper, and immutable service result are exported from `__init__.py`. Their callers are Application and entry/runtime composition; they are not supplier infrastructure exports. Service-specific output facts are local records; shared assertion request/result contracts remain in `models`.
 
 ## Model-Facing Output Contracts
@@ -59,6 +61,7 @@ Scoped resources close on every path. Cleanup does not mask a primary generation
 ## Current Invariants
 
 - Each evaluation/analysis makes one tool-free `Model.complete` request with a caller-owned output contract through the configured provider session, with no semantic retry, JSON repair, free-text fallback, Runner, action tool, handoff, or Provider configuration setting.
+- Visual assertions and Case suggestions use the same resolved platform reasoning-effort policy as the Coding Agent business phases. Services retain their construction-time effort value, do not refresh it mid-task, and do not add automatic effort tuning, a native mapping, or a retry loop. Explicit low connection testing remains owned by Providers and does not alter service policy.
 - Assertions use the selected provider/model without a separate override, prepare the existing prompt/context, read the supplied screenshot when present, and pass image bytes/MIME through neutral content. Missing screenshots retain text-only behavior.
 - Assertions preserve public result fields, latency, artifact references, provider/model metadata, and available usage on valid results while distinguishing passed, failed, and error status. Assertion evidence is not a locator recovery mechanism or permission to mutate a Case.
 - Suggestion analysis consumes parsed source Case data and bounded completed execution facts. Its prompt prohibits changing completed status/facts or initiating another run; the service cannot invoke UI actions. A missing nullable field is invalid, not an implicit absent candidate. Application owns candidate validation, source preservation, persistence, and publication rules.
@@ -68,3 +71,5 @@ Scoped resources close on every path. Cleanup does not mask a primary generation
 ## Verification Scope
 
 Verify strict whole-document validation and required nullable fields through the engine conversion/parser boundary, three-way assertion outcomes with safe category/reason metadata, evidence/timing/usage preservation, suggestion immutability and candidate normalization, and scoped cleanup with primary-error/cancellation precedence. Neutral model-session doubles honor output contracts and return parsed values; they do not depend on production text fallbacks. Actual private service schemas participate in both pinned-client controlled-transport checks. Application integration verifies no candidate publication after invalid analysis and preservation of completed Run/report facts. Factories/readiness and caller imports use this public package without inference, extra actions, or Core/provider dependency cycles.
+
+Effort verification covers configured non-default propagation from each factory into the service's neutral request, compatible direct construction with the mid fallback, invalid-value engine failure without inference, and no-inference readiness. Native serialization is verified through the pinned-client transport checks; output parsing, one-logical-request behavior, and cleanup remain independent of effort.

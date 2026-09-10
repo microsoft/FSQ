@@ -14,3 +14,4 @@ class ProviderClientConfig:
     default_headers: dict[str, str] = field(default_factory=dict, repr=False)
     metadata: dict[str, Any] = field(default_factory=dict)
     backend: Literal["openai_responses", "google_interactions"] = "openai_responses"
+    model_name_is_deployment: bool = False

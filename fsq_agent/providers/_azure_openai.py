@@ -28,4 +28,5 @@ def build_azure_openai_client_config(settings: Settings) -> ProviderClientConfig
         api_key=api_key,
         base_url=base_url,
         metadata={"endpoint_family": "azure_openai"},
+        model_name_is_deployment=True,
     )

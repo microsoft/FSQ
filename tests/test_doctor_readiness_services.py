@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from fsq_agent.agent import check_dynamic_agent_readiness
-from fsq_agent.ai_services import check_case_suggestion_readiness
+from fsq_agent.ai_services import CaseSuggestionAnalyzer, check_case_suggestion_readiness
+from fsq_agent.config import Settings
 from fsq_agent.environments import PlatformRuntimeService
 from fsq_agent.providers import check_provider_readiness
 
@@ -34,14 +35,25 @@ def test_provider_readiness_constructs_and_closes_without_inference(monkeypatch)
     assert session.closed is True
 
 
-def test_suggestion_readiness_constructs_analyzer_and_closes_without_inference(monkeypatch) -> None:
+@pytest.mark.parametrize("effort", ["low", "high"])
+def test_suggestion_readiness_constructs_analyzer_and_closes_without_inference(monkeypatch, effort) -> None:
     session = _Session()
-    monkeypatch.setattr("fsq_agent.ai_services._factory.build_model_provider_session", lambda _settings: session)
+    settings = Settings()
+    settings.agent_runtime.reasoning_effort = effort
+    efforts = []
 
-    ready, _, _ = check_case_suggestion_readiness(object())
+    def create_analyzer(provider_session, *, reasoning_effort="mid"):
+        efforts.append(reasoning_effort)
+        return CaseSuggestionAnalyzer(provider_session, reasoning_effort=reasoning_effort)
+
+    monkeypatch.setattr("fsq_agent.ai_services._factory.build_model_provider_session", lambda _settings: session)
+    monkeypatch.setattr("fsq_agent.ai_services._factory.CaseSuggestionAnalyzer", create_analyzer)
+
+    ready, _, _ = check_case_suggestion_readiness(settings)
 
     assert ready is True
     assert session.closed is True
+    assert efforts == [effort]
 
 
 def test_web_target_checks_are_static_and_do_not_construct_driver(tmp_path: Path, monkeypatch) -> None:

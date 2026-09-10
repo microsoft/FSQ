@@ -45,6 +45,87 @@ def _http(payload, stream):
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=f"event: interaction.completed\ndata: {json.dumps(event)}\n\n")
 
 
+@pytest.mark.parametrize("mode", ["single", "agent", "stream"])
+@pytest.mark.parametrize("effort", ["low", "mid", "high"])
+@pytest.mark.parametrize(
+    "model_name,minimum",
+    [
+        ("gemini-3-flash", "minimal"),
+        ("gemini-3.6-flash", "minimal"),
+        ("gemini-3.7-flash", "low"),
+        ("gemini-3.10-flash", "low"),
+        ("gemini-4-flash", "low"),
+        ("gemini-3.1-pro", "low"),
+        ("gemini-4-pro", "low"),
+    ],
+)
+async def test_gemini_reasoning_effort_serialization(monkeypatch, mode, effort, model_name, minimum):
+    payloads, calls = [], []
+    thought = {"type": "thought", "signature": "b3BhcXVl", "summary": []}
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        if mode != "single" and len(payloads) < 3:
+            steps = [thought, {"type": "function_call", "id": f"call_{len(payloads)}", "name": "observe", "arguments": {}}]
+            return _http(_interaction(steps, status="requires_action"), mode == "stream")
+        return _http(_interaction([_output()]), mode == "stream")
+
+    async def observe(call):
+        calls.append(call.call_id)
+        return "observed"
+
+    provider, clients = _provider(monkeypatch, respond)
+    try:
+        model = provider.get_model(model_name)
+        if mode == "single":
+            assert (await model.complete(ModelRequest("check", reasoning_effort=effort))).text == "done"
+        else:
+            request = AgentRequest(
+                "check", "Inspect", "check", tools=(ToolBinding("observe", "Inspect", {"type": "object", "properties": {}}, observe),), stream=mode == "stream", reasoning_effort=effort
+            )
+            assert (await create_agent_engine_for_model(model).run(model, request)).final_output == "done"
+            assert payloads[-1]["input"].count(thought) == 2
+        assert len(payloads) == (1 if mode == "single" else 3)
+        assert len(calls) == (0 if mode == "single" else 2)
+        native = minimum if effort == "low" else "medium" if effort == "mid" else "high"
+        assert all(payload["generation_config"] == {"thinking_level": native} and payload["model"] == model_name for payload in payloads)
+        assert all(payload["store"] is False and "previous_interaction_id" not in payload for payload in payloads)
+    finally:
+        await provider.aclose()
+    assert all(client.is_closed for client in clients)
+
+
+@pytest.mark.parametrize("mode", ["single", "agent", "stream"])
+@pytest.mark.parametrize("effort", ["auto", "medium", "", None, False, 1, [], {}])
+async def test_gemini_reasoning_effort_rejects_invalid_before_effects(monkeypatch, mode, effort):
+    requests, calls = [], []
+
+    def respond(request):
+        requests.append(request)
+        return _http(_interaction([_output()]), mode == "stream")
+
+    async def observe(call):
+        calls.append(call)
+        return "observed"
+
+    provider, clients = _provider(monkeypatch, respond)
+    try:
+        model = provider.get_model("gemini-3.7-flash")
+        if mode == "single":
+            operation = model.complete(ModelRequest("check", reasoning_effort=effort))
+        else:
+            operation = create_agent_engine_for_model(model).run(
+                model, AgentRequest("check", "Inspect", "check", tools=(ToolBinding("observe", "Inspect", {"type": "object"}, observe),), stream=mode == "stream", reasoning_effort=effort)
+            )
+        with pytest.raises(EngineError) as failure:
+            await operation
+        assert failure.value.category == "configuration"
+        assert requests == calls == []
+        assert clients == []
+    finally:
+        await provider.aclose()
+
+
 @pytest.mark.parametrize("stream", [False, True])
 async def test_gemini_shared_loop_preserves_private_steps_and_filters_results(monkeypatch, stream):
     payloads = []

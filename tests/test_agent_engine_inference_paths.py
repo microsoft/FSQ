@@ -12,9 +12,9 @@ import pytest
 from openai import AsyncOpenAI
 
 from fsq_agent.adapters.coding_agent import DefaultCodingAgentRuntime
-from fsq_agent.agent_engine import EngineError, ModelRequest, OutputContract, _openai_backend
-from fsq_agent.ai_services import AIAssertionEvaluator, CaseSuggestionAnalyzer
-from fsq_agent.config import Settings
+from fsq_agent.agent_engine import AgentResult, EngineError, ModelRequest, ModelResult, OutputContract, _openai_backend
+from fsq_agent.ai_services import AIAssertionEvaluator, CaseSuggestionAnalyzer, build_ai_assertion_evaluator, build_case_suggestion_analyzer
+from fsq_agent.config import Settings, refresh_provider_settings, save_azure_openai_provider
 from fsq_agent.models import AgentFinalOutput, AgentRuntimeSettings, AIAssertionRequest, ConfigurationError, GoalPrePlan, KnowledgeBundle, PlanningError, Task
 from fsq_agent.providers import build_model_provider_session, test_model_provider_connection
 
@@ -32,13 +32,15 @@ class _NoHelperTools:
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
 @pytest.mark.parametrize("failure_kind", [None, "incomplete", "failed", "refusal"])
 @pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini", "github_copilot"])
-async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str) -> None:
-    settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False))
+@pytest.mark.parametrize("effort", ["low", "high"])
+async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str, effort: str) -> None:
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False, reasoning_effort=effort))
     settings.agent_runtime.base_url = "https://api.openai.com/v1/" if provider == "openai" else "https://model.example.test/openai/v1/"
     if provider == "google_gemini":
         settings.agent_runtime.base_url = "https://generativelanguage.googleapis.com/v1beta/"
     settings.agent_runtime.api_key = "synthetic-model-key"
-    settings.agent_runtime.model = "test-model"
+    model_name = "gemini-3.6-flash" if provider == "google_gemini" else "gpt-5.2-pro"
+    settings.agent_runtime.model = model_name
     settings.output.runs_dir = tmp_path
     if provider == "github_copilot":
         settings.agent_runtime.base_url = "https://api.enterprise.githubcopilot.com/"
@@ -160,7 +162,7 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     elif path == "assertion":
         screenshot = tmp_path / "sample.png"
         screenshot.write_bytes(b"synthetic-image")
-        result = AIAssertionEvaluator(build_model_provider_session(settings)).evaluate(AIAssertionRequest(platform="web", prompt="Visible?", screenshot_path=screenshot))
+        result = build_ai_assertion_evaluator(settings).evaluate(AIAssertionRequest(platform="web", prompt="Visible?", screenshot_path=screenshot))
         assert result.passed is (failure_kind is None)
         assert result.status == ("error" if failure_kind else "passed")
         assert payloads[0]["input"][0]["content"][1]["type"] == ("image" if provider == "google_gemini" else "input_image")
@@ -171,9 +173,9 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
                 test_model_provider_connection()
         else:
             result = test_model_provider_connection()
-            assert result.model == "test-model"
+            assert result.model == model_name
     else:
-        analyzer = CaseSuggestionAnalyzer(build_model_provider_session(settings))
+        analyzer = build_case_suggestion_analyzer(settings)
         if failure_kind is not None:
             with pytest.raises(EngineError):
                 analyzer.analyze(parsed_case={"platform": "web"}, execution_report={"status": "success"})
@@ -182,13 +184,18 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
             assert result.summary == "No change needed."
             assert result.candidate_case_yaml is None
     assert len(payloads) == 1
-    assert payloads[0]["model"] == "test-model"
+    assert payloads[0]["model"] == model_name
+    effective_effort = "low" if path == "connection" else effort
+    minimum = "minimal" if provider == "google_gemini" else "low" if provider == "azure_openai" else "medium"
+    native_effort = minimum if effective_effort == "low" else "high"
     if provider == "google_gemini":
         assert payloads[0]["store"] is False
+        assert payloads[0]["generation_config"] == {"thinking_level": native_effort}
+    else:
+        assert payloads[0]["reasoning"] == {"effort": native_effort}
     if path in {"assertion", "connection", "suggestion"}:
         assert not payloads[0].get("tools")
         assert not payloads[0].get("stream")
-        assert not payloads[0].get("reasoning")
         output_format = payloads[0].get("response_format") if provider == "google_gemini" else payloads[0].get("text", {}).get("format")
         if path == "connection":
             assert output_format is None
@@ -203,6 +210,98 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     assert all(client.is_closed for client in clients)
     if provider == "github_copilot":
         assert not settings.agent_runtime.user_config_root.exists()
+
+
+@pytest.mark.parametrize("effort,next_effort", [("low", "high"), ("high", "low")])
+async def test_reasoning_effort_task_snapshot_and_injected_evaluator_survive_provider_refresh(monkeypatch, tmp_path, effort, next_effort):
+    agent_requests, model_requests, evaluators, provider_instances = [], [], [], []
+
+    class CapturingProvider:
+        def __init__(self, **kwargs):
+            self.model_name = ""
+            self.closed = False
+            provider_instances.append(self)
+
+        def get_model(self, name):
+            self.model_name = name
+            return self
+
+        async def complete(self, request):
+            model_requests.append((self.model_name, request))
+            text = '{"passed":true,"explanation":"Visible.","confidence":null}'
+            return ModelResult(text=text, parsed_output=request.output.parse(text))
+
+        async def aclose(self):
+            self.closed = True
+
+    class CapturingEngine:
+        async def run(self, model, request, *, on_event=None):
+            agent_requests.append((model.model_name, request))
+            if request.name.endswith("pre-planner"):
+                text = GoalPrePlan(goal="Inspect.", verification_goal="Visible.").model_dump_json()
+            else:
+                text = AgentFinalOutput(status="success", summary="Done.").model_dump_json()
+                if request.name == "snapshot-agent":
+                    result = evaluators[-1].evaluate(AIAssertionRequest(platform="android", prompt="Visible?"))
+                    assert result.status == "passed"
+            return AgentResult(final_output=request.output.parse(text))
+
+    def create_harness(factory, **kwargs):
+        evaluator = kwargs["ai_assertion_evaluator"]
+        assert isinstance(evaluator, AIAssertionEvaluator)
+        evaluators.append(evaluator)
+        return _NoActionHarness()
+
+    monkeypatch.setattr("fsq_agent.providers._session.create_model_provider", CapturingProvider)
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.HarnessFactory.create_harness", create_harness)
+    user_root = tmp_path / "isolated-user"
+    save_azure_openai_provider(base_url="https://model.example.test/openai/v1/", model="first-deployment", api_key="synthetic-key", user_config_root=user_root)
+    source = Settings(agent_runtime=AgentRuntimeSettings(reasoning_effort=effort, tracing_enabled=False))
+    source.agent.name = "snapshot-agent"
+    source.output.runs_dir = tmp_path / "runs"
+    original = source.model_dump()
+    resolved = refresh_provider_settings(source, user_root)
+    assert source.model_dump() == original
+    assert source.agent_runtime.provider is None
+    assert source.agent_runtime.model == ""
+    assert resolved is not source
+    assert resolved.agent_runtime is not source.agent_runtime
+    assert resolved.agent_runtime.reasoning_effort == effort
+    assert resolved.agent_runtime.model == "first-deployment"
+
+    runtime = DefaultCodingAgentRuntime(resolved, _NoHelperTools(), engine=CapturingEngine())
+    task = Task(id="snapshot-task", description="Inspect.", verification_goal="Visible.")
+    plan = await runtime.run_pre_plan("Inspect.", KnowledgeBundle(), [], "snapshot-run")
+    assert plan.verification_goal == "Visible."
+    assert len(agent_requests) == 1
+    assert model_requests == []
+
+    save_azure_openai_provider(base_url="https://model.example.test/openai/v1/", model="next-deployment", api_key="next-synthetic-key", user_config_root=user_root)
+    source.agent_runtime.reasoning_effort = next_effort
+    next_settings = refresh_provider_settings(source, user_root)
+    assert next_settings.agent_runtime.model == "next-deployment"
+    assert next_settings.agent_runtime.reasoning_effort == next_effort
+    assert source.agent_runtime.provider is None
+    assert source.agent_runtime.model == ""
+    assert resolved.agent_runtime.reasoning_effort == effort
+    assert resolved.agent_runtime.model == "first-deployment"
+
+    assert (await runtime.run_task(task, KnowledgeBundle(), [], "snapshot-run"))[-1].status == "success"
+    assert (await runtime.run_verification(task, [], "snapshot-run", None))[-1].status == "success"
+    assert len(evaluators) == 1
+    assert [request.name for _, request in agent_requests] == ["snapshot-agent pre-planner", "snapshot-agent", "snapshot-agent verifier"]
+    assert [(name, request.reasoning_effort) for name, request in agent_requests] == [("first-deployment", effort)] * 3
+    assert [(name, request.reasoning_effort) for name, request in model_requests] == [("first-deployment", effort)]
+
+    next_runtime = DefaultCodingAgentRuntime(next_settings, _NoHelperTools(), engine=CapturingEngine())
+    await next_runtime.run_pre_plan("Inspect.", KnowledgeBundle(), [], "next-run")
+    assert (await next_runtime.run_task(task, KnowledgeBundle(), [], "next-run"))[-1].status == "success"
+    assert (await next_runtime.run_verification(task, [], "next-run", None))[-1].status == "success"
+    assert [(name, request.reasoning_effort) for name, request in agent_requests] == [("first-deployment", effort)] * 3 + [("next-deployment", next_effort)] * 3
+    assert [(name, request.reasoning_effort) for name, request in model_requests] == [("first-deployment", effort), ("next-deployment", next_effort)]
+    assert len(evaluators) == 2
+    assert len(provider_instances) == 8
+    assert all(provider.closed for provider in provider_instances)
 
 
 @pytest.fixture(params=["openai", "google_gemini", "github_copilot"])
@@ -276,6 +375,63 @@ def structured_session(request, monkeypatch, tmp_path):
     assert all(client.is_closed for client in clients)
     if provider == "github_copilot":
         assert not settings.agent_runtime.user_config_root.exists()
+
+
+@pytest.mark.parametrize("service", ["assertion", "suggestion"])
+@pytest.mark.parametrize("effort,next_effort", [("low", "high"), ("high", "low")])
+def test_reasoning_effort_service_factory_captures_value_before_source_settings_change(structured_session, monkeypatch, service, effort, next_effort):
+    session, control, payloads = structured_session
+    settings = Settings(agent_runtime=AgentRuntimeSettings(reasoning_effort=effort))
+    monkeypatch.setattr("fsq_agent.ai_services._factory.build_model_provider_session", lambda configured: session)
+    if service == "assertion":
+        service_instance = build_ai_assertion_evaluator(settings)
+        control["text"] = '{"passed":true,"explanation":"Visible.","confidence":null}'
+    else:
+        service_instance = build_case_suggestion_analyzer(settings)
+        control["text"] = '{"summary":"No changes.","suggestions":[],"candidate_case_yaml":null}'
+    settings.agent_runtime.reasoning_effort = next_effort
+    if service == "assertion":
+        assert service_instance.evaluate(AIAssertionRequest(platform="web", prompt="Visible?")).status == "passed"
+    else:
+        assert service_instance.analyze(parsed_case={}, execution_report={}).summary == "No changes."
+    assert len(payloads) == 1
+    if session.provider == "google_gemini":
+        assert payloads[0]["generation_config"] == {"thinking_level": effort}
+    else:
+        assert payloads[0]["reasoning"] == {"effort": effort}
+
+
+@pytest.mark.parametrize("service", ["assertion", "suggestion"])
+@pytest.mark.parametrize("effort", [None, "low", "high", "auto"])
+def test_services_reasoning_effort_constructor_compatibility(structured_session, service, effort):
+    session, control, payloads = structured_session
+    options = {} if effort is None else {"reasoning_effort": effort}
+    if service == "assertion":
+        control["text"] = '{"passed":true,"explanation":"Visible.","confidence":null}'
+        result = AIAssertionEvaluator(session, **options).evaluate(AIAssertionRequest(platform="web", prompt="Visible?"))
+        if effort == "auto":
+            assert result.status == "error"
+            assert result.metadata["engine_error"]["category"] == "configuration"
+        else:
+            assert result.status == "passed"
+    else:
+        control["text"] = '{"summary":"No changes.","suggestions":[],"candidate_case_yaml":null}'
+        analyzer = CaseSuggestionAnalyzer(session, **options)
+        if effort == "auto":
+            with pytest.raises(EngineError) as failure:
+                analyzer.analyze(parsed_case={}, execution_report={})
+            assert failure.value.category == "configuration"
+        else:
+            assert analyzer.analyze(parsed_case={}, execution_report={}).summary == "No changes."
+    if effort == "auto":
+        assert payloads == []
+    else:
+        assert len(payloads) == 1
+        native = "medium" if effort is None else effort
+        if session.provider == "google_gemini":
+            assert payloads[0]["generation_config"] == {"thinking_level": native}
+        else:
+            assert payloads[0]["reasoning"] == {"effort": native}
 
 
 @pytest.mark.parametrize("failure_kind", [None, "refusal", "incomplete"])

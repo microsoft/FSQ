@@ -49,6 +49,7 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 
 - Main execution, pre-plan, and verification use the same neutral engine contracts for model settings, tracing, tool-output filtering, event metadata, and structured output. The adapter does not depend on OpenAI Agents SDK or implement a tool-continuation loop.
 - Runtime settings are consumed through `settings.agent_runtime`. FSQ-owned implementation names, progress text, and result summaries describe the neutral agent runtime rather than SDK objects.
+- The request builder forwards the task's resolved `settings.agent_runtime.reasoning_effort` to every pre-plan, main-execution, and final-verification `AgentRequest`. All three phases and the injected visual assertion evaluator use the same platform settings snapshot without mid-run effort refresh or phase-specific effort tuning. The adapter neither translates native effort values nor infers them from model names; backend mapping belongs to Agent Engine.
 - Main and verification provenance records use `agent_runtime.runner` and `agent_runtime.verifier`. They are runtime summaries, not capability invocations or recordable Case commands.
 - Startup readiness uses the `Agent runtime ready` title, and runtime failures use `Agent run failed`; event types and payload field shapes are stable.
 - All three operations call `AgentEngine.run` with the selected neutral model. Main execution requests streaming; output contracts are derived from the authoritative FSQ Pydantic models and their parsers, not duplicated schemas or SDK classes.
@@ -68,3 +69,5 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 ## Verification Scope
 
 Model-paired engine construction, all three runtime operations, output contracts, tool events, context-budget replacements, and measured main-only usage work through both private engine backends without SDK imports in the adapter. Shared real-client transport tests exercise actual FSQ schemas and tool/result continuation; isolated runtime tests preserve neutral collaborator injection, task snapshot isolation, and existing OpenAI/Azure/Copilot behavior.
+
+Effort verification uses configured non-default values to establish propagation through all three Agent phases and visual evaluator composition, with the same task snapshot and no extra inference. Runtime behavior follows the selected preset's value rather than fixing a mutable platform default in tests.

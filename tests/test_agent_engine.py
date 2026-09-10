@@ -50,11 +50,11 @@ def _response(text: str = "done", *, usage: bool = True) -> dict:
     }
 
 
-def _provider(monkeypatch: pytest.MonkeyPatch, handler: "Callable[[httpx.Request], httpx.Response]"):
+def _provider(monkeypatch: pytest.MonkeyPatch, handler: "Callable[[httpx.Request], httpx.Response]", **options):
     backend = importlib.import_module("fsq_agent.agent_engine._openai_backend")
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(backend, "AsyncOpenAI", partial(AsyncOpenAI, http_client=client, max_retries=0))
-    return create_model_provider(base_url="https://model.example.test/v1/", api_key="test-credential", headers={"x-test-provider": "configured"}), client
+    return create_model_provider(base_url="https://model.example.test/v1/", api_key="test-credential", headers={"x-test-provider": "configured"}, **options), client
 
 
 def test_public_import_does_not_load_sdk_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,7 +111,7 @@ async def test_complete_uses_one_tool_free_sdk_request_and_closes(monkeypatch: p
         assert payload["model"] == "test-model"
         assert not payload.get("tools")
         assert not payload.get("stream")
-        assert not payload.get("reasoning")
+        assert payload["reasoning"] == {"effort": "medium"}
         assert not payload.get("text")
         assert not payload.get("conversation")
         assert not payload.get("previous_response_id")
@@ -196,7 +196,7 @@ async def test_complete_parses_output_once_and_preserves_text(monkeypatch: pytes
         assert payload["text"]["format"]["schema"]["required"] == ["value"]
         assert "verbosity" not in payload["text"]
         assert not payload.get("tools")
-        assert not payload.get("reasoning")
+        assert payload["reasoning"] == {"effort": "medium"}
     finally:
         await provider.aclose()
     assert client.is_closed
@@ -210,6 +210,108 @@ def _http_response(payload: dict, *, stream: bool) -> httpx.Response:
         {"type": "response.completed", "sequence_number": 1, "response": payload},
     ]
     return _sse_response(events)
+
+
+@pytest.mark.parametrize("mode", ["single", "agent", "stream"])
+@pytest.mark.parametrize("effort", ["low", "mid", "high"])
+@pytest.mark.parametrize(
+    "model_name,deployment,minimum",
+    [
+        ("gpt-5", False, "minimal"),
+        ("gpt-5-2025-08-07", False, "minimal"),
+        ("gpt-5.0-2025-08-07", False, "minimal"),
+        ("gpt-5.1", False, "none"),
+        ("gpt-5.2-2025-12-11", False, "none"),
+        ("gpt-5.7", False, "none"),
+        ("gpt-5.10", False, "none"),
+        ("gpt-6", False, "low"),
+        ("gpt-7", False, "low"),
+        ("gpt-5.2-pro", False, "medium"),
+        ("gpt-5.4-pro-2026-03-05", False, "medium"),
+        ("gpt-7-pro", False, "medium"),
+        ("opaque-deployment", True, "low"),
+        ("gpt-5", True, "low"),
+        ("gpt-5.2-pro", True, "low"),
+    ],
+)
+async def test_responses_reasoning_effort_serialization(monkeypatch, mode, effort, model_name, deployment, minimum):
+    payloads, calls = [], []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        response = _response()
+        if mode != "single" and len(payloads) < 3:
+            response["output"] = [{"type": "function_call", "id": f"item_{len(payloads)}", "call_id": f"call_{len(payloads)}", "name": "observe", "arguments": "{}"}]
+        return _http_response(response, stream=mode == "stream")
+
+    async def observe(call):
+        calls.append(call.call_id)
+        return "observed"
+
+    provider, client = _provider(monkeypatch, respond, model_name_is_deployment=deployment)
+    try:
+        model = provider.get_model(model_name)
+        if mode == "single":
+            assert (await model.complete(ModelRequest("check", reasoning_effort=effort))).text == "done"
+        else:
+            request = AgentRequest(
+                "check", "Inspect", "check", tools=(ToolBinding("observe", "Inspect", {"type": "object", "properties": {}}, observe),), stream=mode == "stream", reasoning_effort=effort
+            )
+            assert (await create_agent_engine().run(model, request)).final_output == "done"
+        assert len(payloads) == (1 if mode == "single" else 3)
+        assert len(calls) == (0 if mode == "single" else 2)
+        native = minimum if effort == "low" else "medium" if effort == "mid" else "high"
+        assert all(payload["reasoning"] == {"effort": native} and payload["model"] == model_name for payload in payloads)
+        assert all(payload.get("text", {}).get("verbosity") == (None if mode == "single" else "medium") for payload in payloads)
+    finally:
+        await provider.aclose()
+    assert client.is_closed
+
+
+@pytest.mark.parametrize("mode", ["single", "agent", "stream"])
+@pytest.mark.parametrize("effort", ["auto", "medium", "", None, False, 1, [], {}])
+async def test_responses_reasoning_effort_rejects_invalid_before_effects(monkeypatch, mode, effort):
+    requests, calls = [], []
+
+    def respond(request):
+        requests.append(request)
+        return _http_response(_response(), stream=mode == "stream")
+
+    async def observe(call):
+        calls.append(call)
+        return "observed"
+
+    provider, client = _provider(monkeypatch, respond)
+    try:
+        model = provider.get_model("gpt-5.2")
+        if mode == "single":
+            operation = model.complete(ModelRequest("check", reasoning_effort=effort))
+        else:
+            operation = create_agent_engine().run(
+                model, AgentRequest("check", "Inspect", "check", tools=(ToolBinding("observe", "Inspect", {"type": "object"}, observe),), stream=mode == "stream", reasoning_effort=effort)
+            )
+        with pytest.raises(EngineError) as failure:
+            await operation
+        assert failure.value.category == "configuration"
+        assert requests == calls == []
+    finally:
+        await provider.aclose()
+        await client.aclose()
+
+
+def test_reasoning_effort_preserves_public_request_positionals():
+    from typing import get_args
+
+    from fsq_agent.agent_engine import ReasoningEffort
+
+    contract = OutputContract("output", {"type": "string"}, str)
+    model_request = ModelRequest("input", "instructions", contract)
+    agent_request = AgentRequest("name", "instructions", "input", (), contract, 7, True, False, None)
+    assert get_args(ReasoningEffort) == ("low", "mid", "high")
+    assert model_request.output is agent_request.output is contract
+    assert model_request.reasoning_effort == agent_request.reasoning_effort == "mid"
+    assert agent_request.max_turns == 7
+    assert agent_request.stream is True
 
 
 @pytest.mark.parametrize("constraint", ["oneOf", "allOf", "reference"])

@@ -15,7 +15,7 @@ from fsq_agent.agent_engine import EngineError, ModelRequest, OutputContract
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from fsq_agent.agent_engine import ModelResult
+    from fsq_agent.agent_engine import ModelResult, ReasoningEffort
     from fsq_agent.providers import ModelProviderSession
 
 
@@ -53,8 +53,9 @@ class CaseSuggestionAnalysis:
 class CaseSuggestionAnalyzer:
     """Analyze completed deterministic execution facts without action tools."""
 
-    def __init__(self, session: ModelProviderSession) -> None:
+    def __init__(self, session: ModelProviderSession, *, reasoning_effort: ReasoningEffort = "mid") -> None:
         self._session = session
+        self._reasoning_effort = reasoning_effort
 
     def analyze(self, *, parsed_case: dict[str, Any], execution_report: dict[str, Any]) -> CaseSuggestionAnalysis:
         failed = False
@@ -63,6 +64,7 @@ class CaseSuggestionAnalyzer:
                 ModelRequest(
                     input=_analysis_input(parsed_case, execution_report),
                     output=OutputContract(name="case_suggestion", schema=_SuggestionOutput.model_json_schema(), parse=_SuggestionOutput.model_validate_json),
+                    reasoning_effort=self._reasoning_effort,
                 )
             )
             payload = _suggestion_output(response)

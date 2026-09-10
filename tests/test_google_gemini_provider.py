@@ -39,9 +39,29 @@ def test_gemini_discovers_all_pages_and_filters_stable_general_models(monkeypatc
 
     _transport(monkeypatch, respond)
     models = providers.list_google_gemini_models(api_key=" candidate-key ")
-    assert [model.id for model in models] == ["gemini-3.10-pro", "gemini-3.8-flash", "gemini-3-pro"]
+    assert [model.id for model in models] == ["gemini-3.10-pro", "gemini-3.8-flash"]
     assert len(requests) == 2
     assert all(request.url.params["pageSize"] == "1000" for request in requests)
+
+
+def test_gemini_reasoning_effort_floors_preserve_stable_forms_and_numeric_order(monkeypatch):
+    eligible = ["gemini-4-flash", "gemini-4-pro", "gemini-3.10-pro", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro", "gemini-3-flash"]
+    excluded = [
+        "gemini-3-pro",
+        "gemini-3.0-pro",
+        "gemini-3.1-pro-preview",
+        "gemini-4-ultra",
+        "gemini-4-flash-lite",
+        "gemini-4-flash-latest",
+        "gemini-4-flash-20260910",
+        "Gemini-4-pro",
+        "gemini-4-pro-exp",
+    ]
+    without_generation = _model("gemini-5-pro")
+    without_generation["supportedGenerationMethods"] = ["countTokens"]
+    _transport(monkeypatch, lambda request: httpx.Response(200, json={"models": [_model(name) for name in list(reversed(eligible)) + excluded + eligible] + [without_generation]}))
+
+    assert [model.id for model in providers.list_google_gemini_models(api_key="candidate-key")] == eligible
 
 
 @pytest.mark.parametrize("status,reason", [(401, "authentication"), (403, "access_denied"), (429, "rate_limited"), (503, "network")])

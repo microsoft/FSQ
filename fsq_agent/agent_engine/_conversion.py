@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from copy import deepcopy
 from typing import TYPE_CHECKING
 
@@ -95,6 +96,27 @@ def model_result(response: Response, output: OutputContract[OutputT] | None = No
     return ModelResult(text=text, usage=token_usage(response.usage), parsed_output=parsed)
 
 
+def _reasoning_effort(model_name: str, effort: str, *, model_name_is_deployment: bool) -> str:
+    if not isinstance(effort, str) or effort not in ("low", "mid", "high"):
+        raise EngineError("configuration", "Reasoning effort must be low, mid, or high.")
+    native = {"low": "low", "mid": "medium", "high": "high"}[effort]
+    if model_name_is_deployment:
+        return native
+    version = re.match(r"^gpt-(\d+)(?:\.(\d+))?(?=-|$)", model_name, re.IGNORECASE)
+    if version is None:
+        return native
+    major, minor = int(version[1]), int(version[2] or 0)
+    branches = model_name.lower().split("-")
+    # OpenAI model/reasoning docs: GPT-5, GPT-5.1, GPT-5.2 Pro; coupled to Providers' eligibility floors.
+    if "chat" in branches or ("pro" in branches and (major, minor) < (5, 2)):
+        raise EngineError("configuration", "The model does not support the configured reasoning policy.")
+    if "pro" in branches:
+        return "high" if effort == "high" else "medium"
+    if effort == "low" and major == 5:
+        return "minimal" if minor == 0 else "none"
+    return native
+
+
 def response_parameters(
     model_name: str,
     input_items: list[dict],
@@ -103,9 +125,12 @@ def response_parameters(
     tools: tuple[ToolBinding, ...] = (),
     output: OutputContract | None = None,
     agent: bool = False,
+    reasoning_effort: str = "mid",
+    model_name_is_deployment: bool = False,
 ) -> dict:
     parameters = {
         "model": model_name,
+        "reasoning": {"effort": _reasoning_effort(model_name, reasoning_effort, model_name_is_deployment=model_name_is_deployment)},
         "input": input_items,
         "include": [],
         "tools": [
@@ -122,7 +147,6 @@ def response_parameters(
     if instructions is not None:
         parameters["instructions"] = instructions
     if agent:
-        parameters["reasoning"] = {"effort": "medium"}
         parameters["text"] = {"verbosity": "medium"}
     if output is not None:
         parameters.setdefault("text", {})["format"] = {

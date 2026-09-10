@@ -216,6 +216,8 @@ def test_completed_github_device_flow_requires_explicit_activation_to_commit(tmp
 
 
 def test_connection_test_uses_saved_provider_and_always_closes_session(tmp_path: Path) -> None:
+    from fsq_agent.config import Settings
+
     user_root = tmp_path / "user"
     save_azure_openai_provider(
         base_url="https://example.openai.azure.com",
@@ -228,11 +230,16 @@ def test_connection_test_uses_saved_provider_and_always_closes_session(tmp_path:
     session.model = "saved-model"
     session.complete_sync.return_value = ModelResult(text="FSQ_OK")
 
-    with patch("fsq_agent.providers._connection_test.build_model_provider_session", return_value=session):
+    settings = Settings()
+    settings.agent_runtime.reasoning_effort = "high"
+    with (
+        patch("fsq_agent.providers._connection_test.build_model_provider_session", return_value=session),
+        patch("fsq_agent.providers._connection_test.Settings", return_value=settings),
+    ):
         result = test_model_provider_connection(user_config_root=user_root)
 
     assert result.provider == "azure_openai"
     assert result.model == "saved-model"
     assert result.duration_seconds >= 0
-    session.complete_sync.assert_called_once_with(ModelRequest(input="Reply with FSQ_OK."))
+    session.complete_sync.assert_called_once_with(ModelRequest(input="Reply with FSQ_OK.", reasoning_effort="low"))
     session.close_sync.assert_called_once_with()

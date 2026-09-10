@@ -89,10 +89,14 @@ def list_openai_models(*, api_key: str) -> tuple[OpenAIModel, ...]:
         model_id = candidate.get("id") if isinstance(candidate, dict) else None
         if not isinstance(model_id, str) or not model_id or model_id != model_id.strip() or len(model_id) > 256:
             raise _failure("malformed_response")
-        version = re.match(r"^gpt-(\d+)(?:[.-]|$)", model_id, flags=re.IGNORECASE)
+        version = re.match(r"^gpt-(\d+)(?:\.(\d+))?(?=-|$)", model_id, flags=re.IGNORECASE)
         if version is None or int(version.group(1)) < 5:
             continue
-        if _SPECIALIZATIONS.intersection(re.findall(r"[a-z0-9]+", model_id.casefold())):
+        tokens = set(re.findall(r"[a-z0-9]+", model_id.casefold()))
+        if _SPECIALIZATIONS.intersection(tokens):
+            continue
+        # OpenAI reasoning/model docs require Pro >= 5.2 and exclude Chat; matches Agent Engine effort branches.
+        if "chat" in tokens or ("pro" in tokens and (int(version[1]), int(version[2] or 0)) < (5, 2)):
             continue
         models[model_id] = OpenAIModel(id=model_id, name=model_id)
     return tuple(sorted(models.values(), key=lambda model: (model.id.casefold(), model.id)))

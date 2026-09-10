@@ -60,6 +60,42 @@ def test_platform_config_paths_are_package_owned() -> None:
     assert all(path.is_file() for path in PLATFORM_CONFIG_PATHS.values())
 
 
+@pytest.mark.parametrize("effort", ["low", "mid", "high"])
+def test_reasoning_effort_loads_from_runtime_config(tmp_path: Path, effort: str) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path, f"agent_runtime:\n  reasoning_effort: {effort}\n"), encoding="utf-8")
+
+    settings = load_settings(config_path, user_config_root=tmp_path / "user")
+
+    assert settings.agent_runtime.reasoning_effort == effort
+
+
+def test_reasoning_effort_omitted_uses_neutral_fallback(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path), encoding="utf-8")
+
+    assert load_settings(config_path, user_config_root=tmp_path / "user").agent_runtime.reasoning_effort == "mid"
+
+
+@pytest.mark.parametrize("effort", ["auto", "medium", "''", "null", "false", "1"])
+def test_reasoning_effort_rejects_invalid_config(tmp_path: Path, effort: str) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path, f"agent_runtime:\n  reasoning_effort: {effort}\n"), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError) as failure:
+        load_settings(config_path, user_config_root=tmp_path / "user")
+    assert any(error["loc"] == ("agent_runtime", "reasoning_effort") for error in failure.value.context["errors"])
+
+
+@pytest.mark.parametrize("platform", ["android", "web", "windows", "macos"])
+def test_reasoning_effort_is_explicit_platform_policy(tmp_path: Path, platform: str) -> None:
+    preset = yaml.safe_load(PLATFORM_CONFIG_PATHS[platform].read_text(encoding="utf-8"))
+    effort = preset["agent_runtime"]["reasoning_effort"]
+
+    assert effort in {"low", "mid", "high"}
+    assert load_platform_settings(platform, user_config_root=tmp_path / "user").agent_runtime.reasoning_effort == effort
+
+
 def test_load_workspace_platform_settings_composes_workspace_without_creating_content(tmp_path: Path) -> None:
     workspace = tmp_path / "checkout-android"
     config_dir = workspace / ".fsq" / "config"

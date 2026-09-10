@@ -236,6 +236,7 @@ class AgentRuntimeSettings(BaseModel):
 
     provider: Literal["openai", "azure_openai", "google_gemini", "github_copilot"] | None = None
     max_turns: int = Field(default=50, ge=1)
+    reasoning_effort: Literal["low", "mid", "high"] = "mid"
     tracing_enabled: bool = True
     prompt: AgentPromptConfig = Field(default_factory=AgentPromptConfig)
     _base_url: str = PrivateAttr(default="")

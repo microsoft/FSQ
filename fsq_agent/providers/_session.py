@@ -55,7 +55,8 @@ class ModelProviderSession:
         try:
             if self.client_config.backend == "google_interactions":
                 return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url)
-            return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url, headers=self.client_config.default_headers or None)
+            options = {"model_name_is_deployment": True} if self.client_config.model_name_is_deployment else {}
+            return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url, headers=self.client_config.default_headers or None, **options)
         except EngineError as error:
             if error.category == "configuration":
                 raise ConfigurationError(str(error)) from None

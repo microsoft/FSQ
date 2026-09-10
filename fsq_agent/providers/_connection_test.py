@@ -33,7 +33,7 @@ def test_model_provider_connection(
     session = build_model_provider_session(settings)
     started_at = perf_counter()
     try:
-        response = session.complete_sync(ModelRequest(input=CONNECTION_TEST_PROMPT))
+        response = session.complete_sync(ModelRequest(input=CONNECTION_TEST_PROMPT, reasoning_effort="low"))
         _require_output_text(response)
         return ProviderConnectionTestResult(
             provider=session.provider,

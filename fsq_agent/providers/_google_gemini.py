@@ -82,6 +82,9 @@ def _model(candidate):
     match = _MODEL_PATTERN.fullmatch(model_id)
     if "generateContent" not in methods or match is None or int(match[1]) < 3:
         return None
+    # Google thinking docs: Pro >= 3.1 supplies medium; keep aligned with Agent Engine effort mapping.
+    if match[3] == "pro" and (int(match[1]), int(match[2] or 0)) < (3, 1):
+        return None
     return GoogleGeminiModel(id=model_id, name=display or model_id)
 
 

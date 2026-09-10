@@ -41,6 +41,14 @@ def test_openai_models_use_official_endpoint_and_filter_general_gpt_models(monke
         models[0].name = "changed"
 
 
+def test_openai_reasoning_effort_eligibility_preserves_snapshots_and_future_versions(monkeypatch):
+    eligible = ["gpt-5", "gpt-5-2025-08-07", "gpt-5.1", "gpt-5.2-pro", "gpt-5.4-pro-2026-03-05", "gpt-5.7", "gpt-5.10-pro", "gpt-6", "gpt-7", "gpt-7-pro"]
+    excluded = ["gpt-5-pro", "gpt-5-pro-2025-10-06", "gpt-5.1-pro", "gpt-5-chat-latest", "gpt-5.2-chat", "gpt-7-chat", "gpt-7-mini", "gpt-5.10-codex"]
+    _mock_client(monkeypatch, lambda request: httpx.Response(200, json={"object": "list", "data": [{"id": name} for name in eligible + excluded + eligible]}))
+
+    assert [model.id for model in providers.list_openai_models(api_key="candidate-key")] == sorted(eligible)
+
+
 @pytest.mark.parametrize("model_ids", [[], ["gpt-4.1", "gpt-5-mini"]])
 def test_openai_empty_eligible_set_is_success(monkeypatch, model_ids):
     _mock_client(monkeypatch, lambda request: httpx.Response(200, json={"object": "list", "data": [{"id": model_id} for model_id in model_ids]}))

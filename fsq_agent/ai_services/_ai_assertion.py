@@ -15,7 +15,7 @@ from fsq_agent.agent_engine import EngineError, ImageContent, Message, ModelRequ
 from fsq_agent.models import AIAssertionRequest, AIAssertionResult, ConfigurationError
 
 if TYPE_CHECKING:
-    from fsq_agent.agent_engine import ModelResult
+    from fsq_agent.agent_engine import ModelResult, ReasoningEffort
     from fsq_agent.providers import ModelProviderSession
 
 
@@ -34,8 +34,9 @@ def _assertion_output(response: ModelResult) -> _AssertionOutput:
 
 
 class AIAssertionEvaluator:
-    def __init__(self, session: ModelProviderSession) -> None:
+    def __init__(self, session: ModelProviderSession, *, reasoning_effort: ReasoningEffort = "mid") -> None:
         self.session = session
+        self._reasoning_effort = reasoning_effort
 
     def evaluate(self, request: AIAssertionRequest) -> AIAssertionResult:
         started = time.perf_counter()
@@ -106,6 +107,7 @@ class AIAssertionEvaluator:
         return ModelRequest(
             input=(Message(content=tuple(content)),),
             output=OutputContract(name="visual_assertion", schema=_AssertionOutput.model_json_schema(), parse=_AssertionOutput.model_validate_json),
+            reasoning_effort=self._reasoning_effort,
         )
 
     def _token_usage(self, response: ModelResult) -> dict[str, int]:

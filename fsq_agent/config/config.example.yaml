@@ -7,6 +7,7 @@
 
 agent_runtime:
   max_turns: 100
+  reasoning_effort: mid
   tracing_enabled: true
 
 harness:

@@ -46,6 +46,35 @@ def _client_config() -> ProviderClientConfig:
     )
 
 
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("model_name", ["opaque-deployment", "gpt-5", "gpt-5.2-pro"])
+async def test_azure_reasoning_effort_context_survives_session_construction(tmp_path, monkeypatch, synchronous, model_name):
+    from fsq_agent.config import Settings, refresh_provider_settings, save_azure_openai_provider
+    from fsq_agent.providers import _session as session_module
+    from fsq_agent.providers import build_model_provider_session
+
+    _LoopBoundProvider.instances = []
+    monkeypatch.setattr(session_module, "create_model_provider", _LoopBoundProvider)
+    save_azure_openai_provider(base_url="https://example.test/openai/v1/", model=model_name, api_key="test-key", user_config_root=tmp_path)
+    settings = refresh_provider_settings(Settings(), tmp_path)
+    settings.agent_runtime.reasoning_effort = "high"
+    session = build_model_provider_session(settings)
+    request = ModelRequest("check", reasoning_effort="low")
+    try:
+        if synchronous:
+            session.complete_sync(request)
+        else:
+            await session.complete(request)
+        provider = _LoopBoundProvider.instances[0]
+        assert provider.kwargs["model_name_is_deployment"] is True
+        assert provider.model_name == model_name
+        assert provider.requests == [request]
+        assert settings.agent_runtime.reasoning_effort == "high"
+    finally:
+        await session.close()
+    assert provider.closed
+
+
 async def test_complete_sync_from_running_loop_does_not_reuse_closed_loop() -> None:
     _LoopBoundProvider.instances = []
     session = ModelProviderSession(_client_config(), provider_factory=_LoopBoundProvider)

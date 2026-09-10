@@ -43,12 +43,13 @@ logging.getLogger("openai._base_client").addFilter(_SafeModelLogFilter())
 
 
 class OpenAIModelProvider:
-    def __init__(self, *, base_url: str, api_key: str, headers: Mapping[str, str] | None = None) -> None:
+    def __init__(self, *, base_url: str, api_key: str, headers: Mapping[str, str] | None = None, model_name_is_deployment: bool = False) -> None:
         if not base_url.strip() or not api_key.strip():
             raise EngineError("configuration", "Model endpoint and credential are required.")
         self._base_url = base_url
         self._api_key = api_key
         self._headers = dict(headers or {})
+        self._model_name_is_deployment = model_name_is_deployment
         self._client: AsyncOpenAI | None = None
         self._models: dict[str, _OpenAIModel] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -122,8 +123,16 @@ class _OpenAIModel(BackendModel):
 
     async def complete(self, request: ModelRequest[OutputT]) -> ModelResult[OutputT]:
         try:
+            parameters = response_parameters(
+                self._name,
+                model_input(request.input),
+                request.instructions,
+                output=request.output,
+                reasoning_effort=request.reasoning_effort,
+                model_name_is_deployment=self._provider._model_name_is_deployment,
+            )
             async with self._provider._use_client() as client:
-                response = await client.responses.create(**response_parameters(self._name, model_input(request.input), request.instructions, output=request.output))
+                response = await client.responses.create(**parameters)
                 return model_result(response, request.output)
         except EngineError:
             raise
@@ -153,7 +162,7 @@ class OpenAIAgentEngine:
         self._busy = True
         try:
             async with model._provider._use_client() as client:
-                return await run_agent(OpenAIConversation(client, model._name, request), request, on_event)
+                return await run_agent(OpenAIConversation(client, model._name, request, model_name_is_deployment=model._provider._model_name_is_deployment), request, on_event)
         except EngineError:
             raise
         except Exception as error:
@@ -164,11 +173,20 @@ class OpenAIAgentEngine:
 
 
 class OpenAIConversation:
-    def __init__(self, client: AsyncOpenAI, model_name: str, request: AgentRequest) -> None:
+    def __init__(self, client: AsyncOpenAI, model_name: str, request: AgentRequest, *, model_name_is_deployment: bool = False) -> None:
         self.client = client
         self.history = model_input(request.input)
         self.stream = request.stream
-        self.parameters = response_parameters(model_name, self.history, request.instructions, tools=request.tools, output=request.output, agent=True)
+        self.parameters = response_parameters(
+            model_name,
+            self.history,
+            request.instructions,
+            tools=request.tools,
+            output=request.output,
+            agent=True,
+            reasoning_effort=request.reasoning_effort,
+            model_name_is_deployment=model_name_is_deployment,
+        )
 
     def tool_outputs(self) -> tuple[ToolOutputEntry, ...]:
         names = {item["call_id"]: item.get("name") for item in self.history if item.get("type") == "function_call"}

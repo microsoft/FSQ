@@ -325,7 +325,7 @@ def _parse_github_copilot_model(candidate: object) -> GitHubCopilotModel | None:
     if not isinstance(model_id, str) or not model_id.strip():
         return None
     model_id = model_id.strip()
-    version = re.match(r"^gpt-(\d+)(?:\D|$)", model_id, flags=re.IGNORECASE)
+    version = re.match(r"^gpt-(\d+)(?:\.(\d+))?(?=-|$)", model_id, flags=re.IGNORECASE)
     if version is None or int(version.group(1)) < 5:
         return None
     name_value = candidate.get("name")
@@ -345,6 +345,9 @@ def _parse_github_copilot_model(candidate: object) -> GitHubCopilotModel | None:
     }
     tokens = set(re.findall(r"[a-z0-9]+", f"{model_id} {name}".casefold()))
     if tokens & specialist_tokens:
+        return None
+    # GPT reasoning/model docs inform these floors; Copilot endpoint support remains separate live evidence.
+    if "chat" in tokens or ("pro" in tokens and (int(version[1]), int(version[2] or 0)) < (5, 2)):
         return None
     if candidate.get("model_picker_enabled") is False:
         return None

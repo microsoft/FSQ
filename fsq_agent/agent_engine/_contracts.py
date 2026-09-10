@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
+ReasoningEffort: TypeAlias = Literal["low", "mid", "high"]
 OutputT = TypeVar("OutputT")
 
 
@@ -33,6 +34,7 @@ class ModelRequest(Generic[OutputT]):
     input: str | tuple[Message, ...]
     instructions: str | None = None
     output: OutputContract[OutputT] | None = None
+    reasoning_effort: ReasoningEffort = "mid"
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,7 @@ class AgentRequest(Generic[OutputT]):
     stream: bool = False
     tracing_enabled: bool = False
     tool_output_filter: ToolOutputFilter | None = field(default=None, repr=False)
+    reasoning_effort: ReasoningEffort = "mid"
 
 
 @dataclass(frozen=True)

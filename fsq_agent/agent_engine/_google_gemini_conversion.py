@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from copy import deepcopy
 from typing import TYPE_CHECKING
 
@@ -37,8 +38,24 @@ def google_input(value: str | tuple[Message, ...]) -> list[dict]:
     return history
 
 
+def _reasoning_effort(model: str, effort: str) -> str:
+    if not isinstance(effort, str) or effort not in ("low", "mid", "high"):
+        raise EngineError("configuration", "Reasoning effort must be low, mid, or high.")
+    native = {"low": "low", "mid": "medium", "high": "high"}[effort]
+    version = re.fullmatch(r"gemini-(\d+)(?:\.(\d+))?-(flash|pro)", model)
+    if version is None:
+        return native
+    major, minor, branch = int(version[1]), int(version[2] or 0), version[3]
+    # ai.google.dev/gemini-api/docs/thinking: medium requires Pro >= 3.1; coupled to Providers' floors.
+    if branch == "pro" and (major, minor) < (3, 1):
+        raise EngineError("configuration", "The model does not support the configured reasoning policy.")
+    if effort == "low" and branch == "flash" and major == 3 and minor < 7:
+        return "minimal"
+    return native
+
+
 def google_parameters(model: str, request: ModelRequest | AgentRequest) -> dict:
-    result = {"model": model, "input": google_input(request.input), "store": False}
+    result = {"model": model, "generation_config": {"thinking_level": _reasoning_effort(model, request.reasoning_effort)}, "input": google_input(request.input), "store": False}
     if request.instructions is not None:
         result["system_instruction"] = request.instructions
     if hasattr(request, "tools"):

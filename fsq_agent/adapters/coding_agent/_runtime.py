@@ -814,6 +814,7 @@ class DefaultCodingAgentRuntime:
             tools=tuple(tools),
             output=OutputContract(name=output_type.__name__, schema=output_type.model_json_schema(), parse=output_type.model_validate_json),
             max_turns=self.settings.agent_runtime.max_turns,
+            reasoning_effort=self.settings.agent_runtime.reasoning_effort,
             stream=True,
             tool_output_filter=input_filter,
             tracing_enabled=not self._tracing_disabled(),

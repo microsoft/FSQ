@@ -18,6 +18,7 @@ from ._contracts import (
     ModelRequest,
     ModelResult,
     OutputContract,
+    ReasoningEffort,
     TextContent,
     TokenUsage,
     ToolBinding,
@@ -28,12 +29,12 @@ from ._contracts import (
 )
 
 
-def create_model_provider(*, base_url: str, api_key: str, headers: Mapping[str, str] | None = None) -> ModelProvider:
+def create_model_provider(*, base_url: str, api_key: str, headers: Mapping[str, str] | None = None, model_name_is_deployment: bool = False) -> ModelProvider:
     try:
         from ._openai_backend import OpenAIModelProvider
     except ImportError:
         raise EngineError("configuration", "The model backend dependencies are unavailable.") from None
-    return OpenAIModelProvider(base_url=base_url, api_key=api_key, headers=headers)
+    return OpenAIModelProvider(base_url=base_url, api_key=api_key, headers=headers, model_name_is_deployment=model_name_is_deployment)
 
 
 def create_agent_engine() -> AgentEngine:
@@ -75,6 +76,7 @@ __all__ = [
     "ModelRequest",
     "ModelResult",
     "OutputContract",
+    "ReasoningEffort",
     "TextContent",
     "TokenUsage",
     "ToolBinding",
