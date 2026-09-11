@@ -76,8 +76,8 @@ def test_repository_web_harness_skill_documents_snapshot_first_guidance() -> Non
     bundles = SkillLoader(skill_path.parent).load([SkillConfig(name="web-harness", path=Path("web-harness.md"), required=True)])
 
     assert "Tool Selection" not in bundles[0].instructions
-    assert "Snapshot-First Rules" in bundles[0].instructions
-    assert "Tool Usage Error Recovery" in bundles[0].instructions
+    assert "Observe once, then act on replayable locators" in bundles[0].instructions
+    assert "Recover without duplicating effects" in bundles[0].instructions
     assert "ui_snapshot" in bundles[0].instructions
     assert "assert_text" in bundles[0].instructions
     assert "textType" in bundles[0].instructions
@@ -85,7 +85,7 @@ def test_repository_web_harness_skill_documents_snapshot_first_guidance() -> Non
     assert "Unsupported Capability Families" not in bundles[0].instructions
     assert "raw Playwright APIs" not in bundles[0].instructions
     assert "JavaScript evaluation" not in bundles[0].instructions
-    assert "active tool schema already defines callable names and arguments" in bundles[0].instructions
+    assert "active tool schema is the argument authority" in bundles[0].instructions
     assert "ui_tree" not in bundles[0].instructions
 
 

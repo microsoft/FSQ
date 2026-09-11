@@ -41,6 +41,7 @@ All paths remain contained under the explicit Run directory, including resolved 
 ## Current Invariants
 
 - Artifact paths are Run-relative in persisted contracts.
+- Structured Web locators are atomic executable data: credential-shaped words alone do not rewrite their strings. A locator containing a configured private value is omitted rather than rewritten, with an explicit unavailable reason on observation elements. Other evidence sanitization is unchanged.
 - Callers do not manually construct artifact storage paths.
 - Evidence facts remain distinct from transport progress projection and generated Case recording.
 - `evidence-events.jsonl` stores `fsq.evidence-event/v1` records with strictly increasing Run-local sequence and stable event identity, separately from Agent progress. Step starts, phases, action results, artifact outcomes, and completion are durably acknowledged as they occur rather than buffered until the Run completes.

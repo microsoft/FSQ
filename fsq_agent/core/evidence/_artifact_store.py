@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from fsq_agent.models import EvidenceArtifactKind, EvidenceArtifactRef, StepPhase
+from fsq_agent.models import EvidenceArtifactKind, EvidenceArtifactRef, StepPhase, WebLocator
 
 _ARTIFACT_DIRS: dict[EvidenceArtifactKind, str] = {
     "screenshot": "screenshots",
@@ -246,10 +246,14 @@ def _credential_safe(value, secrets=(), depth=0):
         "credentials",
     }
     if isinstance(value, dict):
-        return {
+        is_locator, locator = WebLocator.preserve_for_redaction(value, secrets)
+        if is_locator:
+            return locator
+        safe = {
             key: "***" if re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", unquote(str(key)).strip()).lower().replace("-", "_") in keys else _credential_safe(item, secrets, depth + 1)
             for key, item in value.items()
         }
+        return WebLocator.finish_redaction(value, safe)
     if isinstance(value, (tuple, list)):
         return [_credential_safe(item, secrets, depth + 1) for item in value]
     if not isinstance(value, str):

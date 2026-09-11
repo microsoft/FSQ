@@ -62,8 +62,10 @@ platform: web
 ---
 - startBrowser
 - navigateTo:
+    page: main
     url: https://example.com
-- uiSnapshot
+- uiSnapshot:
+    scope: {kind: page, page: main}
 - closeBrowser
 """
 

@@ -361,24 +361,29 @@ def test_web_action_definitions_are_single_source_for_web_contract() -> None:
 def test_web_parameter_models_produce_canonical_dumps_and_reject_extra_fields() -> None:
     start = WebStartBrowserParams.model_validate({})
     close = WebCloseBrowserParams.model_validate({})
-    click = WebClickOnParams.model_validate({"target": "Sign in"})
-    typed = WebTypeTextParams.model_validate({"locator": {"role": "textbox", "name": "Search"}, "text": "bing.com"})
-    wait = WebWaitForParams.model_validate({"text": "Results", "state": "visible", "timeout_ms": 5000})
+    target = {"page": "main", "steps": [{"kind": "css", "selector": "#control"}]}
+    condition = {"kind": "text", "scope": {"kind": "page", "page": "main"}, "text": {"kind": "contains", "value": "Results"}, "present": True}
+    click = WebClickOnParams.model_validate({"target": target})
+    typed = WebTypeTextParams.model_validate({"target": target, "text": "bing.com"})
+    wait = WebWaitForParams.model_validate({"condition": condition, "timeout_ms": 5000})
 
     assert start.model_dump(mode="json", exclude_none=True) == {}
     assert close.model_dump(mode="json", exclude_none=True) == {}
-    assert click.model_dump(mode="json", exclude_none=True) == {"target": "Sign in"}
+    assert click.model_dump(mode="json", exclude_none=True) == {"target": target, "button": "left", "click_count": 1, "modifiers": [], "timeout_ms": 10000}
     assert typed.model_dump(mode="json", exclude_none=True) == {
-        "locator": {"role": "textbox", "name": "Search"},
+        "target": target,
         "text": "bing.com",
         "textType": "literal",
+        "delay_ms": 0,
+        "timeout_ms": 10000,
     }
-    assert wait.model_dump(mode="json", exclude_none=True) == {"text": "Results", "state": "visible", "timeout_ms": 5000}
+    assert wait.model_dump(mode="json", exclude_none=True) == {"condition": condition, "timeout_ms": 5000}
     with pytest.raises(ValidationError):
         WebStartBrowserParams.model_validate({"url": "https://example.com"})
     with pytest.raises(ValidationError):
         WebCloseBrowserParams.model_validate({"force": True})
-    assert WebClickOnParams.model_validate({"locator": {"ref": "e83"}}).model_dump(mode="json", exclude_none=True) == {"locator": {"ref": "e83"}}
+    with pytest.raises(ValidationError):
+        WebClickOnParams.model_validate({"locator": {"ref": "e83"}})
     with pytest.raises(ValidationError):
         WebClickOnParams.model_validate({"locator": {"unknown": "Login"}})
     with pytest.raises(ValidationError):

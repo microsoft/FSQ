@@ -21,8 +21,8 @@ def serialize(text):
 
 
 def test_equivalent_params_and_idempotence():
-    first = serialize(HEADER + "---\n- typeText: {text: hello, target: Search, locator: null}\n")
-    second = serialize(HEADER + "---\n- typeText: {target: Search, textType: literal, text: hello}\n")
+    first = serialize(HEADER + "---\n- typeText: {text: hello, target: {page: main, steps: [{kind: role, role: textbox, name: Search, checked: null}]}}\n")
+    second = serialize(HEADER + "---\n- typeText: {target: {page: main, steps: [{kind: role, role: textbox, name: Search}]}, textType: literal, text: hello}\n")
     assert first == second
     assert serialize(first.decode()) == first
     assert b"null" not in first

@@ -9,13 +9,15 @@ platform: web
 ---
 - startBrowser
 - navigateTo:
+    page: main
     url: https://todomvc.com/examples/react/dist/
 - assertVisible:
-    target: TodoMVC heading
-    locator:
-      role: heading
-      name: todos
-    optional: false
+    target:
+      page: main
+      steps:
+      - kind: role
+        role: heading
+        name: todos
 - closeBrowser
 ```
 
@@ -26,6 +28,16 @@ The first YAML document contains metadata. The optional second document contains
 Commands execute in authored order through the selected platform Harness. Evidence and the authoritative result are written to one Run directory; the source Case is not modified. With `--suggest`, FSQ still executes only once. Later AI analysis cannot operate the UI or rewrite the result.
 
 Prefer semantic roles, accessible names, resource identifiers, and stable application-owned attributes. Keep secrets and machine-specific executable paths out of Cases. Treat generated candidate Cases as proposals requiring review.
+
+## Replay-first Web commands
+
+Web element targets are complete `{page, steps}` locators. Ordered steps select by role/name, text/label/test ID, CSS/XPath/native selector, filter a collection, choose an explicit first/last/nth item, or enter a uniquely selected frame. Exact text matching is the default. Filter-before-first is a replayed selection rule, not the identity of whichever item was first during recording.
+
+Web commands do not accept old snapshot refs, descriptive string targets, a sibling `locator` bag, implicit page/key scope, `clear`, or `double`. There is no implicit migration: revise old Web Cases against the current schema and intended behavior. Use `fillText` to replace content, `typeText` for sequential append, `setChecked` for a desired state, and `selectOption.selection` for exactly one value/label/index variant. Navigation names its page and uses `wait_until`; `pressKey` declares page or element `scope`. The [Web Harness guide](../fsq_agent/resources/skills/web-harness.md) contains schema-checked examples.
+
+Popup/dialog expectations belong to their triggering command so listeners precede the action. File-upload commands are not supported.
+
+Discovery observations are not added to generated action recordings. The existing recording pipeline retains authored locator paths and selection rules; it does not require an earlier snapshot or a ref lookup cache for replay. Existing Case validation and publication behavior is unchanged.
 
 ## Canonical formatting and static checks
 

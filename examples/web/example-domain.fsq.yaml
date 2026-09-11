@@ -1,91 +1,123 @@
 schemaVersion: fsq.ai-test/v1
-name: "Recorded: Open the link: \"https://todomvc.com/examples/react/dist/\", add\
-  \ \u201CReview FSQ evidence\u201D and \u201CPublish v0.1.0\u201D, complete the first\
-  \ task, filter to Active, and verify only \u201CPublish v0.1.0\u201D is visible."
+name: 'Recorded: Open the link: "https://todomvc.com/examples/react/dist/", add “Review FSQ evidence” and “Publish v0.1.0”, complete the first task, filter to Active, and verify only “Publish v0.1.0” is visible.'
 description: Generated from dynamic run open-the-link-https-todomvc-com-examples-react-dist-add-revi-20260831T083010Z-afcfd0.
 platform: web
 tags:
-- recorded
-- dynamic-llm
+  - recorded
+  - dynamic-llm
+env: {}
 properties:
   recording:
-    source_run_id: open-the-link-https-todomvc-com-examples-react-dist-add-revi-20260831T083010Z-afcfd0
-    source_task_id: open-the-link-https-todomvc-com-examples-react-dist-add-revi-c6f8cc28
-    source_status: success
     draft: false
     required_runtime_secret_names: []
+    source_run_id: open-the-link-https-todomvc-com-examples-react-dist-add-revi-20260831T083010Z-afcfd0
+    source_status: success
+    source_task_id: open-the-link-https-todomvc-com-examples-react-dist-add-revi-c6f8cc28
     warnings:
-    - 'Skipped click_on: platform action status was failed'
+      - 'Skipped click_on: platform action status was failed'
+onCaseStart: []
+onCaseComplete: []
 ---
 - startBrowser: {}
 - navigateTo:
+    timeout_ms: 10000
+    page: main
+    wait_until: domcontentloaded
     url: https://todomvc.com/examples/react/dist/
-    waitUntil: domcontentloaded
-- typeText:
-    target: textbox "New Todo Input" [active] [ref=e38]
-    locator: null
+- fillText:
+    timeout_ms: 10000
+    target:
+      page: main
+      steps:
+        - kind: role
+          role: textbox
+          name: New Todo Input
+          exact: true
+          include_hidden: false
     text: Review FSQ evidence
     textType: literal
-    clear: true
 - pressKey:
+    timeout_ms: 10000
+    scope:
+      kind: element
+      target:
+        page: main
+        steps:
+          - kind: role
+            role: textbox
+            name: New Todo Input
+            exact: true
+            include_hidden: false
     key: Enter
-- typeText:
-    target: textbox "New Todo Input" [active] [ref=e38]
-    locator: null
+- fillText:
+    timeout_ms: 10000
+    target:
+      page: main
+      steps:
+        - kind: role
+          role: textbox
+          name: New Todo Input
+          exact: true
+          include_hidden: false
     text: Publish v0.1.0
     textType: literal
-    clear: true
 - pressKey:
+    timeout_ms: 10000
+    scope:
+      kind: element
+      target:
+        page: main
+        steps:
+          - kind: role
+            role: textbox
+            name: New Todo Input
+            exact: true
+            include_hidden: false
     key: Enter
 - clickOn:
-    target: null
-    locator:
-      role: null
-      name: null
-      text: null
-      label: null
-      placeholder: null
-      testId: null
-      css: .todo-list li:nth-child(1) input.toggle
-      xpath: null
-      altText: null
-      title: null
-      ref: null
     button: left
-    double: false
+    click_count: 1
+    modifiers: []
+    timeout_ms: 10000
+    target:
+      page: main
+      steps:
+        - kind: css
+          selector: .todo-list
+        - kind: role
+          role: listitem
+          exact: true
+          include_hidden: false
+        - kind: first
+        - kind: css
+          selector: input.toggle
 - clickOn:
-    target: link "Active" [ref=e57]
-    locator: null
     button: left
-    double: false
+    click_count: 1
+    modifiers: []
+    timeout_ms: 10000
+    target:
+      page: main
+      steps:
+        - kind: role
+          role: link
+          name: Active
+          exact: true
+          include_hidden: false
 - assertVisible:
-    target: null
-    locator:
-      role: null
-      name: null
-      text: Publish v0.1.0
-      label: null
-      placeholder: null
-      testId: null
-      css: null
-      xpath: null
-      altText: null
-      title: null
-      ref: null
-    optional: false
+    timeout_ms: 10000
+    target:
+      page: main
+      steps:
+        - kind: text
+          text: Publish v0.1.0
+          exact: true
 - assertNotVisible:
-    target: null
-    locator:
-      role: null
-      name: null
-      text: Review FSQ evidence
-      label: null
-      placeholder: null
-      testId: null
-      css: null
-      xpath: null
-      altText: null
-      title: null
-      ref: null
-    optional: false
+    timeout_ms: 10000
+    target:
+      page: main
+      steps:
+        - kind: text
+          text: Review FSQ evidence
+          exact: true
 - closeBrowser: {}

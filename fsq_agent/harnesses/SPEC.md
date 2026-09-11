@@ -40,7 +40,19 @@ The sole external importer of private `_factory._HarnessFactoryImplementation` i
 
 Harnesses classify backend failures through normalized contracts, preserve cancellation, and keep secret values out of contexts, events, and artifacts. Missing observations are explicit safe failures.
 
+Web normalization forwards Driver-supplied reason codes, parameter paths, bounded candidates, and action-effect diagnostics through existing result metadata alongside the shared failure category.
+
+## Web Observation Adaptation
+
+Web Harness consumes structured Driver observations, persists full source/observation data through `ArtifactStore`, and supplies compact views with safe evidence references. Semantic-source coverage and generated-locator coverage remain distinct. Existing post-action capture data is reused for the action's model-facing view without another same-phase full capture; screenshot and UI snapshot availability remain independent.
+
+Full-artifact requests retain a useful bounded synopsis rather than returning only a path. Locators are never clipped. Harness does not implement locator generation, DOM queries, browser event handling, or model-specific context policy.
+
+Web wiring retains the existing factories and evidence interfaces. No upload resolver, workspace-root plumbing, or generic execution/recording policy is added by Harness.
+
 ## Current Invariants
+
+- Web observations preserve complete locator strings rather than applying credential-pattern substitutions to them. Locators containing configured private values are omitted with an unavailable reason; non-locator evidence keeps existing sanitization.
 
 - CommonTools route to the inherited platform provider; PlatformTools delegate to the injected driver.
 - Harnesses do not duplicate driver action bodies.

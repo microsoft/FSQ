@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
 from contextlib import nullcontext
 from typing import ClassVar
 
@@ -21,9 +22,15 @@ from fsq_agent.models import (
     HarnessFunctionSchema,
     RuntimeSecretSettings,
     StepPhase,
+    WebFindElementsParams,
+    WebInspectElementParams,
     WebTakeScreenshotParams,
     WebUiSnapshotParams,
 )
+
+
+class _WebObservationError(RuntimeError):
+    pass
 
 
 class WebHarness:
@@ -100,13 +107,26 @@ class WebHarness:
             if isinstance(params, HarnessActionResult):
                 return params
             driver_method_name = str(capability.metadata.get("driver_method") or capability.name)
+            if self.artifact_store is None and (isinstance(params, WebTakeScreenshotParams) or (isinstance(params, WebUiSnapshotParams) and params.view == "full")):
+                return HarnessActionResult(
+                    status="failed",
+                    action_name=step.action_name,
+                    failure_category="configuration_error",
+                    error_message="Screenshots and full Web observations require an ArtifactStore.",
+                    metadata={"action_effect": "not_started", "error_code": "artifact_store_unavailable"},
+                )
             driver_method = getattr(self.driver, driver_method_name)
             self._prepare_driver_ai_assertion_tool_invocation(step, context)
             try:
                 output = driver_method(params)
             finally:
                 self._clear_driver_ai_assertion_tool_invocation()
-            return self._result_from_driver_output(step.action_name, output)
+            result = self._result_from_driver_output(step.action_name, output)
+            if result.status == "passed" and isinstance(params, WebTakeScreenshotParams):
+                return self._screenshot_result(step, result)
+            if result.status == "passed" and isinstance(params, WebUiSnapshotParams | WebFindElementsParams | WebInspectElementParams):
+                return self._observation_result(step, result, max_chars=params.max_chars)
+            return result
         return HarnessActionResult(
             status="failed",
             action_name=step.action_name,
@@ -123,7 +143,7 @@ class WebHarness:
         return None
 
     def screenshot(self, params: WebTakeScreenshotParams | None = None) -> bytes:
-        return self.driver.screenshot(params or WebTakeScreenshotParams())
+        return self.driver.screenshot(params or WebTakeScreenshotParams(page=self._capture_page(self.get_context())))
 
     def capture_artifact(
         self,
@@ -157,22 +177,89 @@ class WebHarness:
                     step_id=step_id,
                     phase=phase,
                     name=reason,
-                    data=self.screenshot(WebTakeScreenshotParams()),
+                    data=self.screenshot(WebTakeScreenshotParams(page=self._capture_page(context))),
                 )
             )
         if kind == "ui_snapshot":
-            return self._to_harness_artifact_ref(
-                self.artifact_store.write_json(
-                    kind="ui_snapshot",
-                    step_id=step_id,
-                    phase=phase,
-                    name=reason,
-                    payload=self.driver.ui_snapshot(WebUiSnapshotParams()),
-                )
-            )
+            snapshot = self.driver.ui_snapshot(WebUiSnapshotParams(scope={"kind": "page", "page": self._capture_page(context)}))
+            if snapshot.get("status") == "failed":
+                raise _WebObservationError(str(snapshot.get("error_message") or "Web semantic observation failed."))
+            observation = self._observation_value(snapshot.get("output", snapshot))
+            _compact, ref = self._persist_observation(observation, step_id=step_id, phase=phase, name=reason)
+            if ref is None:
+                raise RuntimeError("Artifact capture requires an ArtifactStore.")
+            return ref
         raise RuntimeError(f"Unsupported Web artifact kind: {kind}")
 
+    def _capture_page(self, context: HarnessContext) -> str:
+        page = context.metadata.get("active_page")
+        return page if isinstance(page, str) and page else "main"
+
+    def _observation_value(self, output: object) -> dict[str, object]:
+        if isinstance(output, dict):
+            observation = output.get("observation", output)
+            if isinstance(observation, dict) and observation.get("schema_version") == "fsq.web-observation/v1":
+                return observation
+        raise _WebObservationError("The Web driver did not return a structured observation.")
+
+    def _screenshot_result(self, step: ExecutableStep, result: HarnessActionResult) -> HarnessActionResult:
+        output = result.output
+        png = output.get("png") if isinstance(output, dict) else None
+        if not isinstance(png, bytes) or not png:
+            raise _WebObservationError("The Web driver did not return screenshot bytes.")
+        if self.artifact_store is None:
+            raise RuntimeError("Screenshot persistence requires an ArtifactStore.")
+        ref = self._to_harness_artifact_ref(self.artifact_store.write_bytes(kind="screenshot", step_id=step.step_id, phase="invoke", name=step.action_name, data=png))
+        return result.model_copy(update={"output": {key: value for key, value in output.items() if key != "png"}, "artifact_refs": [*result.artifact_refs, ref]})
+
+    def _observation_result(self, step: ExecutableStep, result: HarnessActionResult, *, max_chars: int) -> HarnessActionResult:
+        observation = self._observation_value(result.output)
+        compact, ref = self._persist_observation(observation, step_id=step.step_id, phase="invoke", name=step.action_name, max_chars=max_chars)
+        if isinstance(result.output, dict) and "observation" in result.output:
+            output = {**result.output, "observation": compact}
+        else:
+            output = compact
+        return result.model_copy(
+            update={
+                "output": output,
+                "artifact_refs": [*result.artifact_refs, *([ref] if ref is not None else [])],
+                "metadata": {**result.metadata, "full_evidence_available": ref is not None},
+            }
+        )
+
+    def _persist_observation(
+        self,
+        observation: dict[str, object],
+        *,
+        step_id: str,
+        phase: StepPhase,
+        name: str,
+        max_chars: int = 12000,
+    ) -> tuple[dict[str, object], HarnessArtifactRef | None]:
+        compact = {key: value for key, value in observation.items() if key not in {"full_source", "full_artifact_ref"}}
+        if self.artifact_store is None:
+            return compact, None
+        ref = self._to_harness_artifact_ref(
+            self.artifact_store.write_json(
+                kind="ui_snapshot",
+                step_id=step_id,
+                phase=phase,
+                name=name,
+                payload={"snapshot": compact, "coverage": observation["coverage"], "full_source": observation.get("full_source")},
+            )
+        )
+        # Artifact metadata is already credential-sanitized by the storage boundary.
+        compact = dict(ref.metadata["snapshot"])
+        referenced = {**compact, "full_artifact_ref": str(ref.path)}
+        if len(json.dumps(referenced, ensure_ascii=False)) <= max_chars:
+            compact = referenced
+        return compact, ref
+
     def classify_error(self, error: BaseException, phase: StepPhase, step: ExecutableStep) -> FailureCategory:
+        if isinstance(error, _WebObservationError):
+            return "observation_error"
+        if isinstance(error, OSError):
+            return "artifact_error"
         return "harness_error"
 
     def _to_harness_artifact_ref(self, ref: object) -> HarnessArtifactRef:
@@ -249,24 +336,33 @@ class WebHarness:
                 action_name=step.action_name,
                 failure_category="configuration_error",
                 error_message=f"Invalid Web parameters for {step.action_name}.",
-                metadata={"validation_errors": self._validation_errors(exc)},
+                metadata={"validation_errors": self._validation_errors(exc), "action_effect": "not_started"},
             )
 
     def _validation_errors(self, error: ValidationError) -> list[dict[str, object]]:
-        try:
-            return error.errors(include_url=False, include_context=False)
-        except TypeError:
-            return error.errors()
+        return error.errors(include_url=False, include_context=False, include_input=False)
 
     def _result_from_driver_output(self, action_name: str, output: object) -> HarnessActionResult:
         if not isinstance(output, dict) or "status" not in output:
             return HarnessActionResult(status="passed", action_name=action_name, output=output)
         status_value = output.get("status")
-        status = status_value if isinstance(status_value, str) and status_value in self._RUNNER_STATUSES else "passed"
+        if not isinstance(status_value, str) or status_value not in self._RUNNER_STATUSES:
+            return HarnessActionResult(
+                status="failed",
+                action_name=action_name,
+                failure_category="harness_error",
+                error_message="The Web driver returned an invalid execution status.",
+                metadata={"error_code": "invalid_driver_result", "action_effect": "indeterminate"},
+            )
+        status = status_value
         failure_category_value = output.get("failure_category")
         failure_category = failure_category_value if isinstance(failure_category_value, str) and failure_category_value in self._FAILURE_CATEGORIES else None
         error_message_value = output.get("error_message")
         metadata_value = output.get("metadata")
+        metadata = dict(metadata_value) if isinstance(metadata_value, dict) else {}
+        if isinstance(failure_category_value, str) and failure_category_value and failure_category is None:
+            metadata.setdefault("error_code", failure_category_value)
+            failure_category = "target_resolution_error" if failure_category_value.startswith("target_") else "harness_error"
         artifact_refs_value = output.get("artifact_refs")
         artifact_refs = [self._to_harness_artifact_ref(ref) for ref in artifact_refs_value] if isinstance(artifact_refs_value, list) else []
         return HarnessActionResult(
@@ -276,7 +372,7 @@ class WebHarness:
             artifact_refs=artifact_refs,
             error_message=error_message_value if isinstance(error_message_value, str) else None,
             failure_category=failure_category,
-            metadata=metadata_value if isinstance(metadata_value, dict) else {},
+            metadata=metadata,
         )
 
     def _optional_str(self, value: object) -> str | None:

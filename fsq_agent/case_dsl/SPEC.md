@@ -54,6 +54,10 @@ Diagnostics identify source path, zero-based command index or metadata field pat
 
 Validation covers the selected document's schema, metadata, hook syntax, active platform command/replay support, parameter models, and timeout fields. It does not inspect live UI, load Workspace configuration, check credentials, resolve `runCase` files, inspect `runShell` scripts, or determine runtime readiness. Referenced-file existence, recursion, containment, and config-level hooks remain Execution preflight responsibilities.
 
+Web Cases use the same Models-owned locator/action contract as dynamic invocation. Ref-bearing targets, snapshot-description strings, incompatible locator bags, and session-local selector engines are rejected before execution without stripping fields, guessing a locator, or enabling a legacy mode. Ordinary application text/URLs containing the word `ref` are not themselves locator refs.
+
+Canonicalization preserves page aliases, frame/container paths, ordered filters and explicit first/nth steps, and event expectations through the existing model-backed serializer. It never replaces a collection rule with an observed item identity. Live selector uniqueness remains a Driver check; static validation performs neither browser access nor locator normalization.
+
 ## Verification Scope
 
 Verification proves deterministic bytes, reload/serialize idempotence, model-aware null/default behavior, preservation of ordered hooks and steps, timeout and runtime-secret semantics, shared generation/formatting behavior, safe validation failures, and no execution or input mutation during static operations.

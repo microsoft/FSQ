@@ -64,22 +64,25 @@ Android command block:
 | `assertWithAI: {prompt: ...}` | `assert_with_ai` | validated `AndroidAssertWithAIParams` dump |
 | `inputText: {text: TEST_ACCOUNT_EMAIL, textType: runtimeSecret, ...}` | `input_text` | validated `AndroidInputTextParams` dump preserving `textType: runtimeSecret` for core runtime-secret resolution |
 
-Web command block:
+Representative Web command block (the shared Web catalog is the complete command authority):
+
+The compatibility facade forwards the canonical Case DSL objects and does not provide a separate legacy Web parser. Web targets require a self-contained `{page, steps}` locator; page operations and observations require explicit page/scope. String targets, ref selectors, old locator bags, and implicit Web scope are rejected, including through this facade. Ordered filter/position rules and unresolved runtime-secret references are preserved.
 
 | FSQ command shape | canonical `action_name` | `params` |
 |---|---|---|
 | `startBrowser: {}` | `start_browser` | validated `WebStartBrowserParams` dump |
 | `closeBrowser: {}` | `close_browser` | validated `WebCloseBrowserParams` dump |
-| `navigateTo: {url: https://example.test}` | `navigate_to` | validated `WebNavigateToParams` dump |
-| `navigateBack: {}` | `navigate_back` | validated `WebNavigateBackParams` dump |
-| `clickOn: {target: Submit}` | `click_on` | validated `WebClickOnParams` dump |
-| `typeText: {target: Email, text: user@example.test}` | `type_text` | validated `WebTypeTextParams` dump |
-| `selectOption: {target: Country, values: [US]}` | `select_option` | validated `WebSelectOptionParams` dump |
-| `hoverOn: {target: Menu}` | `hover_on` | validated `WebHoverOnParams` dump |
-| `waitFor: {text: Loaded}` | `wait_for` | validated `WebWaitForParams` dump |
-| `takeScreenshot: {full_page: true}` | `take_screenshot` | validated `WebTakeScreenshotParams` dump |
-| `assertText: {text: {contains: Welcome}}` | `assert_text` | validated `WebAssertTextParams` dump |
-| `uiSnapshot: {}` | `ui_snapshot` | validated `WebUiSnapshotParams` dump |
+| `navigateTo: {page: main, url: https://example.test}` | `navigate_to` | validated `WebNavigateToParams` dump |
+| `navigateBack: {page: main}` | `navigate_back` | validated `WebNavigateBackParams` dump |
+| `clickOn: {target: {page: main, steps: [{kind: role, role: button, name: Submit}]}}` | `click_on` | validated `WebClickOnParams` dump |
+| `fillText: {target: {page: main, steps: [{kind: label, text: Email}]}, text: user@example.test}` | `fill_text` | validated `WebFillTextParams` dump; replaces editable content |
+| `typeText: {target: {page: main, steps: [{kind: label, text: Email}]}, text: .test}` | `type_text` | validated `WebTypeTextParams` dump; sequential append without clearing |
+| `selectOption: {target: {page: main, steps: [{kind: label, text: Country}]}, selection: {kind: value, values: [US]}}` | `select_option` | validated `WebSelectOptionParams` dump |
+| `hoverOn: {target: {page: main, steps: [{kind: role, role: button, name: Menu}]}}` | `hover_on` | validated `WebHoverOnParams` dump |
+| `waitFor: {condition: {kind: text, scope: {kind: page, page: main}, text: {kind: contains, value: Loaded}}}` | `wait_for` | validated `WebWaitForParams` dump |
+| `takeScreenshot: {page: main, full_page: true}` | `take_screenshot` | validated `WebTakeScreenshotParams` dump |
+| `assertText: {target: {page: main, steps: [{kind: role, role: status}]}, text: {kind: contains, value: Welcome}}` | `assert_text` | validated `WebAssertTextParams` dump |
+| `uiSnapshot: {scope: {kind: page, page: main}}` | `ui_snapshot` | validated `WebUiSnapshotParams` dump |
 
 macOS command block:
 

@@ -149,7 +149,7 @@ def _recordable_web_run(
             title="Tool call started",
             tool_name="click_on",
             tool_call_id="call-1",
-            tool_arguments={"target": "Search"},
+            tool_arguments={"target": {"page": "main", "steps": [{"kind": "role", "role": "button", "name": "Search"}]}},
             payload={"tool_origin": "platform", "capability_name": "click_on", "replay": {"kind": "fsq_command", "alias": replay_alias}},
         ),
     )
@@ -268,7 +268,7 @@ def test_record_dynamic_web_run_validates_against_web_registry(tmp_path: Path) -
             title="Tool call started",
             tool_name="click_on",
             tool_call_id="call-1",
-            tool_arguments={"target": "Search"},
+            tool_arguments={"target": {"page": "main", "steps": [{"kind": "role", "role": "button", "name": "Search"}]}},
             payload={"tool_origin": "platform", "capability_name": "click_on", "replay": {"kind": "fsq_command", "alias": "clickOn"}},
         ),
     )
@@ -292,7 +292,10 @@ def test_record_dynamic_web_run_validates_against_web_registry(tmp_path: Path) -
     docs = list(yaml.safe_load_all((run_dir / "recorded.fsq.yaml").read_text(encoding="utf-8")))
     assert docs[0]["platform"] == "web"
     assert "appId" not in docs[0]
-    assert docs[1] == [{"clickOn": {"target": "Search"}}]
+    from fsq_agent.models import WebClickOnParams
+
+    expected = WebClickOnParams(target={"page": "main", "steps": [{"kind": "role", "role": "button", "name": "Search"}]}).model_dump(mode="json", exclude_none=True)
+    assert docs[1] == [{"clickOn": expected}]
 
 
 def test_record_dynamic_run_does_not_infer_replay_from_fsq_action_name(tmp_path: Path) -> None:

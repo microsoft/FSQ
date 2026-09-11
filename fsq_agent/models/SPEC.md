@@ -12,6 +12,8 @@ No project module dependencies. May depend on external libraries such as `pydant
 
 ## Public Interface
 
+Shared Web locator preservation distinguishes configured private values from merely credential-shaped text. Structured locator strings remain unchanged unless a configured private value requires omitting the whole locator; observation elements then expose an unavailable reason instead of a modified actionable target.
+
 Current `__init__.py` exports via `__all__`:
 
 Platform-neutral task, run, report, knowledge, capability, and execution exports:
@@ -100,24 +102,25 @@ Android platform exports:
 
 Web platform exports:
 
-- `WebLocator`: optional `role`, `name`, `text`, `label`, `placeholder`, `testId`, `css`, `xpath`, `altText`, `title`, and `ref`; target-or-locator actions require a populated signal.
-- `WebStartBrowserParams`: Pydantic model for the explicit `start_browser` Web lifecycle capability. It accepts no fields in the first lifecycle batch.
-- `WebCloseBrowserParams`: Pydantic model for the explicit `close_browser` Web lifecycle capability. It accepts no fields in the first lifecycle batch.
-- `WebNavigateToParams`: required `url` and optional `waitUntil` lifecycle state.
-- `WebNavigateBackParams`: optional `waitUntil` lifecycle state.
-- `WebClickOnParams`: snapshot target or nonempty locator, optional button and double fields.
-- `WebTypeTextParams`: required text, optional `textType` defaulting to literal, target or locator, and optional clear; runtime-secret names resolve through Core before invocation.
-- `WebSelectOptionParams`: target or locator and at least one of value, label, index, or values.
-- `WebHoverOnParams`: snapshot target or nonempty locator.
-- `WebPressKeyParams`: Pydantic model for `press_key` parameters with one normalized required key string.
-- `WebWaitForParams`: Pydantic model for `wait_for` parameters. It requires a populated snapshot `target`, non-empty `locator`, visible `text`, URL text/pattern, or bounded `timeout_ms`; optional `state` applies to target/locator waits, and `timeout_ms` bounds condition waits or acts as a fixed delay when supplied alone.
-- `WebTakeScreenshotParams`: optional `fullPage` and `omitBackground`; artifact paths remain storage-owned.
-- `WebAssertVisibleParams`: Pydantic model for Web `assert_visible` parameters. It requires either `target` or non-empty `locator` plus optional assertion metadata.
-- `WebAssertNotVisibleParams`: Pydantic model for Web `assert_not_visible` parameters. It requires either `target` or non-empty `locator` plus optional assertion metadata.
-- `WebTextAssertion`: Pydantic model for Web text assertion predicates, supporting `contains` and `equals`.
-- `WebAssertTextParams`: Pydantic model for `assert_text` parameters. It supports optional `target` or `locator` plus a text predicate.
-- `WebUiSnapshotParams`: No-argument Pydantic model for the read-only `ui_snapshot` Web observation capability so dynamic agents and strict Web cases can request current accessibility/page snapshot content through the normal harness action schema path.
+- `WebLocator`: self-contained `page` alias and ordered discriminated `steps`; semantic matching, CSS/XPath/native selectors, conjunctive filters, explicit first/last/nth, and frame entry. Semantic string matching defaults to exact. There is no ref, free-text target, or sibling locator bag.
+- `WebObservation`: SDK-neutral page/region/control observations, complete locator values or explicit unavailability, relevant state and select options, list/order information, and separate semantic/locator coverage and continuation metadata. Observation identities are not element selectors.
+- `WebStartBrowserParams` and `WebCloseBrowserParams`: fieldless explicit browser lifecycle inputs.
+- `WebNavigateToParams`, `WebNavigateBackParams`, `WebNavigateForwardParams`, and `WebReloadPageParams`: explicit page context, navigation wait state, and bounded timeout; navigation additionally requires a nonempty URL.
+- `WebClickOnParams`, `WebHoverOnParams`, `WebDragToParams`, `WebScrollParams`, and `WebScrollIntoViewParams`: typed locator endpoints or explicit page/container scroll scope, meaningful operation options, and bounded waits. Click options distinguish button, click count, modifiers, and a trigger-bound expected event.
+- `WebFillTextParams` and `WebTypeTextParams`: distinct replace and sequential-append contracts with required target/text and `textType` defaulting to literal. Runtime-secret references resolve in Core and are preserved unresolved for recording.
+- `WebSetCheckedParams`: a locator and strict boolean desired checkbox/radio state.
+- `WebSelectOptionParams`: a locator and discriminated, mutually exclusive value/label/index selection, including multiple selections and nonnegative zero-based indices.
+- `WebPressKeyParams`: a nonempty supported key/chord and explicit page or element scope, with a typed event expectation where applicable.
+- `WebWaitForParams`: discriminated element-state, text presence/absence, URL, or load-state condition plus bounded maximum wait. A timeout alone is not a condition or sleep.
+- `WebTakeScreenshotParams`: explicit page and screenshot options; output paths remain storage-owned.
+- `WebAssertVisibleParams`, `WebAssertNotVisibleParams`, `WebAssertTextParams`, `WebAssertStateParams`, and `WebAssertValueParams`: deterministic assertions over a locator with explicit expected predicates. `WebTextAssertion` distinguishes exact and contains predicates rather than silently prioritizing competing fields.
+- `WebUiSnapshotParams`, `WebFindElementsParams`, and `WebInspectElementParams`: bounded structured observation/query inputs with declared page/locator scope. Compact/scoped/full-artifact view, output limits, and observation-bound continuation have explicit semantics.
+- `WebListPagesParams`, `WebOpenPageParams`, `WebActivatePageParams`, and `WebClosePageParams`: owned-page operations using declared aliases rather than transient indices.
 - `WebAssertWithAIParams`: Pydantic model for authored Web visual/page assertion parameters with a required prompt and optional assertion metadata. This parameter model is consumed by decorated Web backend driver tools such as `PlaywrightWebDriver.assert_with_ai`.
+
+Nested locator, filter, event, selection, and observation components are serializable Pydantic boundary models, not Playwright objects or executable expressions. Invalid combinations, empty effective selectors, unimplemented options, unknown fields, and inappropriate coercions fail model validation. Relative descendant predicates are finite, conjunctive queries and cannot cross frame boundaries.
+
+Web Driver diagnostics may describe action effects through the existing metadata field. Shared execution-result models, generic recording policies, and other platforms retain their existing contracts. No Web upload parameter models are exposed.
 
 Windows platform exports:
 
@@ -228,10 +231,12 @@ Android contracts:
 
 Web contracts:
 
-- Web parameter models include browser lifecycle, locator, navigation, click, text typing, select, hover, key, wait, screenshot, page snapshot, deterministic assertions, and Web AI assertion models.
+- Web parameter models share one dynamic/replay locator contract across ordinary navigation, pointer/form/keyboard actions, owned-page/event operations, observations, and assertions.
 - Web settings are grouped under `WebHarnessSettings` and are selected by `HarnessSettings.platform == "web"`.
 - Web explicit observation command is represented as `ui_snapshot`/`uiSnapshot`; automatic runner evidence captures normalized `ui_snapshot` content sourced from Web page/accessibility snapshot data.
-- Web action targets use semantic locators or current snapshot references. Unknown fields, including unsupported `element`, are rejected. Screenshots are evidence/debugging observations, not the normal action-selection substrate; unsafe/opt-in families are not exposed.
+- Web element actions accept only structured locator paths with explicit page/frame/container scope. Snapshot refs, target-description strings, incompatible locator bags, and runtime IDs are rejected without migration. Explicit positional rules and exact matching semantics survive normalization unchanged.
+- Web observations expose directly usable locators and bounded region/control information, not raw ref-oriented ARIA text. The inline body limit is 12,000 characters and the model-facing response limit is 16,000; full evidence and coverage remain distinct. Screenshots are evidence, not normal element-selection inputs.
+- Tool/schema descriptions explain scope, format, defaults, units, exclusive modes, ordering, replay effects, and recovery. Positive and invalid examples are checked against the same runtime models and supported strict-schema conversions.
 
 Windows contracts:
 
@@ -262,6 +267,7 @@ macOS contracts:
 - `_tools.py`: Unified capability metadata, replay policy, invocation/result contracts, registry snapshot models, AgentTool definition/call/result models, and temporary backward-compatible diagnostic aliases.
 - `_ai_assertion.py`: Provider-backed platform AI assertion request/result models.
 - `_core.py`: Shared execution-core contract models for executable steps, strict replay refs, pure wait params, runner phases/events, harness context/results, artifact references, evidence manifests, and active platform parameter models used across `fsq`, `cli`, and `core`.
+- `_web.py`: Web locator, ordinary action, event, structured observation, and diagnostic parameter/result contracts.
 - `_settings.py`: Settings value models.
 - `_skills.py`: Skill configuration and loaded skill bundle models.
 - `_report.py`: report artifact, public report, sharing, and export boundary models.
@@ -297,14 +303,14 @@ Domain exceptions defined here inherit from `FsqAgentError` and carry concise hu
 - Capability definitions are deliberately serializable. They do not import or wrap concrete engine or third-party tool objects, driver instances, Python function callables, decorator marker objects, platform catalog helper objects, default screenshot-capture policy, or per-tool schema strictness knobs. Runtime bindings live in `tools`, `core`, and `agent`; declaration marker metadata lives in `capabilities`. Active agent-engine capability tools use strict JSON schema by default.
 - Default automatic evidence capture is a core runner policy derived from the resolved capability plus `ExecutableStep.kind`, not from capability metadata flags or executor kind. Any retained `EvidencePolicy` fields such as `capture_before`, `capture_after`, `capture_on_failure`, or `artifact_kinds` are legacy compatibility fields only and must not create a second default capture path.
 - Android driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Runtime-only step metadata such as evidence policy, timeout fields, source references, retry policy, replay-source metadata, and step identifiers stays on `ExecutableStep` rather than inside driver parameter models.
-- Web driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Runtime-only step metadata such as evidence policy, timeout fields, source references, retry policy, replay-source metadata, and step identifiers stays on `ExecutableStep` rather than inside Web driver parameter models.
+- Web driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Driver `timeout_ms` bounds the declared operation's wait and is distinct from runner-owned step `timeout`. Evidence policy, source references, retry policy, replay-source metadata, and step identifiers stay on `ExecutableStep` rather than inside Web driver parameter models.
 - Windows driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Runtime-only step metadata such as evidence policy, timeout fields, source references, retry policy, replay-source metadata, redaction state, and step identifiers stays on `ExecutableStep` rather than inside Windows driver parameter models.
 - Windows mouse parameter models enforce endpoint and coordinate invariants at validation time.
 - macOS driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Runtime-only step metadata such as evidence policy, timeout fields, source references, retry policy, replay-source metadata, redaction state, and step identifiers stays on `ExecutableStep` rather than inside macOS driver parameter models.
 - Runtime-secret references are text-entry fields, not a separate `RuntimeSecretRef`. Omitted `textType` means literal for compatibility; `runtimeSecret` names a Workspace secret resolved by Core before invocation.
 - `WaitMsParams` belongs to the inherited `wait_ms` CommonTool capability and its strict replay alias `waitMs`. It lets recorded strict cases replay pure waits without routing through Android gesture or driver APIs.
 - Web browser lifecycle is represented by explicit no-field parameter models `WebStartBrowserParams` and `WebCloseBrowserParams`; `navigate_to` is navigation on an already-started browser/page, not an implicit startup contract.
-- Web `ui_snapshot` is a driver-owned, read-only explicit observation capability with replay alias `uiSnapshot`. It returns Web accessibility/page snapshot content, remains valid for authored strict YAML cases, is skipped by dynamic recording, and must not reuse Android-oriented `ui_tree` or `uiTree` naming. Automatic Web runner evidence uses the same normalized `ui_snapshot` artifact naming.
+- Web `ui_snapshot` is a driver-owned, read-only structured observation capability with replay alias `uiSnapshot`. It exposes page/region/control facts and self-contained locators, remains valid for authored strict Cases, is skipped by dynamic recording, and must not reuse Android-oriented `ui_tree` or `uiTree` naming. Automatic Web runner evidence uses the same normalized `ui_snapshot` artifact naming with truthful full-source and locator coverage.
 - Windows `ui_snapshot` is a driver-owned, read-only observation capability with canonical alias `uiSnapshot`. It returns a bounded pywinauto control-tree snapshot, remains valid for authored strict YAML cases, is skipped by dynamic recording, and also satisfies the normalized automatic `ui_snapshot` evidence contract.
 - macOS `ui_snapshot` is a driver-owned, read-only observation capability with canonical alias `uiSnapshot`. It returns a bounded Appium Mac2 page-source/control-tree snapshot, remains valid for authored strict YAML cases, is skipped by dynamic recording, and also satisfies the normalized automatic `ui_snapshot` evidence contract.
 - macOS `assert_elements_order` is a deterministic assertion contract. It compares resolved element center positions on the requested axis, returns assertion-oriented structured order metadata, and is distinct from AI visual assertions or raw `ui_snapshot` narration.

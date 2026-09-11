@@ -157,8 +157,9 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
     assert "direction or both start and end" in android_swipe_schema["description"]
     assert "screen size" in android_swipe_schema["properties"]["reference_screen_size"]["description"]
 
-    assert "target, locator, text, url, or timeout_ms" in web_wait_schema["description"]
-    assert "bounded wait" in web_wait_schema["properties"]["timeout_ms"]["description"]
+    assert "condition" in web_wait_schema["description"]
+    assert "not a sleep" in web_wait_schema["description"]
+    assert "milliseconds" in web_wait_schema["properties"]["timeout_ms"]["description"]
 
     assert "non-empty locator" in windows_click_schema["description"]
     assert "descriptive" in windows_click_schema["properties"]["target"]["description"]

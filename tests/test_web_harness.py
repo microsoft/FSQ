@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,6 +22,7 @@ from fsq_agent.models import (
     WebAssertWithAIParams,
     WebClickOnParams,
     WebCloseBrowserParams,
+    WebFillTextParams,
     WebHoverOnParams,
     WebNavigateBackParams,
     WebNavigateToParams,
@@ -80,6 +83,10 @@ class FakeWebDriver(AIAssertionBackendToolMixin):
     def type_text(self, params: WebTypeTextParams) -> dict[str, object]:
         return self._record("type_text", params)
 
+    @_web_driver_tool("fillText", description="Replace the text in one editable target.")
+    def fill_text(self, params: WebFillTextParams) -> dict[str, object]:
+        return self._record("fill_text", params)
+
     @_web_driver_tool("selectOption", description="Select an option in a Web select target.")
     def select_option(self, params: WebSelectOptionParams) -> dict[str, object]:
         return self._record("select_option", params)
@@ -98,7 +105,8 @@ class FakeWebDriver(AIAssertionBackendToolMixin):
 
     @_web_driver_tool("takeScreenshot", description="Capture a Web page screenshot for evidence or debugging.")
     def take_screenshot(self, params: WebTakeScreenshotParams) -> dict[str, object]:
-        return self._record("take_screenshot", params)
+        self._record("take_screenshot", params)
+        return {"status": "passed", "output": {"png": b"fake-png", "bytes": 8, "page": params.page}}
 
     @_web_driver_tool("uiSnapshot", description="Return the current Web page accessibility snapshot.")
     def ui_snapshot(self, params: WebUiSnapshotParams) -> dict[str, object]:
@@ -107,7 +115,19 @@ class FakeWebDriver(AIAssertionBackendToolMixin):
         else:
             recorded = params
         self.calls.append(("ui_snapshot", recorded))
-        return {"url": "https://www.bing.com", "snapshot": {"role": "WebArea", "name": "Bing"}}
+        page = params.scope.page if params.scope.kind == "page" else params.scope.target.page
+        return {
+            "status": "passed",
+            "output": {
+                "schema_version": "fsq.web-observation/v1",
+                "observation_id": "snapshot-1",
+                "page": {"page": page, "url": "https://www.bing.com", "title": "Bing", "active": True},
+                "view": {"regions": [], "elements": [], "lists": [], "dialogs": []},
+                "coverage": {"semantic": "complete", "locators": "unavailable", "omissions": []},
+                "full_source": {"semantic_text": "WebArea: Bing", "coverage": {"semantic": "complete", "locators": "unavailable"}},
+            },
+            "metadata": {"action_effect": "not_started"},
+        }
 
     @_web_driver_tool("assertVisible", description="Assert that a Web page target is visible.")
     def assert_visible(self, params: WebAssertVisibleParams) -> dict[str, object]:
@@ -134,27 +154,78 @@ def _step(action_name: str, params: dict[str, Any] | None = None) -> ExecutableS
     return ExecutableStep(step_id="step-1", kind="action", action_name=action_name, params=params or {})
 
 
-def test_web_harness_dispatches_fsq_action_names_to_driver() -> None:
+def _target(name: str, role: str = "button") -> dict[str, object]:
+    return {"page": "main", "steps": [{"kind": "role", "role": role, "name": name}]}
+
+
+def test_web_harness_preserves_precise_failure_and_action_effect(monkeypatch: pytest.MonkeyPatch) -> None:
     driver = FakeWebDriver()
+    monkeypatch.setattr(
+        driver,
+        "_record",
+        lambda *_args: {
+            "status": "failed",
+            "failure_category": "target_ambiguous",
+            "error_message": "Two matching controls.",
+            "metadata": {"action_effect": "not_started", "match_count": 2},
+        },
+    )
     harness = WebHarness(driver=driver)
+
+    result = harness.invoke_action(_step("startBrowser"), harness.get_context())
+
+    assert result.status == "failed"
+    assert result.failure_category == "target_resolution_error"
+    assert result.metadata["error_code"] == "target_ambiguous"
+    assert result.metadata["action_effect"] == "not_started"
+    assert result.metadata["match_count"] == 2
+
+
+def test_web_harness_does_not_accept_invalid_driver_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = FakeWebDriver()
+    monkeypatch.setattr(driver, "_record", lambda *_args: {"status": "broken"})
+    harness = WebHarness(driver=driver)
+
+    result = harness.invoke_action(_step("startBrowser"), harness.get_context())
+
+    assert result.status == "failed"
+    assert result.failure_category == "harness_error"
+    assert result.metadata["action_effect"] == "indeterminate"
+
+
+def test_web_harness_failed_observation_is_not_successful_capture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    driver = FakeWebDriver()
+    monkeypatch.setattr(driver, "ui_snapshot", lambda _params: {"status": "failed", "error_message": "Semantic observation unavailable."})
+    harness = WebHarness(driver=driver, artifact_store=ArtifactStore(run_dir=tmp_path))
+    step = _step("startBrowser")
+
+    with pytest.raises(RuntimeError, match="Semantic observation unavailable") as failure:
+        harness.capture_artifact("ui_snapshot", "after-action", harness.get_context(), step.step_id, "finalize")
+    assert harness.classify_error(failure.value, "finalize", step) == "observation_error"
+
+
+def test_web_harness_dispatches_fsq_action_names_to_driver(tmp_path: Path) -> None:
+    driver = FakeWebDriver()
+    harness = WebHarness(driver=driver, artifact_store=ArtifactStore(run_dir=tmp_path))
 
     context = harness.get_context()
 
     cases = [
         ("startBrowser", {}, "start_browser"),
-        ("navigateTo", {"url": "https://www.bing.com"}, "navigate_to"),
-        ("navigateBack", {}, "navigate_back"),
-        ("clickOn", {"target": "Search box"}, "click_on"),
-        ("typeText", {"target": "Search box", "text": "playwright", "textType": "literal"}, "type_text"),
-        ("selectOption", {"target": "Region", "label": "United States"}, "select_option"),
-        ("hoverOn", {"target": "Menu"}, "hover_on"),
-        ("pressKey", {"key": "Enter"}, "press_key"),
-        ("waitFor", {"text": "Results", "timeout_ms": 5000}, "wait_for"),
-        ("takeScreenshot", {}, "take_screenshot"),
-        ("uiSnapshot", {}, "ui_snapshot"),
-        ("assertVisible", {"target": "Results"}, "assert_visible"),
-        ("assertNotVisible", {"target": "Dialog"}, "assert_not_visible"),
-        ("assertText", {"target": "Results", "text": {"contains": "playwright"}}, "assert_text"),
+        ("navigateTo", {"page": "main", "url": "https://www.bing.com"}, "navigate_to"),
+        ("navigateBack", {"page": "main"}, "navigate_back"),
+        ("clickOn", {"target": _target("Search box", "textbox")}, "click_on"),
+        ("fillText", {"target": _target("Search box", "textbox"), "text": "replace"}, "fill_text"),
+        ("typeText", {"target": _target("Search box", "textbox"), "text": "playwright", "textType": "literal"}, "type_text"),
+        ("selectOption", {"target": _target("Region", "combobox"), "selection": {"kind": "label", "labels": ["United States"]}}, "select_option"),
+        ("hoverOn", {"target": _target("Menu")}, "hover_on"),
+        ("pressKey", {"scope": {"kind": "page", "page": "main"}, "key": "Enter"}, "press_key"),
+        ("waitFor", {"condition": {"kind": "element", "target": _target("Results")}, "timeout_ms": 5000}, "wait_for"),
+        ("takeScreenshot", {"page": "main"}, "take_screenshot"),
+        ("uiSnapshot", {"scope": {"kind": "page", "page": "main"}}, "ui_snapshot"),
+        ("assertVisible", {"target": _target("Results")}, "assert_visible"),
+        ("assertNotVisible", {"target": _target("Dialog", "dialog")}, "assert_not_visible"),
+        ("assertText", {"target": _target("Results"), "text": {"kind": "contains", "value": "playwright"}}, "assert_text"),
         ("closeBrowser", {}, "close_browser"),
     ]
 
@@ -171,7 +242,34 @@ def test_web_harness_dispatches_fsq_action_names_to_driver() -> None:
         screen_size=(1280, 720),
         metadata={"channel": "chrome", "browser_executable_configured": True},
     )
-    assert driver.calls == [("context", None)] + [(method_name, params) for _action_name, params, method_name in cases]
+    from fsq_agent.models import WEB_ACTION_DEFINITIONS
+
+    models = {definition.driver_method: definition.params_model for definition in WEB_ACTION_DEFINITIONS}
+    assert driver.calls == [("context", None)] + [(method_name, models[method_name].model_validate(params).model_dump(mode="json", exclude_none=True)) for _action_name, params, method_name in cases]
+
+
+def test_explicit_screenshot_persists_the_single_capture(tmp_path: Path) -> None:
+    driver = FakeWebDriver()
+    harness = WebHarness(driver=driver, artifact_store=ArtifactStore(run_dir=tmp_path))
+    result = harness.invoke_action(_step("takeScreenshot", {"page": "main"}), harness.get_context())
+
+    assert result.status == "passed"
+    assert result.output == {"bytes": 8, "page": "main"}
+    assert len(result.artifact_refs) == 1
+    assert result.artifact_refs[0].kind == "screenshot"
+    assert (tmp_path / result.artifact_refs[0].path).read_bytes() == b"fake-png"
+    assert [name for name, _ in driver.calls] == ["context", "take_screenshot"]
+    assert "fake-png" not in result.model_dump_json()
+
+
+def test_explicit_screenshot_requires_storage_before_capture() -> None:
+    driver = FakeWebDriver()
+    harness = WebHarness(driver=driver)
+    result = harness.invoke_action(_step("takeScreenshot", {"page": "main"}), harness.get_context())
+
+    assert result.status == "failed"
+    assert result.failure_category == "configuration_error"
+    assert [name for name, _ in driver.calls] == ["context"]
 
 
 def test_web_harness_action_space_returns_catalog_backed_schemas() -> None:
@@ -197,12 +295,12 @@ def test_web_harness_action_space_returns_catalog_backed_schemas() -> None:
     assert schemas["click_on"].metadata["backend"] == "fake-playwright"
     assert schemas["click_on"].metadata["replay"] == {"kind": "fsq_command", "alias": "clickOn"}
     assert "target" in schemas["click_on"].params_json_schema["properties"]
-    assert "target or non-empty locator" in schemas["click_on"].params_json_schema["description"]
-    assert "exact snapshot target" in schemas["click_on"].params_json_schema["properties"]["target"]["description"]
-    assert "ref" in click_locator_schema["properties"]
+    assert "replay preparation" in schemas["click_on"].params_json_schema["description"]
+    assert "replayable locator" in schemas["click_on"].params_json_schema["properties"]["target"]["description"]
+    assert set(click_locator_schema["properties"]) == {"page", "steps"}
     assert schemas["ui_snapshot"].driver_method == "ui_snapshot"
     assert schemas["ui_snapshot"].fsq_action_name == "uiSnapshot"
-    assert schemas["ui_snapshot"].params_json_schema.get("properties") == {}
+    assert "scope" in schemas["ui_snapshot"].params_json_schema["required"]
 
 
 def test_web_harness_validation_failure_does_not_call_driver_method() -> None:
@@ -246,7 +344,51 @@ def test_web_harness_captures_screenshot_and_ui_snapshot_with_artifact_store(tmp
     assert (tmp_path / ui_snapshot_ref.path).is_file()
     assert ui_snapshot_ref.sha256 is not None
     assert "WebArea" in (tmp_path / ui_snapshot_ref.path).read_text(encoding="utf-8")
-    assert driver.calls == [("context", None), ("screenshot", {}), ("ui_snapshot", {})]
+    assert ui_snapshot_ref.metadata["snapshot"]["observation_id"] == "snapshot-1"
+    assert "full_source" not in ui_snapshot_ref.metadata["snapshot"]
+    assert driver.calls == [
+        ("context", None),
+        ("screenshot", {"page": "main", "full_page": False, "omit_background": False}),
+        ("ui_snapshot", WebUiSnapshotParams(scope={"kind": "page", "page": "main"}).model_dump(mode="json", exclude_none=True)),
+    ]
+
+
+def test_web_harness_persists_full_observation_before_exposing_compact_view(tmp_path: Path) -> None:
+    driver = FakeWebDriver()
+    harness = WebHarness(driver=driver, artifact_store=ArtifactStore(run_dir=tmp_path))
+
+    result = harness.invoke_action(_step("uiSnapshot", {"scope": {"kind": "page", "page": "main"}, "view": "full"}), harness.get_context())
+
+    assert result.status == "passed"
+    assert "full_source" not in result.output
+    assert len(json.dumps(result.output, ensure_ascii=False)) <= 12_000
+    assert len(result.artifact_refs) == 1
+    assert result.output["full_artifact_ref"] == str(result.artifact_refs[0].path)
+    saved = json.loads((tmp_path / result.artifact_refs[0].path).read_text(encoding="utf-8"))
+    assert saved["full_source"]["semantic_text"] == "WebArea: Bing"
+    assert saved["snapshot"]["observation_id"] == result.output["observation_id"]
+    assert [name for name, _params in driver.calls].count("ui_snapshot") == 1
+
+
+def test_web_harness_full_observation_requires_artifact_storage() -> None:
+    harness = WebHarness(driver=FakeWebDriver())
+
+    result = harness.invoke_action(_step("uiSnapshot", {"scope": {"kind": "page", "page": "main"}, "view": "full"}), harness.get_context())
+
+    assert result.status == "failed"
+    assert result.failure_category == "configuration_error"
+    assert result.metadata["action_effect"] == "not_started"
+
+
+def test_web_harness_capture_uses_declared_active_page(tmp_path: Path) -> None:
+    driver = FakeWebDriver()
+    harness = WebHarness(driver=driver, artifact_store=ArtifactStore(run_dir=tmp_path))
+    context = HarnessContext(platform="web", metadata={"active_page": "details"})
+
+    ref = harness.capture_artifact("ui_snapshot", "after-action", context, "step-2", "finalize")
+
+    assert driver.calls[-1][1]["scope"] == {"kind": "page", "page": "details"}
+    assert ref.metadata["snapshot"]["page"]["page"] == "details"
 
 
 def test_web_harness_assert_with_ai_uses_injected_evaluator(tmp_path) -> None:
@@ -283,7 +425,7 @@ def test_web_harness_assert_with_ai_uses_injected_evaluator(tmp_path) -> None:
     assert evaluator.requests[0].platform == "web"
     assert evaluator.requests[0].prompt == "Verify Bing homepage"
     assert evaluator.requests[0].screenshot_artifact_ref == result.artifact_refs[0]
-    assert driver.calls == [("context", None), ("screenshot", {})]
+    assert driver.calls == [("context", None), ("screenshot", {"page": "main", "full_page": False, "omit_background": False})]
 
 
 def test_web_harness_requires_artifact_store_for_capture() -> None:

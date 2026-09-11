@@ -728,6 +728,7 @@ def test_runtime_builds_configured_web_harness(monkeypatch: pytest.MonkeyPatch, 
         agent_runtime=AgentRuntimeSettings(),
     )
     settings.harness.web.browser_executable_path = chrome_path
+    settings.workspace.root_dir = tmp_path
     settings.output.runs_dir = tmp_path / "runs"
     runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory())
 
@@ -1290,7 +1291,8 @@ async def test_harness_tool_adapter_uses_web_platform_registry_for_evidence_poli
     adapter = HarnessToolAdapter(harness, run_id="run-1", platform="web")
 
     tools = adapter.build_tools()
-    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Search"}, call_id="call-1"))
+    target = {"page": "main", "steps": [{"kind": "role", "role": "button", "name": "Search", "exact": True}]}
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": target}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "passed"
@@ -1415,6 +1417,113 @@ def test_runtime_stream_tool_output_preserves_tool_name_from_started_event() -> 
     assert completed_event.tool_name == "read_knowledge_page"
     assert completed_event.tool_call_id == "call-1"
     assert completed_event.duration_ms == 123
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled"])
+async def test_runtime_preserves_full_web_facts_independently_of_model_projection(tmp_path, monkeypatch, outcome):
+    _patch_runtime_engine(monkeypatch)
+    full_output = {
+        "observation": {"title": "Editor", "elements": [{"name": f"Control {index}", "locator": {"page": "main", "steps": [{"kind": "css", "selector": f"#item-{index}"}]}} for index in range(400)]}
+    }
+    replay_params = {"target": {"page": "main", "steps": [{"kind": "css", "selector": "#save"}, {"kind": "first"}]}, "text": "canonical-text" * 10000}
+    full_result = RunnerStepResult(
+        step_id="execution-web",
+        source_step_id="source-web",
+        step_execution_id="execution-web",
+        status="failed",
+        action_status="passed",
+        error_message="After-action observation incomplete.",
+        failure_category="artifact_error",
+        metadata={"action_effect": "completed", "replay_unavailable_reason": None},
+        duration_ms=37,
+        evidence_errors=[{"phase": "finalize", "error_message": "Full diagnostic " * 5000}],
+        phase_reports=[StepPhaseReport(step_id="execution-web", phase="invoke", status="passed", metadata={"harness_output": full_output, "safe_replay_params": replay_params})],
+    )
+    monkeypatch.setattr("fsq_agent.adapters.coding_agent._harness_tools.StepRunner.run_step", lambda *_, **__: full_result)
+    outputs = []
+
+    class Engine:
+        async def run(self, model, request, *, on_event):
+            tool = next(tool for tool in request.tools if tool.name == "click_on")
+            await on_event(AgentEvent(kind="tool_called", call_id="same-call", tool_name=tool.name, arguments={"target": replay_params["target"]}))
+            output = await tool.invoke(ToolCall(name=tool.name, call_id="same-call", arguments={"target": replay_params["target"]}))
+            outputs.append(output)
+            assert len(output) <= 16000
+            assert "runner_result" not in json.loads(output)
+            assert runtime._full_tool_results[("web-run", "web-task", "same-call")]["runner_result"] == full_result.model_dump(mode="json")
+            if outcome == "failure":
+                raise EngineError("model", "Engine stopped after execution.")
+            if outcome == "cancelled":
+                raise asyncio.CancelledError()
+            await on_event(AgentEvent(kind="tool_output", call_id="same-call", tool_name=tool.name, output=output))
+            return AgentResult(final_output=AgentFinalOutput(status="success", summary="Done."))
+
+    settings = Settings(agent_runtime=_azure_openai_settings(), harness={"platform": "web", "web": {"channel": "chrome"}})
+    browser = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+    browser.parent.mkdir(parents=True)
+    browser.write_text("", encoding="utf-8")
+    settings.harness.web.browser_executable_path = browser
+    settings.agent_runtime.local_tool_output.artifact_enabled = False
+    settings.output.runs_dir = tmp_path
+    runtime = DefaultCodingAgentRuntime(settings, _EmptyToolFactory(), lambda _: _FakeWebHarness(), engine=Engine())
+    events = []
+    operation = _run_in_context(runtime, Task(id="web-task", description="Save."), KnowledgeBundle(), [], "web-run", events.append)
+    if outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await operation
+    else:
+        await operation
+
+    assert runtime._full_tool_results == {}
+    if outcome == "success":
+        event = next(event for event in events if event.type == "tool_call_completed")
+        assert event.payload["runner_result"] == full_result.model_dump(mode="json")
+        assert event.payload["safe_replay_params"] == replay_params
+        assert event.payload["action_effect"] == "completed"
+        assert event.payload["error_message"] == full_result.error_message
+        assert event.tool_call_id == "same-call"
+        assert event.duration_ms == 37
+        assert len(event.tool_output_preview) <= 1003
+        assert event.tool_output_preview == runtime._preview(outputs[0])
+
+
+def test_runtime_full_web_facts_are_isolated_by_run_and_call_id():
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
+    runtime._remember_full_tool_result("run-a", "task", "call", {"tool_name": "click_on", "status": "failed", "action_effect": "completed", "runner_result": {"marker": "a"}})
+    runtime._remember_full_tool_result("run-b", "task", "call", {"tool_name": "click_on", "status": "failed", "action_effect": "indeterminate", "runner_result": {"marker": "b"}})
+    compact = '{"tool_name": "click_on", "status": "passed", "action_effect": "not_started"}'
+
+    event_b = runtime._map_stream_event(AgentEvent(kind="tool_output", call_id="call", output=compact), "run-b", "task")
+    event_a = runtime._map_stream_event(AgentEvent(kind="tool_output", call_id="call", output=compact), "run-a", "task")
+
+    assert event_b.payload["runner_result"] == {"marker": "b"}
+    assert event_b.payload["action_effect"] == "indeterminate"
+    assert event_b.payload["status"] == "failed"
+    assert event_a.payload["runner_result"] == {"marker": "a"}
+    assert event_a.payload["action_effect"] == "completed"
+    assert runtime._full_tool_results == {}
+
+
+def test_runtime_full_web_event_preserves_explicit_unavailable_replay_params():
+    runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=AgentRuntimeSettings()), _EmptyToolFactory())
+    runtime._remember_full_tool_result(
+        "run",
+        "task",
+        "unavailable",
+        {
+            "tool_name": "click_on",
+            "safe_replay_params": None,
+            "action_effect": "indeterminate",
+            "replay_unavailable_reason": "Canonical replay data unavailable.",
+        },
+    )
+    compact = '{"tool_name":"click_on","safe_replay_params":{"target":"unsafe raw argument"},"action_effect":"not_started"}'
+    event = runtime._map_stream_event(AgentEvent(kind="tool_output", call_id="unavailable", output=compact), "run", "task")
+
+    assert "safe_replay_params" in event.payload
+    assert event.payload["safe_replay_params"] is None
+    assert event.payload["action_effect"] == "indeterminate"
+    assert event.payload["replay_unavailable_reason"] == "Canonical replay data unavailable."
 
 
 def test_runtime_stream_message_output_uses_text_not_engine_object_repr() -> None:

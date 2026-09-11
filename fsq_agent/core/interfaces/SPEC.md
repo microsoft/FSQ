@@ -25,6 +25,8 @@ The package exports the approved protocols and factories used across module boun
 
 `core` and the existing `core.harness` compatibility surface re-export these same objects. Concrete harness and backend driver classes are not public.
 
+`WebDriverInterface` exposes Models-typed browser/page lifecycle, navigation, locator-based pointer/form/key operations, condition waits/assertions, structured snapshot/query/inspection, and trigger-bound events. Existing result metadata carries safe diagnostics without exposing Playwright handles or session-local element identifiers. Element parameters use one self-contained dynamic/replay locator contract. File-upload methods and runtime file-resolution collaborators are not part of this interface.
+
 ## Internal Structure
 
 - `__init__.py`: public protocol and factory exports.

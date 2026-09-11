@@ -4,6 +4,7 @@
 from pathlib import Path
 from typing import Any
 
+import pytest
 from pydantic import BaseModel
 
 from fsq_agent._capability_bootstrap import build_capability_registry
@@ -76,6 +77,23 @@ def test_runtime_secret_store_uses_private_settings_values_only(monkeypatch) -> 
     assert store.resolve("TEST_ACCOUNT_PASSWORD") == "workspace-value"
     assert settings.private_values() == {"TEST_ACCOUNT_PASSWORD": "workspace-value"}
     assert "workspace-value" not in str(settings.model_dump())
+
+
+def test_web_replay_unavailability_prevents_invocation():
+    harness = SuccessfulHarness()
+    runner = StepRunner(harness, capability_registry=build_capability_registry(platform="web"))
+    result = runner.run_step(
+        "run",
+        ExecutableStep(
+            step_id="unsafe",
+            action_name="navigate_to",
+            kind="action",
+            params={"page": "main", "url": "https://example.invalid/?access_token=synthetic-public-fixture"},
+        ),
+    )
+    assert result.status == "failed"
+    assert not any(call.startswith("invoke:") for call in harness.calls)
+    assert "synthetic-public-fixture" not in result.model_dump_json()
 
 
 class InvokeFailureHarness(SuccessfulHarness):
@@ -377,6 +395,39 @@ def test_step_runner_fails_runtime_secret_text_before_driver_invocation_when_mis
     assert harness.invoked_steps == []
 
 
+@pytest.mark.parametrize("available", [True, False])
+def test_web_prompt_secret_uses_existing_resolution_without_changing_replay_input(available: bool) -> None:
+    harness = RecordingHarness()
+    runner = StepRunner(
+        harness=harness,
+        capability_registry=build_capability_registry(platform="web"),
+        runtime_secret_store=RuntimeSecretStore(["APPROVAL_CODE"], {"APPROVAL_CODE": "private-approval-value"} if available else {}),
+    )
+    step = ExecutableStep(
+        step_id="prompt",
+        kind="action",
+        action_name="click_on",
+        params={
+            "target": {"page": "main", "steps": [{"kind": "role", "role": "button", "name": "Approve"}]},
+            "expect": {"kind": "dialog", "dialog_type": "prompt", "action": "accept", "prompt_text": {"text": "APPROVAL_CODE", "textType": "runtimeSecret"}},
+        },
+    )
+
+    result = runner.run_step(run_id="run-1", step=step)
+
+    if available:
+        assert result.status == "passed"
+        assert harness.invoked_steps[0].params["expect"]["prompt_text"] == {"text": "private-approval-value", "textType": "literal"}
+        assert result.phase_reports[1].metadata["safe_replay_params"]["expect"]["prompt_text"] == {"text": "APPROVAL_CODE", "textType": "runtimeSecret"}
+        assert "private-approval-value" not in result.model_dump_json()
+        assert all("private-approval-value" not in event.model_dump_json() for event in runner.events)
+    else:
+        assert result.status == "failed"
+        assert result.failure_category == "configuration_error"
+        assert harness.invoked_steps == []
+    assert step.params["expect"]["prompt_text"] == {"text": "APPROVAL_CODE", "textType": "runtimeSecret"}
+
+
 def test_step_runner_validates_capability_params_before_driver_invocation() -> None:
     harness = RecordingHarness()
     runner = StepRunner(harness=harness, capability_registry=build_capability_registry())
@@ -589,7 +640,7 @@ def test_step_runner_uses_normalized_ui_snapshot_for_web_driver_steps() -> None:
         step_id="step-1",
         kind="action",
         action_name="clickOn",
-        params={"target": "Search"},
+        params={"target": {"page": "main", "steps": [{"kind": "role", "role": "button", "name": "Search"}]}},
     )
 
     result = runner.run_step(run_id="run-1", step=step)

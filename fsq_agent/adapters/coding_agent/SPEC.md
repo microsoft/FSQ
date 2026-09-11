@@ -33,6 +33,7 @@ The main runtime owns the Harness returned by its default or supplied `harness_f
 - `__init__.py`: public factory and concrete-runtime export.
 - `_runtime.py`: FSQ runtime assembly, neutral provider/engine wiring, main/pre-plan/verification requests, context/artifact policy, and business event/result conversion.
 - `_harness_tools.py`: capability-to-neutral ToolBinding construction and StepRunner-backed invocation.
+- Private Web response projection helpers derive bounded model views from complete runner facts without owning observations or recording.
 
 ## Python Architecture
 
@@ -69,6 +70,9 @@ The construction-timeout boundary disposes any late-created owned Harness rather
 - Capability calls continue through Core `StepRunner`; AgentTool calls continue through Tools-owned behavior.
 - Every actual capability invocation receives stable source identity and a unique execution identity before action, including repeated calls and recovery attempts. New `runner_step_id` and result `step_id` alias `step_execution_id`. Core durable acknowledgements are independent of engine stream completion, final tool JSON, and context truncation; neutral progress events correlate identities without becoming a second execution ledger.
 - Structured `runner_result` preserves measured timing, primary action failure, secondary evidence errors, artifact availability, and identities before display truncation. Unknown measurements are null with reasons. AgentTools, pre-plan entries, and runner summary records do not inflate real capability counts; measured main-only usage is not estimated per step.
+- Web model-facing responses are a separate bounded projection: at most 16,000 serialized characters in total, with observation bodies at most 12,000 characters. Full runner facts remain durable and are not duplicated inline inside both summary and `runner_result`. Compact responses retain useful state, complete locators, explicit omission/coverage, evidence references, and effect-aware errors; they are not merely bare artifact paths.
+- Web full/scoped observation requests and errors obey the same model-response bound. Projection never truncates a locator, hides a completed/indeterminate action, or rebuilds event/evidence truth from the shortened JSON. Applicable post-action observations are reused rather than recaptured by the adapter.
+- Web projection is a presentation adaptation within the existing ToolBinding/result flow, not a new generic execution, event, or recording subsystem. Non-Web result envelopes and generic history policy remain unchanged.
 - Capability tool bindings format neutral invalid-input failures through their existing failure-result shape, including capability provenance, without executing StepRunner or a platform action. The engine retains call IDs and returns the failure to the model for continuation.
 - Harness construction remains lazy and browser/application lifecycle remains explicit capability behavior.
 - CLI and Control Plane inject the same runtime factory at composition boundaries.
@@ -81,3 +85,5 @@ Model-paired engine construction, all three runtime operations, output contracts
 Effort verification uses configured non-default values to establish propagation through all three Agent phases and visual evaluator composition, with the same task snapshot and no extra inference. Runtime behavior follows the selected preset's value rather than fixing a mutable platform default in tests.
 
 Context-binding verification proves that the shared Core sink receives actual capability facts once even when progress delivery fails or model-facing outputs are shortened, and that cancellation preserves persisted facts and backend resource cleanup.
+
+Web verification measures the complete serialized tool envelope, confirms full durable facts survive bounded projection, and exercises locator-bearing schema descriptions/examples through actual supported strict-schema conversion and continuation paths. Historical helper tools retain their generic behavior.

@@ -80,9 +80,9 @@ def test_public_web_example_matches_current_executable_contract() -> None:
     assert [step.action_name for step in steps] == [
         "start_browser",
         "navigate_to",
-        "type_text",
+        "fill_text",
         "press_key",
-        "type_text",
+        "fill_text",
         "press_key",
         "click_on",
         "click_on",
@@ -92,20 +92,17 @@ def test_public_web_example_matches_current_executable_contract() -> None:
     ]
     assert steps[2].params["text"] == "Review FSQ evidence"
     assert steps[2].params["textType"] == "literal"
-    assert steps[2].params["clear"] is True
+    assert "clear" not in steps[2].params
     assert steps[4].params["text"] == "Publish v0.1.0"
     assert steps[4].params["textType"] == "literal"
-    assert steps[4].params["clear"] is True
-    assert steps[6].params["locator"] == {"css": ".todo-list li:nth-child(1) input.toggle"}
-    assert "Active" in steps[7].params["target"]
-    assert steps[8].params == {
-        "locator": {"text": "Publish v0.1.0"},
-        "optional": False,
-    }
-    assert steps[9].params == {
-        "locator": {"text": "Review FSQ evidence"},
-        "optional": False,
-    }
+    assert "clear" not in steps[4].params
+    assert steps[3].params["scope"]["target"] == steps[2].params["target"]
+    assert steps[5].params["scope"]["target"] == steps[4].params["target"]
+    assert [item["kind"] for item in steps[6].params["target"]["steps"]] == ["css", "role", "first", "css"]
+    assert steps[6].params["target"]["steps"][-1]["selector"] == "input.toggle"
+    assert steps[7].params["target"]["steps"][0]["name"] == "Active"
+    assert steps[8].params["target"]["steps"] == [{"kind": "text", "text": "Publish v0.1.0", "exact": True}]
+    assert steps[9].params["target"]["steps"] == [{"kind": "text", "text": "Review FSQ evidence", "exact": True}]
 
 
 def test_windows_strict_replay_allows_null_targets(tmp_path: Path) -> None:
@@ -386,25 +383,27 @@ platform: web
 ---
 - startBrowser
 - navigateTo:
+    page: main
     url: https://www.bing.com
-- uiSnapshot
+- uiSnapshot:
+    scope: {kind: page, page: main}
 - clickOn:
-    target: Search box
-    locator:
-      role: textbox
-      name: Search
+    target: {page: main, steps: [{kind: role, role: textbox, name: Search}]}
 - typeText:
     text: playwright
-    target: Search box
+    target: {page: main, steps: [{kind: role, role: textbox, name: Search}]}
 - pressKey:
+    scope: {kind: element, target: {page: main, steps: [{kind: role, role: textbox, name: Search}]}}
     key: Enter
 - waitFor:
-    text: playwright
+    condition:
+      kind: text
+      scope: {kind: page, page: main}
+      text: {kind: contains, value: playwright}
     timeout_ms: 5000
 - assertText:
-    target: Results
-    text:
-      contains: playwright
+    target: {page: main, steps: [{kind: role, role: main, name: Results}]}
+    text: {kind: contains, value: playwright}
 - closeBrowser
 """,
         encoding="utf-8",
@@ -436,16 +435,20 @@ platform: web
         "teardown",
     ]
     assert steps[0].params == {}
-    assert steps[1].params == {"url": "https://www.bing.com"}
-    assert {key: value for key, value in steps[3].params.items() if key != "textType"} == {"target": "Search box", "locator": {"role": "textbox", "name": "Search"}}
-    assert steps[4].params == {"target": "Search box", "text": "playwright", "textType": "literal"}
-    assert steps[6].params == {"text": "playwright", "timeout_ms": 5000}
-    assert steps[7].params == {"target": "Results", "text": {"contains": "playwright"}}
+    assert steps[1].params == {"page": "main", "url": "https://www.bing.com", "wait_until": "load", "timeout_ms": 10000}
+    assert steps[3].params["target"]["steps"][0]["name"] == "Search"
+    assert steps[4].params["target"] == steps[3].params["target"]
+    assert steps[4].params["text"] == "playwright"
+    assert steps[4].params["textType"] == "literal"
+    assert steps[4].params["delay_ms"] == 0
+    assert steps[6].params["condition"]["text"] == {"kind": "contains", "value": "playwright"}
+    assert steps[6].params["timeout_ms"] == 5000
+    assert steps[7].params["text"] == {"kind": "contains", "value": "playwright"}
     assert steps[8].params == {}
     assert all(step.metadata["platform"] == "web" for step in steps)
 
 
-def test_fsq_executable_step_adapter_accepts_web_locator_ref(tmp_path: Path) -> None:
+def test_fsq_executable_step_adapter_rejects_web_locator_ref(tmp_path: Path) -> None:
     case_path = tmp_path / "web_ref_case.fsq.yaml"
     case_path.write_text(
         """
@@ -461,8 +464,8 @@ platform: web
     )
     case = FsqCaseLoader().load_case(case_path)
 
-    steps = _web_adapter().to_executable_steps(case)
-    assert steps[0].params["locator"] == {"ref": "e83"}
+    with pytest.raises(ConfigurationError, match="Invalid FSQ command parameters"):
+        _web_adapter().to_executable_steps(case)
 
 
 def test_fsq_executable_step_adapter_preserves_web_text_type_runtime_secret(tmp_path: Path) -> None:
@@ -476,7 +479,7 @@ platform: web
 - typeText:
     text: TEST_ACCOUNT_PASSWORD
     textType: runtimeSecret
-    target: Password field
+    target: {page: main, steps: [{kind: label, text: Password}]}
 """,
         encoding="utf-8",
     )
@@ -485,7 +488,13 @@ platform: web
     steps = _web_adapter().to_executable_steps(case)
 
     assert steps[0].action_name == "type_text"
-    assert steps[0].params == {"text": "TEST_ACCOUNT_PASSWORD", "textType": "runtimeSecret", "target": "Password field"}
+    assert steps[0].params == {
+        "text": "TEST_ACCOUNT_PASSWORD",
+        "textType": "runtimeSecret",
+        "target": {"page": "main", "steps": [{"kind": "label", "text": "Password", "exact": True}]},
+        "timeout_ms": 10000,
+        "delay_ms": 0,
+    }
 
 
 def test_fsq_executable_step_adapter_resolves_macos_aliases_and_asserts_order(tmp_path: Path) -> None:

@@ -42,15 +42,11 @@ RunnerEventType: TypeAlias = Literal[
 EvidenceArtifactKind: TypeAlias = Literal["screenshot", "ui_tree", "ui_snapshot", "tool_call", "log", "json", "text", "other"]
 HarnessPlatform: TypeAlias = Literal["android", "ios", "macos", "windows", "web"]
 AndroidSwipeDirection: TypeAlias = Literal["up", "down", "left", "right"]
-WebMouseButton: TypeAlias = Literal["left", "right", "middle"]
-WebWaitUntil: TypeAlias = Literal["commit", "domcontentloaded", "load", "networkidle"]
-WebWaitForState: TypeAlias = Literal["visible", "hidden", "attached", "detached"]
 WindowsMouseButton: TypeAlias = Literal["left", "right", "middle"]
 MacOSOrderDirection: TypeAlias = Literal["vertical", "horizontal"]
 
 TEXT_TYPE_DESCRIPTION = "Use literal for plain text; use runtimeSecret when text names an allowlisted runtime secret."
 ANDROID_TARGET_SCHEMA_DESCRIPTION = "Provide target or non-empty locator. Prefer a semantic target from the current Android UI snapshot; use locator when target text is unavailable."
-WEB_TARGET_SCHEMA_DESCRIPTION = "Provide target or non-empty locator. Prefer an exact snapshot target from the current Web page snapshot; use locator when target text is unavailable."
 WINDOWS_TARGET_SCHEMA_DESCRIPTION = "Provide a non-empty locator. The target field is descriptive only and is not used for Windows control lookup."
 MACOS_TARGET_SCHEMA_DESCRIPTION = "Provide target, non-empty locator, or point. Prefer target or locator for UI elements and point only for coordinate-based actions."
 
@@ -365,202 +361,6 @@ class AndroidAssertWithAIParams(BaseModel):
         raise ValueError("requires non-empty prompt")
 
 
-class WebLocator(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        json_schema_extra={"description": "Structured Web locator. Provide at least one populated locator field."},
-    )
-
-    role: str | None = Field(default=None, description="ARIA role to match.")
-    name: str | None = Field(default=None, description="Accessible name to match.")
-    text: str | None = Field(default=None, description="Visible text to match.")
-    label: str | None = Field(default=None, description="Associated label text to match.")
-    placeholder: str | None = Field(default=None, description="Input placeholder text to match.")
-    # Names mirror the authored Web locator payload contract.
-    testId: str | None = Field(default=None, description="Test id attribute to match.")  # noqa: N815
-    css: str | None = Field(default=None, description="CSS selector to match.")
-    xpath: str | None = Field(default=None, description="XPath expression to match.")
-    altText: str | None = Field(default=None, description="Image alt text to match.")  # noqa: N815
-    title: str | None = Field(default=None, description="Element title attribute to match.")
-    ref: str | None = Field(default=None, description="Current Web snapshot reference to match.")
-
-    def has_value(self) -> bool:
-        return any(isinstance(value, str) and value.strip() for value in self.model_dump().values())
-
-
-class _WebTargetParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": WEB_TARGET_SCHEMA_DESCRIPTION})
-
-    target: str | None = Field(default=None, description="Web exact snapshot target from the current page snapshot.")
-    locator: WebLocator | None = Field(default=None, description="Optional structured Web locator. Provide at least one populated locator field.")
-
-    @model_validator(mode="after")
-    def _require_target(self) -> "_WebTargetParams":
-        if self._has_target_value():
-            return self
-        raise ValueError("requires target or non-empty locator")
-
-    def _has_target_value(self) -> bool:
-        if isinstance(self.target, str) and self.target.strip():
-            return True
-        return self.locator is not None and self.locator.has_value()
-
-
-class WebStartBrowserParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Start or reuse the configured Web browser. No parameters are accepted."})
-
-
-class WebCloseBrowserParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Close the active Web browser if present. No parameters are accepted."})
-
-
-class WebNavigateToParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Navigate the active Web page to a non-empty URL."})
-
-    url: str = Field(description="Non-empty absolute or application-relative URL to navigate to.")
-    # Name mirrors the authored Playwright navigation payload contract.
-    waitUntil: WebWaitUntil | None = Field(default=None, description="Optional page lifecycle state to wait for after navigation.")  # noqa: N815
-
-    @model_validator(mode="after")
-    def _require_url(self) -> "WebNavigateToParams":
-        if self.url.strip():
-            return self
-        raise ValueError("requires non-empty url")
-
-
-class WebNavigateBackParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Navigate the active Web page back in browser history."})
-
-    # Name mirrors the authored Playwright navigation payload contract.
-    waitUntil: WebWaitUntil | None = Field(default=None, description="Optional page lifecycle state to wait for after back navigation.")  # noqa: N815
-
-
-class WebClickOnParams(_WebTargetParams):
-    button: WebMouseButton | None = Field(default=None, description="Mouse button to click. Defaults to the backend left-button behavior.")
-    double: bool | None = Field(default=None, description="When true, perform a double click.")
-
-
-class WebTypeTextParams(_WebTargetParams):
-    text: str = Field(description="Literal text to type, or a runtime secret name when textType is runtimeSecret.")
-    # Name mirrors the authored text-entry payload contract.
-    textType: TextSourceType = Field(default="literal", description=TEXT_TYPE_DESCRIPTION)  # noqa: N815
-    clear: bool | None = Field(default=None, description="When true, clear existing target text before typing.")
-
-    @model_validator(mode="after")
-    def _require_text(self) -> "WebTypeTextParams":
-        if isinstance(self.text, str):
-            return self
-        raise ValueError("requires text")
-
-
-class WebSelectOptionParams(_WebTargetParams):
-    value: str | None = Field(default=None, description="Option value to select.")
-    label: str | None = Field(default=None, description="Visible option label to select.")
-    index: int | None = Field(default=None, ge=0, description="Zero-based option index to select.")
-    values: list[str] | None = Field(default=None, description="Multiple option values to select.")
-
-    @model_validator(mode="after")
-    def _require_option(self) -> "WebSelectOptionParams":
-        has_single = any(isinstance(value, str) and value.strip() for value in [self.value, self.label])
-        has_index = self.index is not None
-        has_values = self.values is not None and any(isinstance(value, str) and value.strip() for value in self.values)
-        if has_single or has_index or has_values:
-            return self
-        raise ValueError("requires value, label, index, or values")
-
-
-class WebHoverOnParams(_WebTargetParams):
-    pass
-
-
-class WebPressKeyParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Press one key in the active Web page."})
-
-    key: str = Field(description="Non-empty key or shortcut string supported by the Web backend.")
-
-    @model_validator(mode="after")
-    def _require_key(self) -> "WebPressKeyParams":
-        if self.key.strip():
-            return self
-        raise ValueError("requires non-empty key")
-
-
-class WebWaitForParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Wait for target, locator, text, url, or timeout_ms in the active Web page."})
-
-    target: str | None = Field(default=None, description="Exact snapshot target to wait for.")
-    locator: WebLocator | None = Field(default=None, description="Structured Web locator to wait for.")
-    text: str | None = Field(default=None, description="Visible text to wait for.")
-    url: str | None = Field(default=None, description="URL text or pattern to wait for.")
-    state: WebWaitForState | None = Field(default=None, description="Optional element state to wait for when target or locator is used.")
-    timeout_ms: int | None = Field(default=None, ge=1, le=60000, description="Optional bounded wait timeout in milliseconds.")
-
-    @model_validator(mode="after")
-    def _require_wait_condition(self) -> "WebWaitForParams":
-        if isinstance(self.target, str) and self.target.strip():
-            return self
-        if self.locator is not None and self.locator.has_value():
-            return self
-        if isinstance(self.text, str) and self.text.strip():
-            return self
-        if isinstance(self.url, str) and self.url.strip():
-            return self
-        if self.timeout_ms is not None:
-            return self
-        raise ValueError("requires target, locator, text, url, or timeout_ms")
-
-
-class WebTakeScreenshotParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Capture a Web page screenshot for evidence or debugging."})
-
-    # Names mirror the authored Playwright screenshot payload contract.
-    fullPage: bool | None = Field(default=None, description="When true, capture the full page instead of only the viewport.")  # noqa: N815
-    omitBackground: bool | None = Field(default=None, description="When true, allow transparent background where supported.")  # noqa: N815
-
-
-class WebUiSnapshotParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Read the current Web page snapshot. No parameters are accepted."})
-
-
-class WebAssertVisibleParams(_WebTargetParams):
-    optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
-
-
-class WebAssertNotVisibleParams(_WebTargetParams):
-    optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
-
-
-class WebTextAssertion(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Web text assertion. Provide contains or equals."})
-
-    contains: str | None = Field(default=None, description="Expected substring in target text.")
-    equals: str | None = Field(default=None, description="Expected exact target text.")
-
-    @model_validator(mode="after")
-    def _require_text_assertion(self) -> "WebTextAssertion":
-        if isinstance(self.contains, str) or isinstance(self.equals, str):
-            return self
-        raise ValueError("requires contains or equals")
-
-
-class WebAssertTextParams(_WebTargetParams):
-    text: WebTextAssertion = Field(description="Expected text predicate for the target.")
-    optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
-
-
-class WebAssertWithAIParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Evaluate an explicit Web visual assertion with AI."})
-
-    prompt: str = Field(description="Non-empty visual assertion prompt to evaluate against current evidence.")
-    optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
-
-    @model_validator(mode="after")
-    def _require_prompt(self) -> "WebAssertWithAIParams":
-        if self.prompt.strip():
-            return self
-        raise ValueError("requires non-empty prompt")
-
-
 @dataclass(frozen=True)
 class AndroidActionDefinition:
     fsq_action_name: str
@@ -587,36 +387,6 @@ ANDROID_ACTION_DEFINITIONS: tuple[AndroidActionDefinition, ...] = (
     AndroidActionDefinition("assertWithAI", "assert_with_ai", AndroidAssertWithAIParams, "assertion"),
 )
 ANDROID_ACTION_DEFINITIONS_BY_NAME: dict[str, AndroidActionDefinition] = {definition.fsq_action_name: definition for definition in ANDROID_ACTION_DEFINITIONS}
-
-
-@dataclass(frozen=True)
-class WebActionDefinition:
-    fsq_action_name: str
-    driver_method: str
-    params_model: type[BaseModel]
-    step_kind: ExecutableStepKind
-    owner: Literal["driver", "platform", "harness"] = "driver"
-
-
-WEB_ACTION_DEFINITIONS: tuple[WebActionDefinition, ...] = (
-    WebActionDefinition("startBrowser", "start_browser", WebStartBrowserParams, "setup"),
-    WebActionDefinition("closeBrowser", "close_browser", WebCloseBrowserParams, "teardown"),
-    WebActionDefinition("navigateTo", "navigate_to", WebNavigateToParams, "action"),
-    WebActionDefinition("navigateBack", "navigate_back", WebNavigateBackParams, "action"),
-    WebActionDefinition("clickOn", "click_on", WebClickOnParams, "action"),
-    WebActionDefinition("typeText", "type_text", WebTypeTextParams, "action"),
-    WebActionDefinition("selectOption", "select_option", WebSelectOptionParams, "action"),
-    WebActionDefinition("hoverOn", "hover_on", WebHoverOnParams, "action"),
-    WebActionDefinition("pressKey", "press_key", WebPressKeyParams, "action"),
-    WebActionDefinition("waitFor", "wait_for", WebWaitForParams, "action"),
-    WebActionDefinition("takeScreenshot", "take_screenshot", WebTakeScreenshotParams, "observation"),
-    WebActionDefinition("uiSnapshot", "ui_snapshot", WebUiSnapshotParams, "observation"),
-    WebActionDefinition("assertVisible", "assert_visible", WebAssertVisibleParams, "assertion"),
-    WebActionDefinition("assertNotVisible", "assert_not_visible", WebAssertNotVisibleParams, "assertion"),
-    WebActionDefinition("assertText", "assert_text", WebAssertTextParams, "assertion"),
-    WebActionDefinition("assertWithAI", "assert_with_ai", WebAssertWithAIParams, "assertion"),
-)
-WEB_ACTION_DEFINITIONS_BY_NAME: dict[str, WebActionDefinition] = {definition.fsq_action_name: definition for definition in WEB_ACTION_DEFINITIONS}
 
 
 class WindowsLocator(BaseModel):

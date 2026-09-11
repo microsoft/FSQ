@@ -167,6 +167,7 @@ class DefaultCodingAgentRuntime:
         self._harness_tool_names: set[str] = set()
         self._harness_tool_schemas: dict[str, Any] = {}
         self._stream_tool_calls: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._full_tool_results: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def _discover_agent_tool_names(self, tool_factory: AgentToolAdapter) -> set[str]:
         registry = getattr(tool_factory, "registry", None)
@@ -284,6 +285,8 @@ class DefaultCodingAgentRuntime:
                     platform=self.settings.harness.platform,
                     evidence_sink=evidence_sink,
                     cancellation_check=cancellation_check,
+                    artifact_store=self._tool_artifact_store(run_id),
+                    on_full_result=lambda call_id, payload: self._remember_full_tool_result(run_id, task.id, call_id, payload),
                 )
                 self._harness_tool_names = harness_adapter.tool_names
                 self._harness_tool_schemas = harness_adapter.schemas_by_name
@@ -414,6 +417,7 @@ class DefaultCodingAgentRuntime:
                         logging.getLogger(__name__).warning("Cancellation diagnostics failed (%s)", type(diagnostic_error).__name__)
             raise
         finally:
+            self._clear_tool_facts(run_id, task.id)
             await self._finish_cleanup(self._dispose_run(harness, provider_session), failed=primary_failure)
 
         duration_ms = int((time.perf_counter() - started) * 1000)
@@ -884,7 +888,7 @@ class DefaultCodingAgentRuntime:
 
     def _build_request(self, *, name: str, instructions: str, model_input: str, tools: list[ToolBinding], output_type: type[BaseModel], run_id: str = "") -> AgentRequest:
         local_output = self.settings.agent_runtime.local_tool_output
-        artifact_store = ToolArtifactStore(self.settings.output.runs_dir, run_id, local_output) if run_id and local_output.artifact_enabled else None
+        artifact_store = self._tool_artifact_store(run_id)
         input_filter = _ToolOutputBudgetFilter(
             local_output.recent_inline_output_count,
             local_output.full_output_max_chars,
@@ -915,9 +919,20 @@ class DefaultCodingAgentRuntime:
         try:
             return await engine.run(model, request, on_event=on_event)
         finally:
-            for key in list(self._stream_tool_calls):
+            self._clear_tool_facts(run_id, task_id)
+
+    def _tool_artifact_store(self, run_id: str) -> ToolArtifactStore | None:
+        local_output = self.settings.agent_runtime.local_tool_output
+        return ToolArtifactStore(self.settings.output.runs_dir, run_id, local_output) if run_id and local_output.artifact_enabled else None
+
+    def _remember_full_tool_result(self, run_id: str, task_id: str, call_id: str, payload: dict[str, Any]) -> None:
+        self._full_tool_results[(run_id, task_id, call_id)] = payload
+
+    def _clear_tool_facts(self, run_id: str, task_id: str) -> None:
+        for cache in (self._stream_tool_calls, self._full_tool_results):
+            for key in list(cache):
                 if key[:2] == (run_id, task_id):
-                    del self._stream_tool_calls[key]
+                    del cache[key]
 
     def _build_harness(self, run_id: str) -> HarnessInterface:
         if self.harness_factory is not None:
@@ -968,8 +983,9 @@ class DefaultCodingAgentRuntime:
             )
         if event.kind == "tool_output":
             output = event.output
-            payload = self._tool_output_payload(output)
             tool_call_id = event.call_id
+            full_result = self._full_tool_results.pop((run_id, task_id, tool_call_id or ""), None)
+            payload = self._tool_output_payload(full_result if full_result is not None else output)
             remembered = self._stream_tool_calls.pop((run_id, task_id, tool_call_id or ""), {})
             tool_name = payload.get("tool_name") or remembered.get("tool_name") or event.tool_name
             duration_ms = payload.get("duration_ms")
@@ -1186,17 +1202,7 @@ class DefaultCodingAgentRuntime:
         return "unknown"
 
     def _artifact_path_from_output(self, output: Any) -> str | None:
-        if isinstance(output, str):
-            text = output
-        else:
-            text = str(output) if output is not None else ""
-        if not text:
-            return None
-        try:
-            payload = json.loads(text)
-        # Arbitrary malformed tool output is treated as having no artifact reference.
-        except json.JSONDecodeError:
-            return None
+        payload = output if isinstance(output, dict) else self._json_payload(output)
         if not isinstance(payload, dict):
             return None
         artifact = payload.get("artifact")
@@ -1213,7 +1219,7 @@ class DefaultCodingAgentRuntime:
 
     def _tool_output_payload(self, output: Any) -> dict[str, Any]:
         payload: dict[str, Any] = {"artifact_path": self._artifact_path_from_output(output)}
-        parsed = self._json_payload(output)
+        parsed = output if isinstance(output, dict) else self._json_payload(output)
         if not isinstance(parsed, dict):
             return payload
         parsed_tool_name = parsed.get("tool_name")
@@ -1238,6 +1244,11 @@ class DefaultCodingAgentRuntime:
             "runner_step_id",
             "source_step_id",
             "step_execution_id",
+            "action_status",
+            "action_effect",
+            "replay_unavailable_reason",
+            "capability_name",
+            "executor_kind",
         }
         for key in safe_keys:
             if key in parsed:

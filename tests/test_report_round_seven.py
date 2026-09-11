@@ -60,7 +60,7 @@ def test_renamed_public_save_supports_strict_baseline_related_and_export(tmp_pat
     origin_metadata = json.loads((origin_dir / "run.json").read_text())
     origin_metadata["artifacts"]["candidate_case"] = candidate.name
     (origin_dir / "run.json").write_text(json.dumps(origin_metadata))
-    candidate.write_text("schemaVersion: fsq.ai-test/v1\nname: original\nplatform: web\n---\n- clickOn:\n    target: Save\n")
+    candidate.write_text("schemaVersion: fsq.ai-test/v1\nname: original\nplatform: web\n---\n- clickOn:\n    target: {page: main, steps: [{kind: role, role: button, name: Save}]}\n")
     candidate.write_bytes(FsqCaseSerializer(build_capability_registry(platform="web").snapshot()).serialize(FsqCaseLoader().load_text(candidate.read_text(), candidate)))
     recording_path = origin_dir / "recording.json"
     recording = json.loads(recording_path.read_text())

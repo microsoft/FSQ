@@ -11,7 +11,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from fsq_agent.core.interfaces import CapabilityRegistryInterface, EvidenceJournalSink, HarnessInterface, RuntimeSecretResolver
 from fsq_agent.models import (
@@ -32,6 +32,7 @@ from fsq_agent.models import (
     RunnerStepResult,
     StepPhase,
     StepPhaseReport,
+    WebLocator,
 )
 
 
@@ -423,7 +424,7 @@ class StepRunner:
         if capability is None:
             return step
         try:
-            parsed = capability.params_model.model_validate(step.params)
+            parsed = capability.params_model.model_validate(step.params, context={"safe_value": self._safe_value, "params_type": capability.params_model})
         except ValidationError as exc:
             raise ConfigurationError(
                 "Invalid capability parameters.",
@@ -447,9 +448,17 @@ class StepRunner:
     def _resolve_runtime_secret_text_step(self, step: ExecutableStep, capability: CapabilityDefinition | None) -> ExecutableStep:
         if capability is None:
             return step
-        params = dict(step.params)
+        parsed = capability.params_model.model_validate(step.params)
+        params = self._resolve_runtime_secret_text_params(parsed, step)
+        return step.model_copy(update={"params": params}) if params != step.params else step
+
+    def _resolve_runtime_secret_text_params(self, parsed: BaseModel, step: ExecutableStep) -> dict[str, object]:
+        params = parsed.model_dump(mode="json", exclude_none=True)
+        for name, value in parsed:
+            if isinstance(value, BaseModel):
+                params[name] = self._resolve_runtime_secret_text_params(value, step)
         if params.get("textType") != "runtimeSecret":
-            return step
+            return params
         text = params.get("text")
         if not isinstance(text, str):
             raise ConfigurationError(
@@ -464,7 +473,7 @@ class StepRunner:
         if params["text"]:
             self._secret_values.add(params["text"])
         params["textType"] = "literal"
-        return step.model_copy(update={"params": params})
+        return params
 
     def _finish_step(
         self,
@@ -883,10 +892,14 @@ def _credential_safe(value, secrets=(), depth=0):
         "credentials",
     }
     if isinstance(value, dict):
-        return {
+        is_locator, locator = WebLocator.preserve_for_redaction(value, secrets)
+        if is_locator:
+            return locator
+        safe = {
             key: "***" if re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", unquote(str(key)).strip()).lower().replace("-", "_") in keys else _credential_safe(item, secrets, depth + 1)
             for key, item in value.items()
         }
+        return WebLocator.finish_redaction(value, safe)
     if isinstance(value, (tuple, list)):
         return [_credential_safe(item, secrets, depth + 1) for item in value]
     if not isinstance(value, str):

@@ -1,8 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
 import sys
 import threading
+import time
 import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -71,6 +73,9 @@ class _ClickFakeLocator:
 
     def is_visible(self) -> bool:
         return self.visible
+
+    def is_enabled(self, **kwargs: object) -> bool:
+        return True
 
     def click(self, **kwargs: object) -> None:
         self.clicked = True
@@ -163,7 +168,7 @@ def test_playwright_web_driver_runs_page_operations_on_one_worker_thread() -> No
 
     def navigate(url: str) -> dict[str, object]:
         external_thread_ids.add(threading.get_ident())
-        return driver.navigate_to(WebNavigateToParams(url=url))
+        return driver.navigate_to(WebNavigateToParams(page="main", url=url))
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(
@@ -173,20 +178,18 @@ def test_playwright_web_driver_runs_page_operations_on_one_worker_thread() -> No
             )
         )
 
-    snapshot = driver.ui_snapshot(WebUiSnapshotParams())
+    snapshot = driver.ui_snapshot(WebUiSnapshotParams(scope={"kind": "page", "page": "main"}))
     context = driver.context()
     driver.close()
 
-    assert start == {"status": "passed", "output": {"already_started": False, "url": "about:blank"}}
+    assert start["status"] == "passed"
+    assert start["output"] == {"already_started": False, "url": "about:blank"}
     assert [result["status"] for result in results] == ["passed", "passed"]
-    assert snapshot == {
-        "url": "https://example.com/two",
-        "snapshot_type": "aria",
-        "snapshot": '- document "Example" [ref=e1]',
-        "coverage": {"status": "complete", "scope": "observed_aria_snapshot", "reason": "backend_observation_retained_without_clipping"},
-        "truncated": False,
-    }
-    assert driver.fake_page.aria_kwargs == {"mode": "ai"}
+    assert snapshot["page"]["url"] == "https://example.com/two"
+    assert snapshot["full_source"]["semantic_text"]
+    assert "ref=" not in json.dumps(snapshot)
+    assert driver.fake_page.aria_kwargs["mode"] == "ai"
+    assert 0 < driver.fake_page.aria_kwargs["timeout"] <= 10000
     assert context["current_url"] == "https://example.com/two"
     assert set(driver.fake_page.thread_ids) == {driver.create_thread_id}
     assert driver.create_thread_id not in external_thread_ids
@@ -195,14 +198,12 @@ def test_playwright_web_driver_runs_page_operations_on_one_worker_thread() -> No
 def test_playwright_web_driver_ui_snapshot_falls_back_when_aria_snapshot_is_empty() -> None:
     driver = PlaywrightWebDriver(page=_TextFallbackFakePage())
 
-    snapshot = driver.ui_snapshot(WebUiSnapshotParams())
+    snapshot = driver.ui_snapshot(WebUiSnapshotParams(scope={"kind": "page", "page": "main"}))
 
-    assert snapshot == {
-        "url": "https://example.com",
-        "snapshot_type": "text",
-        "title": "Example Search",
-        "text": "Search box\nResults",
-    }
+    assert snapshot["page"]["url"] == "https://example.com"
+    assert snapshot["coverage"]["semantic"] == "text_only"
+    assert snapshot["coverage"]["locators"] == "unavailable"
+    assert snapshot["full_source"]["semantic_text"] == "Search box\nResults"
 
 
 def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,7 +225,8 @@ def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch
     finally:
         driver.close()
 
-    assert start == {"status": "passed", "output": {"already_started": False, "url": "about:blank"}}
+    assert start["status"] == "passed"
+    assert start["output"] == {"already_started": False, "url": "about:blank"}
     assert browser_type.launch_kwargs == {"headless": False, "channel": "chrome", "executable_path": str(Path("C:/Chrome/chrome.exe"))}
     assert browser.context_kwargs == {"viewport": {"width": 1024, "height": 768}}
     assert context["metadata"]["channel"] == "chrome"
@@ -402,26 +404,27 @@ def test_playwright_web_driver_accepts_all_supported_channels(channel: str) -> N
         driver.close()
 
 
-def test_click_on_parses_truncated_snapshot_target_as_prefix() -> None:
+def test_click_on_keeps_authored_ellipsis_exact() -> None:
     locator = _ClickFakeLocator()
     page = _ClickFakePage(locator)
     driver = PlaywrightWebDriver(page=page)
 
-    result = driver.click_on(WebClickOnParams(target='link "GitHub - microsoft/FSQ: FSQ is an evidence-first agent ..." [ref=e12]'))
+    result = driver.click_on(WebClickOnParams(target={"page": "main", "steps": [{"kind": "role", "role": "link", "name": "GitHub ..."}]}))
 
     assert result["status"] == "passed"
     role, kwargs = page.role_calls[0]
     assert role == "link"
-    assert kwargs["name"].match("GitHub - microsoft/FSQ: FSQ is an evidence-first agent harness")
+    assert kwargs["name"] == "GitHub ..."
+    assert kwargs["exact"] is True
     assert locator.clicked is True
 
 
-def test_click_on_composes_role_and_text_locator() -> None:
+def test_click_on_composes_role_and_conjunctive_filter() -> None:
     locator = _ClickFakeLocator()
     page = _ClickFakePage(locator)
     driver = PlaywrightWebDriver(page=page)
 
-    result = driver.click_on(WebClickOnParams(locator={"role": "link", "text": "microsoft/FSQ"}))
+    result = driver.click_on(WebClickOnParams(target={"page": "main", "steps": [{"kind": "role", "role": "link"}, {"kind": "filter", "text": {"kind": "contains", "value": "microsoft/FSQ"}}]}))
 
     assert result["status"] == "passed"
     assert len(locator.filters) == 1
@@ -430,9 +433,10 @@ def test_click_on_composes_role_and_text_locator() -> None:
 def test_click_on_reports_ambiguous_target() -> None:
     driver = PlaywrightWebDriver(page=_ClickFakePage(_ClickFakeLocator(count=2)))
 
-    result = driver.click_on(WebClickOnParams(locator={"role": "link"}))
+    result = driver.click_on(WebClickOnParams(target={"page": "main", "steps": [{"kind": "role", "role": "link"}]}))
 
-    assert result["failure_category"] == "target_ambiguous"
+    assert result["failure_category"] == "target_resolution_error"
+    assert result["metadata"]["error_code"] == "target_ambiguous"
     assert result["metadata"]["match_count"] == 2
 
 
@@ -448,7 +452,7 @@ def test_playwright_web_driver_does_not_launch_until_start_browser(monkeypatch: 
 
     try:
         context = driver.context()
-        result = driver.navigate_to(WebNavigateToParams(url="https://example.com"))
+        result = driver.navigate_to(WebNavigateToParams(page="main", url="https://example.com"))
     finally:
         driver.close()
 
@@ -478,10 +482,126 @@ def test_playwright_web_driver_start_and_close_browser_are_idempotent(monkeypatc
     second_close = driver.close_browser(WebCloseBrowserParams())
     driver.close()
 
-    assert first_start == {"status": "passed", "output": {"already_started": False, "url": "about:blank"}}
-    assert second_start == {"status": "passed", "output": {"already_started": True, "url": "about:blank"}}
-    assert first_close == {"status": "passed", "output": {"already_closed": False}}
-    assert second_close == {"status": "passed", "output": {"already_closed": True}}
+    assert first_start["output"] == {"already_started": False, "url": "about:blank"}
+    assert second_start["output"] == {"already_started": True, "url": "about:blank"}
+    assert first_close["output"] == {"already_closed": False}
+    assert second_close["output"] == {"already_closed": True}
+    assert all(result["metadata"]["action_effect"] == "completed" for result in (first_start, second_start, first_close, second_close))
     assert browser.context.closed is True
     assert browser.closed is True
     assert playwright.stopped is True
+
+
+def test_failed_disposal_retries_remaining_resources_on_original_worker() -> None:
+    driver = _ThreadedFakePlaywrightDriver()
+    driver.start_browser(WebStartBrowserParams())
+    calls = []
+
+    def close_context():
+        calls.append(threading.get_ident())
+        if len(calls) == 1:
+            raise OSError("dispose failed")
+
+    driver._run_sync(lambda: setattr(driver, "_context", types.SimpleNamespace(close=close_context)))
+    try:
+        with pytest.raises(OSError, match="dispose failed"):
+            driver.close()
+        assert driver._executor is not None
+    finally:
+        driver.close()
+    assert calls == [driver.create_thread_id, driver.create_thread_id]
+    assert driver._executor is None
+
+
+def test_unavailable_semantic_and_text_observation_is_a_normalized_failure() -> None:
+    class Unobservable(_FakePage):
+        def aria_snapshot(self, **kwargs):
+            raise RuntimeError("backend private failure")
+
+        def locator(self, selector):
+            raise RuntimeError("text backend private failure")
+
+    driver = PlaywrightWebDriver(page=Unobservable())
+    result = driver.ui_snapshot(WebUiSnapshotParams(scope={"kind": "page", "page": "main"}))
+    assert result["status"] == "failed"
+    assert result["failure_category"] == "observation_error"
+    assert result["metadata"]["action_effect"] == "not_started"
+    assert "private failure" not in str(result)
+
+
+def test_simultaneous_start_owns_only_one_worker(monkeypatch) -> None:
+    from fsq_agent.drivers.web import _playwright
+
+    created = []
+
+    def executor_factory(**kwargs):
+        time.sleep(0.05)
+        executor = ThreadPoolExecutor(**kwargs)
+        created.append(executor)
+        return executor
+
+    monkeypatch.setattr(_playwright, "ThreadPoolExecutor", executor_factory)
+    driver = _ThreadedFakePlaywrightDriver()
+    try:
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            results = list(callers.map(lambda _: driver.start_browser(WebStartBrowserParams()), range(2)))
+        assert all(result["status"] == "passed" for result in results)
+        assert len(created) == 1
+    finally:
+        driver.close()
+        for executor in created:
+            executor.shutdown()
+
+
+def test_facade_implements_exactly_the_shared_action_catalog() -> None:
+    from fsq_agent.capabilities import discover_capability_definitions
+    from fsq_agent.models import WEB_ACTION_DEFINITIONS
+
+    definitions = discover_capability_definitions(PlaywrightWebDriver)
+    assert {definition.name for definition in definitions} == {definition.driver_method for definition in WEB_ACTION_DEFINITIONS}
+    assert {definition.fsq_command_alias for definition in definitions} == {definition.fsq_action_name for definition in WEB_ACTION_DEFINITIONS}
+
+
+def test_disposal_removes_its_listeners_without_closing_a_borrowed_page() -> None:
+    class BorrowedPage(_FakePage):
+        def __init__(self):
+            super().__init__()
+            self.listeners = {}
+
+        def on(self, event, callback):
+            self.listeners[event] = callback
+
+        def remove_listener(self, event, callback):
+            assert self.listeners[event] == callback
+            self.listeners.pop(event)
+
+        def close(self):
+            pytest.fail("Disposal must not close the borrowed page")
+
+    page = BorrowedPage()
+    driver = PlaywrightWebDriver(page=page)
+    assert len(page.listeners) == 2
+    driver.close()
+    assert page.listeners == {}
+    driver.close()
+
+
+def test_open_page_failure_between_creation_and_navigation_is_partial() -> None:
+    from fsq_agent.models import WebOpenPageParams
+
+    class RegistrationFailure(_FakePage):
+        def on(self, event, callback):
+            raise RuntimeError("listener registration failed")
+
+        def goto(self, *args, **kwargs):
+            pytest.fail("Navigation must not start after registration failure")
+
+    driver = PlaywrightWebDriver(page=_FakePage())
+    driver._context = types.SimpleNamespace(new_page=RegistrationFailure, close=lambda: None)
+    try:
+        result = driver.open_page(WebOpenPageParams(page="extra", url="https://example.com"))
+        assert result["status"] == "failed"
+        assert result["metadata"]["action_effect"] == "indeterminate"
+        assert result["metadata"]["replay_unavailable_reason"] == "action_outcome_indeterminate"
+    finally:
+        driver.close()
