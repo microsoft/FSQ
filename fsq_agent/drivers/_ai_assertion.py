@@ -85,7 +85,11 @@ class AIAssertionBackendToolMixin:
                 "invoke",
             )
         # Injected artifact stores and optional backend drivers do not share a stable exception hierarchy.
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            if getattr(exc, "fsq_evidence_fatal", False):
+                raise
+            if runtime.artifact_store is not None:
+                runtime.artifact_store.capture_failure(kind="screenshot", step_id=invocation.step_id, phase="invoke", name="assert-with-ai", error=exc)
             return self._failed_ai_assertion_tool("artifact_error", str(exc) or exc.__class__.__name__)
 
         request = AIAssertionRequest(

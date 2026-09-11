@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own platform-neutral capability execution for one canonical step and ordered step sequences. Runner applies capability metadata, parameter validation, runtime-secret resolution, evidence policy, timing, sensitivity, result normalization, and teardown ordering without owning transports or concrete platforms.
+Own platform-neutral capability execution for one canonical step and ordered sequences. Runner applies capability metadata, validation, runtime secrets, evidence policy, measured timing, sensitivity, result normalization, and teardown ordering. It emits durable facts through public sinks without owning filesystem formats, Run lifecycle, transports, or concrete platforms.
 
 ## Dependencies
 
@@ -14,8 +14,8 @@ Runner must not import adapters, Application, Agent SDK types, concrete harnesse
 
 ## Public Interface
 
-- `StepRunner`: executes one canonical capability invocation through public interfaces.
-- `StepSequenceRunner`: executes ordered normal steps, stops on blocking failure, and always executes supplied teardown steps.
+- `StepRunner`: executes one capability invocation and publishes step start, phase boundaries, action result, artifact outcomes, and final result to the supplied evidence sink as they occur. `run_step`, `events`, and `last_capability_execution_result` remain supported; buffered events are a compatibility projection, not durable authority.
+- `StepSequenceRunner`: executes ordered normal steps, stops on blocking failure, records explicit unexecuted-leaf outcomes, and preserves supplied teardown eligibility. `run_steps` remains supported.
 
 Both symbols are exported from `core.runner` and re-exported from `core` with identical object identity.
 
@@ -37,11 +37,15 @@ Both symbols are exported from `core.runner` and re-exported from `core` with id
 
 ## Error Handling
 
-Runner normalizes expected harness/backend failures into safe step results and events, preserves cancellation, and never exposes runtime-secret values. Registry, parameter, or unresolved-secret failures occur before the external invocation they protect.
+Runner normalizes prepare/invoke/settle/finalize/capture failures into safe facts, preserves cancellation, and never exposes secrets. Registry, parameter, unresolved-secret, and durable step-start failures occur before the protected external invocation. Required evidence persistence failures block dependent work while retaining acknowledged facts.
+
+Action failure remains the primary failure. Capture/persistence errors are separate evidence errors and cannot overwrite action category, message, or assertion verdict. Required missing evidence remains fail-closed; evidence-only failure uses compatibility `artifact_error`. Screenshot and UI snapshot outcomes remain independently visible. Teardown eligibility survives earlier failure or cancellation according to execution policy; interrupted unacknowledged results remain unknown rather than fabricated outcomes.
 
 ## Current Invariants
 
 - Capability metadata, not action-name branches, controls routing, replay metadata, timing, sensitivity, and evidence policy.
 - Automatic evidence depends on step kind and normalized observation interfaces.
-- Positive post-action delay occurs after invocation and before final after-action evidence without creating synthetic steps.
+- Every attempt carries stable `source_step_id`, occurrence-aware invocation path, and Run-unique `step_execution_id`; compatibility result `step_id` aliases execution identity. Planned logical leaves retain executed/skipped/unresolved outcomes and reasons, including known blockers. Attempts are counted separately from logical leaves; hooks, plans, and runtime summaries do not inflate capability counts.
+- Step/phase boundaries use measured UTC timestamps and monotonic durations. Exclusive prepare/invoke/settle/finalize times do not overlap; nested capture times are not counted twice. Unknown measurements are null with a reason, not zero.
+- Positive post-action delay is the measured settle phase after invocation and before final evidence, preserving configured-delay metadata without synthetic wait commands or replay results. Runner adds no automatic retries; externally requested attempts retain separate identities and outcomes.
 - Teardown steps remain eligible after normal-step failure.

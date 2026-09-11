@@ -52,7 +52,7 @@ Goal-based Case creation uses pre-plan as the input-understanding boundary befor
 
 Existing-Case testing parses the Case through FSQ rather than treating YAML as untyped planning text. Suggestion-enabled testing first completes the same single deterministic execution as ordinary Case testing, then gives the parsed Case and bounded persisted execution facts to a read-only AI analysis that cannot invoke Harness, Driver, Core capabilities, or other UI actions. The analysis preserves the authoritative execution status and facts, keeps source steps immutable, and writes suggestions and any candidate Case only inside that Run directory.
 
-`DynamicExecutionService` owns dynamic Run allocation and authoritative metadata transitions. It supplies an explicit `run_id` to `FsqAgent.run`; Agent performs planning, execution, verification, business event emission, and report generation without importing Execution or allocating/updating Run metadata. Execution finalizes success/failure/inconclusive results and cancellation/error paths, then coordinates optional recording without creating another Run.
+`DynamicExecutionService` owns dynamic Run allocation, source snapshots, authoritative evidence context, frozen execution conclusions, derived processing, and metadata transitions. It supplies a Models-owned `RunExecutionContext` and shared evidence sink to `FsqAgent.run_in_context`; Agent performs planning, execution, verification, and business event emission through neutral runtimes and returns `DynamicAgentOutcome` without importing Execution, allocating/updating Run metadata, or generating reports. Execution freezes execution and verification facts before report generation and optional recording, then finalizes processing and cancellation/error paths without creating another Run. Processing failures cannot overwrite the frozen execution conclusion.
 
 ## Model And Agent Boundary
 
@@ -106,9 +106,17 @@ Doctor does not mutate Workspace or Provider state, install software, start auth
 
 `fsq runs` is the read-only history surface for the exact current registered Workspace. It aggregates Runs across every configured platform unless an optional platform is supplied, lists bounded filtered summaries, shows one safe Run detail, and reads sanitized structured logs. New Run IDs are unique across the Workspace in the practical collision-resistant form `<source-slug>-<UTC timestamp>-<six lowercase hexadecimal characters>` and are allocated through one shared Execution boundary rather than by adapters.
 
-Every new Run has a versioned `run.json` inside its direct platform Run directory. The document is authoritative for Run identity, lifecycle status, bounded source/result/runtime summary, and contained relative artifact index; full reports, events, evidence, screenshots, and UI snapshots remain in their owning artifacts. Execution writes initial metadata before actions and atomically advances it through `preparing`, `running`, `finalizing`, and one immutable terminal status. Historical Runs without metadata remain queryable through bounded read-only inference and are never migrated implicitly.
+Every new Run has `fsq.run/v2` metadata in `run.json` inside its direct platform Run directory. The document records identity, source, runtime, and contained artifact references while distinguishing execution, verification, evidence completeness, and derived processing outcomes. `execution-result.json` freezes execution and verification facts before recording, suggestion analysis, or rich report generation. Execution atomically advances `preparing`, `running`, and `finalizing` to one immutable terminal status. Later analysis, export, and Case-publication relations are separate artifacts and cannot rewrite that outcome. Persisted `fsq.run/v1` and metadata-free history remain readable without implicit migration; readers expose unavailable or conflicting facts rather than changing results.
+
+Core records actual capability invocations through the same durable evidence boundary in Explore and Strict. Versioned `evidence-events.jsonl` execution facts are separate from Agent `events.jsonl`, and an atomic evidence manifest indexes checkpoints and artifact outcomes. Stable source-step identity is separate from execution identity, nested invocation occurrence, and attempts. Failed actions, failed evidence capture, and incomplete verification remain distinguishable; required missing evidence prevents a claim of fully evidenced success. Run queries report persisted status separately from verified owner liveness, without treating an active status alone as proof of interruption.
+
+Run provenance contains sanitized source snapshots, producer versions, content digests, and an allowlisted effective-configuration summary, never private values or their digests. Recorded commands link to execution identities. Explore, candidate Case, saved Case, and Strict Run relations use persisted identities and content digests rather than filename guesses. Strict Replay remains deterministic apart from explicitly authored AI assertions, without dynamic planning or repair.
 
 `fsq runs show RUN_ID --open` may rebuild a derived local `report.html` from persisted Run facts and open it in the user's default browser. Generation does not change `run.json` or the authoritative Run result and never executes a Case, invokes a Provider or Driver, or inspects live UI state. The static report is offline, escapes persisted content, restricts active content and links to contained allowlisted artifacts, and does not replace Markdown, JSON, event, or evidence truth.
+
+`fsq runs export` produces public JSON, JUnit, portable HTML, or an evidence bundle without browser interaction. Report owns `fsq.report/v1`, deterministic comparisons, and exporters; Application authorizes Workspace/Run/relationship/artifact/destination scope; adapters present results. Control Plane Runs exposes the same persisted reports at stable Workspace/platform/Run/step addresses independently of live request state. Execution, verification, evidence, and processing statuses remain distinct. JUnit uses one root Case/Goal invocation per testcase, not one tool call. Export or upload failure never replaces the original test exit status.
+
+Public demonstration content is an inspectable static export of real public-target Explore, reviewed Case, Strict baseline, and changed-target failure evidence. Captures and replay outcomes are not fabricated; candidate, reviewed Case, screenshot playback, and deterministic execution remain distinct. Portable reports embed their displayed evidence. Explicit sharing creates separate selected/redacted/masked copies with integrity and transformation inventories, never changes local evidence, and does not claim automatic anonymity. Public hosting is separate from local generation and never exposes the Control Plane server.
 
 Local data produced by v0.1.0 and subsequent releases remains usable through existing built-in CLI and Control Plane workflows. Historical reports, events, source markers, errors, evidence, and artifact paths retain their original contents; inspection does not rewrite them or re-evaluate the Run. Current dynamic provenance uses `agent_runtime.runner` and `agent_runtime.verifier`, and generic runtime failures use `agent_runtime_error`. Historical values coexist with current values as persisted data; saved artifact paths are resolved directly, not reconstructed from current labels. Python compatibility aliases and external scripts matching old output strings are not part of this local-data contract.
 
@@ -120,14 +128,14 @@ Shared platform rules:
 - Public CLI entry points select the active platform with `--platform android|web|windows|macos` where platform context is needed; config loading maps that platform id to the corresponding repository-owned `config.<platform>.yaml` preset before validation. Public CLI commands do not expose workspace selection and use the exact registered current directory with canonical `.fsq` platform configuration. Provider configuration is separate from `fsq init`.
 - Entry layers build a platform-selected capability registry: inherited CommonTool capabilities plus only the active platform's PlatformTool capabilities.
 - `StepRunner`, `StepSequenceRunner`, evidence, recording, report generation, and FSQ parsing stay platform-neutral and consume capability metadata rather than platform action-name branches.
-- Repository-owned platform YAML presets own stable platform defaults and policy. Provider selection, model, and credentials come only from the user configuration/auth store. Config and the relevant platform contracts define target/path sources and explicitly supported environment exceptions; there is no blanket environment override or Provider fallback.
+- Repository presets own platform defaults and policy; Workspace owns targets/private runtime secrets/local paths; user configuration owns Provider/model/credentials. Only the documented macOS Appium endpoint has a process-environment override. No other environment or `.env` fallback participates.
 - Platform-specific behavior belongs in platform parameter models, action catalogs, harnesses, drivers, config blocks, and configured skill Markdown.
 
 Android platform block:
 
 - Platform id: `android`.
 - Backend: `uiautomator2`.
-- Local app/device values come from `FSQ_ANDROID_APP_ID` and `FSQ_ANDROID_SERIAL` or strict FSQ case metadata where allowed.
+- Application identity comes from Workspace target or supported Case metadata fallback. Device serial is transient per-Run selection, not an environment fallback.
 - Explicit observation capability: canonical `ui_snapshot` with Android alias `uiTree`. Automatic runner evidence captures `screenshot` plus normalized `ui_snapshot` using compact Android UI hierarchy XML content. Android compact UI snapshots keep the existing `{"xml": ...}` payload shape, may use source-level hierarchy compression when available, remove layout-only/default data, clip long text-like attributes to the first 50 characters, and fall back to raw hierarchy XML if compaction is unavailable or unsafe.
 - Harness skill: `android-harness.md`.
 
@@ -135,7 +143,7 @@ Web platform block:
 
 - Platform id: `web`.
 - Backend: `playwright`.
-- Runtime settings include browser channel, environment-backed browser executable path, headless mode, optional base URL, and optional viewport fields when specified by module specs.
+- Runtime settings include Workspace browser channel and discovered/configured executable path, preset headless/browser policy, optional base URL, and optional viewport fields.
 - Browser lifecycle is explicit through `start_browser`/`startBrowser` and `close_browser`/`closeBrowser`. Runtime, CLI, Control Plane, FSQ parsing, StepRunner, and StepSequenceRunner must not auto-inject lifecycle commands or launch a browser as a driver-construction side effect.
 - `startBrowser` is idempotent and reuses the active browser/page when one is already started. `closeBrowser` is idempotent, closes the active browser/page when present, resets driver-owned state, and permits a later `startBrowser` in the same task.
 - Web page-dependent actions, including `navigateTo`, require an active browser/page and must fail clearly when invoked before `startBrowser`; `navigateTo` must not implicitly start the browser.
@@ -147,7 +155,7 @@ Windows platform block:
 
 - Platform id: `windows`.
 - Backend: `pywinauto`.
-- Operator-local values come from environment variables: `FSQ_WINDOWS_APP_PATH`, `FSQ_WINDOWS_BACKEND_KIND`, `FSQ_WINDOWS_WINDOW_TITLE_RE`, and `FSQ_WINDOWS_LAUNCH_ARGS`. YAML owns only stable Windows platform/backend selection. `FSQ_WINDOWS_BACKEND_KIND` selects pywinauto's UI automation mode (`uia` by default, or `win32`) and is not a second FSQ Windows backend.
+- Workspace targets supply application path, title constraint, and launch arguments. Presets own pywinauto backend policy and automation mode (`uia` or `win32`), not a second FSQ backend.
 - Windows action surface exposes desktop aliases through the existing PlatformTool registry: `launchApp`, `killApp`, `clickOn`, `doubleClickOn`, `rightClickOn`, `typeText`, `pressKey`, `hoverOn`, `scrollOn`, `dragTo`, `assertVisible`, `uiSnapshot`, and `assertWithAI`.
 - Explicit observation capability: `ui_snapshot` with alias `uiSnapshot`; Windows must not expose Android `ui_tree`/`uiTree` naming. Automatic runner evidence captures `screenshot` plus normalized `ui_snapshot`.
 - Harness skill: `windows-harness.md`.
@@ -157,7 +165,7 @@ macOS platform block:
 - Platform id: `macos`.
 - Backend: `appium_mac2`.
 - Runtime maps FSQ names internally to Appium native `platformName: Mac` and `automationName: Mac2`.
-- Operator-local values come from environment variables: `FSQ_MACOS_APPIUM_SERVER_URL`, `FSQ_MACOS_BUNDLE_ID`, and `FSQ_MACOS_APP_PATH`. YAML owns stable macOS defaults such as backend selection, page-source simplification depth, and action timeout seconds.
+- Workspace targets supply bundle/application identity. `FSQ_MACOS_APPIUM_SERVER_URL` is the optional process-environment endpoint override; presets own backend, snapshot, and timeout policy.
 - Current action surface exposes desktop aliases through the existing PlatformTool registry: `launchApp`, `killApp`, `clickOn`, `doubleClickOn`, `rightClickOn`, `typeText`, `pressKey`, `hoverOn`, `dragTo`, `takeScreenshot`, `uiSnapshot`, `assertVisible`, `assertElementsOrder`, and `assertWithAI`.
 - Explicit observation capability: `ui_snapshot` with alias `uiSnapshot`; macOS must not expose Android `ui_tree`/`uiTree` naming. Automatic runner evidence captures `screenshot` plus normalized `ui_snapshot` using a bounded compact semantic Appium Mac2 control tree that preserves useful locator, text, state, and geometry signals.
 - macOS `ui_snapshot` also supports bounded structured element queries over current, unabridged backend page-source attributes before display compaction. Query results distinguish display previews from complete locator values, expose ambiguity and incomplete coverage, and do not treat a missing snapshot match as proof that a control is absent from the application. Existing unfiltered snapshot fields and raw artifact-search semantics remain compatible.
@@ -175,7 +183,7 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 
 | Module | SPEC | Purpose |
 |---|---|---|
-| models | fsq_agent/models/SPEC.md | Owns shared domain models, platform-runtime status facts, FSQ case and lifecycle hook metadata/settings models, capability metadata/registry contracts, invocation/result contracts, replay reference models, and exceptions. |
+| models | fsq_agent/models/SPEC.md | Owns shared domain, Run/frozen-result, evidence-journal, public-report/export, platform-runtime, Case/lifecycle, capability/invocation, replay-reference, and exception contracts. |
 | capabilities | fsq_agent/capabilities/SPEC.md | Owns neutral capability declaration decorators, catalog-backed platform action validation, and metadata discovery helpers used by `core` recordable capabilities. |
 | config | fsq_agent/config/SPEC.md | Loads and validates env/YAML runtime, provider, harness/driver/platform-tool, tracing, execution post-action delay, strict case lifecycle hook settings, strict replay secret, agent context, AgentTool output, CommonTool secret, and workspace configuration. |
 | providers | fsq_agent/providers/SPEC.md | Owns OpenAI/Azure/Gemini/Copilot supplier authentication, token and model-selection policy, connection testing, and configured neutral model access. |
@@ -188,7 +196,7 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 | fsq | fsq_agent/fsq/SPEC.md | Preserves the documented legacy Case DSL public import surface by forwarding to canonical `case_dsl` objects. |
 | environments | fsq_agent/environments/SPEC.md | Owns host/runtime support, read-only readiness checks, and Web executable discovery through platform providers. |
 | skills | fsq_agent/skills/SPEC.md | Loads complete configured automation skill instruction bundles and skips or fails broken bundles according to requiredness. |
-| report | fsq_agent/report/SPEC.md | Generates LLM task reports, strict-core evidence reports, reconstructs tool calls from structured capability metadata, and resolves stored reports by run id. |
+| report | fsq_agent/report/SPEC.md | Projects persisted facts into shared public reports, deterministic comparisons, JSON/JUnit/HTML/bundle exports, and compatible internal reports. |
 | core | fsq_agent/core/SPEC.md | Navigates platform-neutral Core ownership across Runner, Evidence, Interfaces, current capability/runtime services, and compatibility composition. |
 | core.runner | fsq_agent/core/runner/SPEC.md | Owns metadata-driven single-step and ordered deterministic capability execution. |
 | core.evidence | fsq_agent/core/evidence/SPEC.md | Owns Run-contained artifacts and normalized execution evidence persistence. |
@@ -196,12 +204,12 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 | drivers | fsq_agent/drivers/SPEC.md | Owns concrete Android, Web, Windows, and macOS automation backends behind Core interfaces. |
 | harnesses | fsq_agent/harnesses/SPEC.md | Owns concrete runtime gateways that combine CommonTools, injected drivers, runtime context, and evidence services. |
 | agent | fsq_agent/agent/SPEC.md | Orchestrates dynamic goal/reference execution through injected neutral runtimes, planning and verification policy, and safe event persistence. |
-| execution | fsq_agent/execution/SPEC.md | Coordinates transport-neutral dynamic and deterministic runs, Case lifecycle ordering, cancellation/teardown, and Run-local candidate Case recording. |
+| execution | fsq_agent/execution/SPEC.md | Owns Run lifecycle, frozen outcomes, provenance/lineage, dynamic/deterministic coordination, cancellation/teardown, and candidate Case recording. |
 | application | fsq_agent/application/SPEC.md | Provides transport-neutral Workspace, Case, Run, Provider, and Environment operations through resource-owned modules, with shared Request, Result, Event, and Error contracts organized under `application/contracts`. |
 | adapters | fsq_agent/adapters/SPEC.md | Owns CLI, Control Plane, and coding-agent external protocol adaptation while depending inward on Application and public runtime contracts. |
 | adapters.coding_agent | fsq_agent/adapters/coding_agent/SPEC.md | Assembles FSQ requests/tools/policy above agent_engine and adapts neutral events/results to Agent runtime contracts. |
-| control_plane | fsq_agent/control_plane/SPEC.md | Adapts Application operations to local HTTP/SSE/static delivery, cancellation transport, and browser evidence projection. |
-| cli | fsq_agent/cli/SPEC.md | Adapts the public `fsq` command tree to Application operations with human, JSON, and JSONL output and stable exit categories. |
+| control_plane | fsq_agent/control_plane/SPEC.md | Adapts Application to local HTTP/SSE/static delivery, cancellation, persisted Run reports, evidence, and artifact/export delivery. |
+| cli | fsq_agent/cli/SPEC.md | Adapts public commands, persisted Run queries, and offline exports to Application with human/JSON/JSONL output and stable exit categories. |
 | frontend | frontend/SPEC.md | Owns the repository npm/Vite workspace, browser dependency and build policy, generated-asset boundary, and navigation to independently owned frontend application modules. |
 
 ## Frontend Build Boundary
@@ -244,13 +252,14 @@ flowchart TD
     Agent --> Observation[observation]
     Agent --> Knowledge[knowledge]
     Agent --> Skills[skills]
-    Agent --> Report[report]
     CodingAgent --> Agent
     CodingAgent --> Providers
     CodingAgent --> AIServices
     CodingAgent --> AgentEngine[agent_engine]
     CodingAgent --> Core
     CodingAgent --> Tools
+    CodingAgent --> Config
+    CodingAgent --> Models
     Execution --> Agent
     Execution --> CoreRunner[core/runner]
     Execution --> CoreEvidence[core/evidence]
@@ -283,9 +292,22 @@ flowchart TD
     CoreRunner --> Models
     CoreEvidence --> Models
     CoreInterfaces --> Models
+    Core --> CoreFactories[core/interfaces factory composition]
+    CoreFactories --> DriverFactoryImpl[drivers/_factory selector]
+    CoreFactories --> HarnessFactoryImpl[harnesses/_factory selector]
+    CoreFactories -. ArtifactStore annotation .-> CoreEvidence
+    Core -->|Declaration metadata only| DriverMetadata[drivers capability metadata]
+    DriverMetadata --> Drivers
+    DriverFactoryImpl --> Drivers
+    HarnessFactoryImpl --> Harnesses
     Harnesses[harnesses] --> CoreInterfaces
     Harnesses --> Drivers[drivers/*]
+    Harnesses --> CoreEvidence
+    Harnesses --> Models
+    Harnesses --> Capabilities
     Drivers --> CoreInterfaces
+    Drivers --> Models
+    Drivers --> Capabilities
     Capabilities[capabilities] --> Models
     Core --> Capabilities
     Core -->|Runtime and Android discovery compatibility exports| Environments
@@ -311,6 +333,7 @@ flowchart TD
 - Internal Python implementation files are prefixed with `_`.
 - Shared FSQ domain data structures and exceptions live in `models`. Independently reusable inference contracts and errors belong to `agent_engine` and must not depend on FSQ business types; immutable service-specific suggestion results belong to `ai_services`. Capability declaration decorators, catalog-backed platform validation, and decorated-method discovery live only in `capabilities`.
 - Module imports must follow the DAG in the architecture diagram.
+- Models-only Core protocols are separate from the named `core.interfaces._factories` composition exception for private Drivers/Harnesses selectors. Implementations never depend on the wrapper. Side-effect-free metadata composition has its own exact helper/importer scope in Drivers; neither exception permits arbitrary private imports or backend connection during metadata inspection.
 - Transport implementation and package data live under `adapters`. The installed scripts target `fsq_agent.adapters.cli:main`. Legacy `fsq_agent.cli` and `fsq_agent.control_plane` packages preserve only their documented public entry symbols as compatibility exports; old private transport submodule paths are unsupported and absent.
 - Package-root execution helpers and old Agent SDK implementation paths are absent. Repository code imports canonical `execution`, `adapters.coding_agent`, `case_dsl`, Drivers, Harnesses, Environments, and public Core subpackages directly.
 - Package-private composition helpers at the `fsq_agent` package root may compose public module APIs for shared entry-layer capability bootstrap, registry-metadata-based provider requirement detection, strict lifecycle orchestration, and dynamic-run recording used by CLI and Control Plane. Provider requirement detection compares the active platform registry with and without provider-backed capabilities and resolves executable steps through the registry snapshot rather than branching on action names. These helpers must remain private, must not expose public module contracts, and must not be imported by `models`, `capabilities`, `tools`, `fsq`, `core`, `providers`, or `report`.

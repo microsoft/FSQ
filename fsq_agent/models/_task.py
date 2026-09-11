@@ -78,8 +78,8 @@ class TaskResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
-    status: VerificationStatus
+    status: Literal["success", "failed", "inconclusive", "cancelled", "error"]
     steps: list[StepResult]
     verification: VerificationResult
     report: ReportArtifact
-    duration_ms: int = Field(default=0, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)

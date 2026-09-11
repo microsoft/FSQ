@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import asyncio
 import itertools
 import json
 import time
@@ -9,6 +10,7 @@ from typing import Any
 from fsq_agent._capability_bootstrap import build_capability_registry
 from fsq_agent.agent_engine import ToolBinding, ToolCall, ToolInputFailure
 from fsq_agent.core import HarnessInterface, RuntimeSecretStore, StepRunner
+from fsq_agent.core.interfaces import EvidenceJournalSink
 from fsq_agent.models import CapabilityDefinition, ConfigurationError, ExecutableStep, HarnessFunctionSchema, HarnessPlatform, PostActionDelaySettings, RunnerStepResult
 
 
@@ -22,7 +24,10 @@ class HarnessToolAdapter:
         post_action_delay_seconds: PostActionDelaySettings | None = None,
         runtime_secret_store: RuntimeSecretStore | None = None,
         platform: HarnessPlatform = "android",
+        evidence_sink: EvidenceJournalSink | None = None,
+        cancellation_check=None,
     ) -> None:
+        self.cancellation_check = cancellation_check
         self.harness = harness
         self.run_id = run_id
         self._capability_registry = build_capability_registry(platform=platform)
@@ -31,6 +36,7 @@ class HarnessToolAdapter:
             capability_registry=self._capability_registry,
             post_action_delay_seconds=post_action_delay_seconds,
             runtime_secret_store=runtime_secret_store,
+            evidence_sink=evidence_sink,
         )
         self.reserved_tool_names = reserved_tool_names or set()
         self._counter = itertools.count(1)
@@ -84,6 +90,8 @@ class HarnessToolAdapter:
         async def invoke(call: ToolCall) -> str:
             started = time.perf_counter()
             try:
+                if self.cancellation_check is not None:
+                    self.cancellation_check()
                 params = call.arguments
                 action_name = self._capability_name(schema)
                 step = ExecutableStep(
@@ -108,7 +116,11 @@ class HarnessToolAdapter:
                 result = self.runner.run_step(run_id=self.run_id, step=step)
                 return self._format_runner_result(schema, step, result, int((time.perf_counter() - started) * 1000))
             # Tool transport must convert arbitrary capability failures into structured results.
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
+                if getattr(exc, "fsq_evidence_fatal", False):
+                    raise
+                if type(exc).__name__ in {"TaskCancelledError", "ExecutionCancelled", "RunCancelled"}:
+                    raise asyncio.CancelledError() from exc
                 return self._format_failure(schema, exc, int((time.perf_counter() - started) * 1000))
 
         return invoke
@@ -161,6 +173,8 @@ class HarnessToolAdapter:
             "result": result_summary,
             "metadata": schema.metadata,
             "runner_step_id": runner_result.step_id,
+            "source_step_id": runner_result.source_step_id,
+            "step_execution_id": runner_result.step_execution_id,
             "runner_result": runner_result.model_dump(mode="json"),
             "artifact_refs": artifact_refs,
         }

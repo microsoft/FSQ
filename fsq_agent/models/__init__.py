@@ -39,6 +39,7 @@ from fsq_agent.models._core import (
     EvidenceArtifactKind,
     EvidenceArtifactRef,
     EvidenceBundle,
+    EvidenceJournalRecord,
     EvidenceManifest,
     EvidencePolicy,
     ExecutableStep,
@@ -146,7 +147,7 @@ from fsq_agent.models._page_knowledge import (
     ReferenceLocator,
 )
 from fsq_agent.models._platform_runtime import PlatformPrerequisiteCheck, PlatformRuntimeCheck, web_executable_matches_channel
-from fsq_agent.models._report import ReportArtifact
+from fsq_agent.models._report import PublicRunReport, ReportArtifact, RunReportExportOptions, RunReportExportResult, RunShareProfile
 from fsq_agent.models._settings import (
     AgentContextSettings,
     AgentKnowledgeSettings,
@@ -205,6 +206,8 @@ from fsq_agent.models._tools import (
     ToolResult,
 )
 
+from ._runs import DynamicAgentOutcome, RunArtifactIndex, RunExecutionContext, RunExecutionResult, RunMetadata, RunResultSummary, RunRuntime, RunSource, RunStepCounts
+
 __all__ = [
     "AGENT_FINAL_OUTPUT_SCHEMA_VERSION",
     "ANDROID_ACTION_DEFINITIONS",
@@ -262,10 +265,12 @@ __all__ = [
     "CaseSettings",
     "CommonToolDefinition",
     "ConfigurationError",
+    "DynamicAgentOutcome",
     "ElementOperation",
     "EvidenceArtifactKind",
     "EvidenceArtifactRef",
     "EvidenceBundle",
+    "EvidenceJournalRecord",
     "EvidenceManifest",
     "EvidencePolicy",
     "ExecutableStep",
@@ -325,14 +330,26 @@ __all__ = [
     "PlatformRuntimeCheck",
     "PostActionDelaySettings",
     "PrePlanKnowledgeSettings",
+    "PublicRunReport",
     "ReferenceLocator",
     "ReplayKind",
     "ReplayPolicy",
     "ReportArtifact",
     "ReportGenerationError",
     "RetryPolicy",
+    "RunArtifactIndex",
     "RunEvent",
     "RunEventSink",
+    "RunExecutionContext",
+    "RunExecutionResult",
+    "RunMetadata",
+    "RunReportExportOptions",
+    "RunReportExportResult",
+    "RunResultSummary",
+    "RunRuntime",
+    "RunShareProfile",
+    "RunSource",
+    "RunStepCounts",
     "RunnerEvent",
     "RunnerEventType",
     "RunnerStatus",

@@ -14,7 +14,7 @@ The package exports transport-neutral operations and their Request, Result, Even
 
 - Workspace operations support the shared workspace precondition, platform target resolution, read-only runtime readiness coordination, and workspace initialization needed by adapters.
 - Case operations support creating a Case from a Goal, testing an existing Case with optional suggestions, static formatting, and saving generated recordings.
-- Run operations support exact-Workspace multi-platform listing, stable detail lookup, safe structured log retrieval, historical inference, and on-demand static HTML generation.
+- Run operations support Workspace-scoped listing, stable detail, safe logs, historical inference, public evidence projection/comparison, artifact resolution, and offline exports.
 - Provider operations support user-level OpenAI and Google Gemini model discovery/configuration, Azure OpenAI configuration, GitHub Copilot device authorization/model activation, and active-Provider readiness status. Supplier model discovery does not expose a Provider profile inventory.
 - Environment operations support listing and diagnostics.
 - Doctor supports complete read-only Workspace diagnosis and per-platform command readiness.
@@ -25,16 +25,27 @@ Canonical resource modules are:
 
 - `application.workspace`: Workspace operations.
 - `application.cases`: Case creation, testing, formatting, and generated-recording save operations.
-- `application.runs`: persisted Run query and log operations.
+- `application.runs`: persisted Run query, report, artifact, and export operations.
 - `application.providers`: Provider operations.
 - `application.environments`: Environment operations.
 - `application.doctor`: Workspace-level diagnostic orchestration.
 
-`application.runs` owns Workspace-scoped Run query orchestration. It validates the exact registered root through Config, resolves trustworthy configured-platform inventory, aggregates platform Run roots, detects duplicate IDs, applies filters/order/limits, parses current metadata or bounded historical facts, sanitizes logs, and coordinates Report HTML generation. It does not allocate IDs, persist lifecycle metadata, render transport output, or open a browser.
+`application.runs` resolves exactly one scope: CLI's registered current root or Control Plane's explicit registered Workspace name, never a fallback. History requires trustworthy readable Workspace/platform/Run mapping, not Provider, Driver, device, browser, app, or target readiness. It aggregates bounded ordered history, detects duplicate IDs, reads metadata or bounded historical facts, and supplies safe inputs to Report without allocating Runs, mutating lifecycle, rendering transport output, or opening a browser.
 
 Canonical immutable Pydantic contracts under `application.contracts.runs` include list/show/log/HTML requests and results, `RunSummary`, `RunDetail`, `RunLogEvent`, normalized filters, and Execution-facing Run metadata values. List results contain Workspace identity, queried platforms, filters, matched/returned counts, truncation, entries, and warnings. Show returns safe summary and relative artifact references without report or log bodies. Logs return completely validated safe events and selection metadata. HTML generation returns Run identity, platform, relative path, and generation status.
 
-New `run.json` uses schema `fsq.run/v1` and validates Workspace name, platform, Run ID, lifecycle status, UTC timestamps, bounded Case/Goal source, safe result/step/runtime summary, and contained relative artifact references. Historical Run directories without it are inferred read-only from supported report, fallback, evidence, and event artifacts. List isolates a damaged direct-child Run as an error entry; show permits safe partial history but rejects untrustworthy identity; logs may be read independently when Run containment and the complete log are trustworthy. Query never writes inferred metadata.
+`fsq.run/v2` identifies Run lifecycle while `execution-result.json` freezes execution/verification independently of evidence completeness and processing. Application obtains normalized journal/checkpoint facts through `RunLifecycleService.read_evidence`, never a second recovery implementation. Owner inspection projects confirmed dead unfinished Runs as interrupted, live as active, and unknown explicitly; stale/missing heartbeat alone proves neither death nor failure. v1 metadata, evidence 1.0, and metadata-free history remain readable without migration. Damaged entries are isolated; untrustworthy identity blocks detail/export, while trustworthy partial history exposes missing/conflicting facts and unknown metrics.
+
+### Public Run Reports And Exports
+
+- `get_run_report(GetRunReportRequest) -> GetRunReportResult`: resolves the primary and optional same-Workspace/platform baseline/related Runs, then delegates to `report.RunReportService`; returns identity, warnings, and unchanged `models.PublicRunReport` semantics.
+- `export_run_report(ExportRunReportRequest) -> ExportRunReportResult`: validates JSON/JUnit/HTML/bundle format, optional destination/baseline/related IDs/share profile, then delegates with resolved inputs; returns separate export identity, files, and warnings.
+- `resolve_run_artifact(ResolveRunArtifactRequest) -> ResolvedRunArtifact`: accepts a source artifact ID or export ID plus file ID, never browser paths; verifies manifest membership, containment, symlinks, MIME/size/hash and returns a trusted internal path for streaming, not client serialization.
+- `generate_run_html`: retains explicit Run-local `report.html` rebuild through the shared projection/renderer; only CLI opens a browser.
+
+Default exports use a unique Run-local `exports/<export-id>/` plus manifest. Explicit CLI output is one authorized absent destination, with relative paths resolved from the Workspace; no overwrite option or arbitrary sibling serving exists. Run-local `report.html` rebuild is the sole replacement exception. Export writes never change metadata, frozen results, journals, or original artifacts. Input identity changes fail rather than mixing snapshots.
+
+Relationships require validated source identity, lineage, and digests, not order/name guesses. Qualified Run/artifact IDs, immutable status/reference fields, permitted display transformations, review declarations, and resource limits follow Models/Report contracts. Share profile loading performs no commands, remote requests, publication, or credential discovery. Failed/cancelled/partial Runs may be queried/exported successfully with a non-passing report gate; export failures remain separate from execution status.
 
 ## Ownership Boundaries
 
@@ -54,7 +65,7 @@ Application must not copy, reinterpret, or fork those rules. This specification 
 
 Goal-based Case creation requests Run-local recording and supplies the selected platform Case directory as the optional publication destination. An optional `case_name` selects the stable identity; otherwise Execution derives it from platform and normalized Goal. A validated successful recording is published there as `<case-name>.fsq.yaml` with conflict-safe publication. The result exposes the authoritative Run-local candidate, stable name, published path, publication outcome, and safe warnings, including publication conflicts. Recording or publication failure does not replace the completed dynamic execution result.
 
-Case testing always performs one deterministic Execution run. When suggestion is requested, Application invokes a separate post-execution analysis through an injected read-only suggestion collaborator using the parsed source Case and bounded persisted execution facts. The collaborator receives no Harness, Driver, capability registry, or action executor, cannot rerun the Case, and cannot change the completed Run result. Application returns only Run-local suggestion and optional candidate paths produced beneath the completed Run directory; the source Case and configured Case directory remain unchanged. Suggestion-analysis failure uses stable error code `case.suggestion_failed`, preserves the completed report path in safe error details, and does not rewrite or conceal the completed deterministic execution facts.
+Case testing performs one deterministic Execution run whose conclusion is frozen before derived processing. Optional AI Services analysis uses parsed source and bounded persisted facts without action authority or rerun. Application returns Run-local suggestions/candidates and processing status without modifying source Cases. `case.suggestion_failed` is processing diagnostics alongside the preserved execution result and report/frozen-result reference, not a replacement top-level execution error. Structured-output and provider errors retain their neutral cause within those diagnostics.
 
 Workspace initialization accepts a selected current directory, optional workspace name, one platform's target inputs/environment, and controlled-update intent. Application resolves the name case-insensitively through Config's registry. For an unregistered name it delegates final-root selection to Config: an empty selected directory is adopted as the root, while a non-empty selected directory receives an absent `<selected-directory>/<workspace-name>` child. For a registered name it ignores the selected directory for persistence and uses the immutable stored root; an unavailable registered name is not recreated. Before any workspace mutation Application validates the request, resolves the complete target, and asks the platform runtime service to check readiness without installing software. Web target resolution requires an explicit channel and either validates the explicit executable path or discovers exactly one compatible host executable. Application delegates filesystem validation, root selection, platform persistence, registry mutation, idempotency, revision handling, and rollback to Config only after these prerequisites succeed, then returns committed workspace name/root/platform/status plus safe readiness/discovery facts needed by CLI or Control Plane presentation. The shared workspace precondition for non-init commands resolves the exact current directory through Config registry and Workspace truth; a marker directory alone never satisfies it.
 
@@ -113,7 +124,7 @@ Control Plane startup diagnoses the exact Android settings copy after applying t
 - `workspace.py`: Public Workspace operation boundary and private Workspace orchestration helpers.
 - `cases.py`: Public Case creation, testing, formatting, and generated-recording save boundary.
 - `_case_format.py`: Static Case file orchestration and atomic conditional formatting writes.
-- `runs.py`: Public persisted Run query/log boundary.
+- `runs.py`: public persisted Run query/report/export/artifact boundary with Workspace and destination resolution.
 - `providers.py`: Public Provider operation boundary.
 - `environments.py`: Public Environment operation boundary.
 - `doctor.py`: Public Workspace Doctor operation and aggregation boundary.
@@ -139,7 +150,7 @@ Doctor component failures do not expose exception messages, arguments, traceback
 - There is no generic command-string facade.
 - Application contracts have one canonical definition under `application.contracts`; package-root and resource-module exports reference the same objects.
 - Resource modules contain the authoritative implementation for their operation group; compatibility exports do not copy behavior or state.
-- Run queries are read-only except for explicitly requested derived `report.html`; they never execute, authenticate, invoke Providers/Drivers, or rewrite authoritative metadata or results.
+- Run queries are read-only; explicit report/export operations write only authorized derived artifacts and never execute, authenticate, invoke Providers/Drivers, or rewrite authoritative facts.
 - Transport concerns remain in adapters.
 - Domain and runtime rules remain in their owning modules.
 - Case operations coordinate through public Execution services and do not import package-root or adapter-private execution helpers.

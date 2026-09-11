@@ -12,7 +12,7 @@ export interface NavigationItem {
 export const CONTROL_PLANE_NAVIGATION: readonly NavigationItem[] = [
   { id: 'overview', label: 'Home', icon: 'overview', available: true, section: 'primary' },
   { id: 'devices', label: 'Test Runner', icon: 'devices', available: true, section: 'primary' },
-  { id: 'runs', label: 'Runs', icon: 'runs', available: false, section: 'primary' },
+  { id: 'runs', label: 'Runs', icon: 'runs', available: true, section: 'primary' },
   { id: 'workspace', label: 'Workspaces', icon: 'workspace', available: true, section: 'primary' },
   { id: 'config', label: 'Settings', icon: 'config', available: true, section: 'footer' },
 ] as const;

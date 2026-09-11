@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 from ._android_driver import AndroidDriverInterface
-from ._execution import CancellationCheck, CapabilityRegistryInterface, EvidenceSink, RuntimeSecretResolver
+from ._execution import CancellationCheck, CapabilityRegistryInterface, EvidenceJournalSink, EvidenceSink, RuntimeSecretResolver
 from ._factories import DriverFactory, HarnessFactory
 from ._harness import AIAssertionEvaluatorProtocol, DriverObservationInterface, HarnessInterface
 from ._macos_driver import MacOSDriverInterface
@@ -16,6 +16,7 @@ __all__ = [
     "CapabilityRegistryInterface",
     "DriverFactory",
     "DriverObservationInterface",
+    "EvidenceJournalSink",
     "EvidenceSink",
     "HarnessFactory",
     "HarnessInterface",

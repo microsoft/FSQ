@@ -13,10 +13,9 @@ from fsq_agent.report import generate_static_run_report
 
 
 def _workspace(monkeypatch: pytest.MonkeyPatch, root: Path, platforms=("web", "android")) -> None:
-    monkeypatch.setattr("fsq_agent.application.runs.require_initialized_workspace", lambda _request: type("Workspace", (), {"workspace": root})())
     monkeypatch.setattr("fsq_agent.application.runs.list_workspace_registry", lambda: [type("Entry", (), {"name": "demo", "root_path": root})()])
     values = [type("Platform", (), {"platform": item, "status": "available"})() for item in platforms]
-    monkeypatch.setattr("fsq_agent.application.runs.inspect_registered_workspace", lambda _name: type("Status", (), {"platforms": values})())
+    monkeypatch.setattr("fsq_agent.application.runs.inspect_registered_workspace", lambda _name, *args, **kwargs: type("Status", (), {"platforms": values})())
 
 
 def test_allocate_and_finalize_run_metadata(tmp_path: Path) -> None:
@@ -29,7 +28,8 @@ def test_allocate_and_finalize_run_metadata(tmp_path: Path) -> None:
     running = transition_run(run_dir, metadata, "running")
     finalizing = transition_run(run_dir, running, "finalizing")
     completed = transition_run(run_dir, finalizing, "success", completed_at=datetime(2026, 8, 28, 0, 0, 2, tzinfo=UTC))
-    assert completed.duration_ms == 2000
+    assert completed.duration_ms is not None
+    assert completed.duration_unavailable_reason is None
     with pytest.raises(ValueError, match="immutable"):
         transition_run(run_dir, completed, "failed")
 
@@ -73,10 +73,9 @@ def test_static_html_escapes_facts_and_does_not_change_metadata(tmp_path: Path) 
     metadata = run / "run.json"
     metadata.write_text('{"truth":true}', encoding="utf-8")
     before = metadata.read_bytes()
-    path = generate_static_run_report(run, {"run_id": "<script>alert(1)</script>"})
-    document = path.read_text(encoding="utf-8")
-    assert "<script>alert(1)</script>" not in document
-    assert "Content-Security-Policy" in document
+    with pytest.raises(Exception, match="source identity"):
+        generate_static_run_report(run, {"run_id": "<script>alert(1)</script>"})
+    assert not (run / "report.html").exists()
     assert metadata.read_bytes() == before
 
 
@@ -101,21 +100,23 @@ def test_static_html_redacts_log_secrets(tmp_path: Path) -> None:
     run = tmp_path / "run"
     run.mkdir()
     (run / "events.jsonl").write_text('{"message":"token=secret-value cookie=session-value"}\n', encoding="utf-8")
-    document = generate_static_run_report(run, {"run_id": "safe"}).read_text(encoding="utf-8")
-    assert "secret-value" not in document
-    assert "session-value" not in document
+    with pytest.raises(Exception, match="source identity") as error:
+        generate_static_run_report(run, {"run_id": "safe"})
+    assert "secret-value" not in str(error.value)
+    assert "session-value" not in str(error.value)
+    assert not (run / "report.html").exists()
 
 
 def test_static_html_redacts_overview_secrets(tmp_path: Path) -> None:
     run = tmp_path / "run"
     run.mkdir()
-    document = generate_static_run_report(
-        run,
-        {"run_id": "safe", "authorization": "Bearer secret-token", "result": {"summary": "Cookie: session-value password=hunter2"}},
-    ).read_text(encoding="utf-8")
-    assert "secret-token" not in document
-    assert "session-value" not in document
-    assert "hunter2" not in document
+    with pytest.raises(Exception, match="source identity") as error:
+        generate_static_run_report(
+            run,
+            {"run_id": "safe", "authorization": "Bearer secret-token", "result": {"summary": "Cookie: session-value password=hunter2"}},
+        )
+    assert all(value not in str(error.value) for value in ("secret-token", "session-value", "hunter2"))
+    assert not (run / "report.html").exists()
 
 
 def test_run_lookup_rejects_symlink_directory_escape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

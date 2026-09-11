@@ -180,7 +180,7 @@ def test_run_fsq_core_case_writes_manifest_and_returns_bundle(tmp_path: Path) ->
 
     manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
     assert manifest["run_id"] == "run-1"
-    assert manifest["manifest_path"] == str(bundle.manifest_path)
+    assert manifest["manifest_path"] == bundle.manifest_path.name
     assert [step["step_id"] for step in manifest["steps"]] == ["core_cli-step-001", "core_cli-step-002"]
     assert [step["status"] for step in manifest["steps"]] == ["passed", "passed"]
     assert [event["event_type"] for event in manifest["events"]].count("step_start") == 2
@@ -194,7 +194,7 @@ def test_run_fsq_core_case_passes_post_action_delay_to_step_runner(tmp_path: Pat
     captured: dict[str, float] = {}
 
     class FakeSequenceRunner:
-        def __init__(self, *, step_runner, evidence_recorder) -> None:
+        def __init__(self, *, step_runner, evidence_recorder, cancellation_check=None) -> None:
             captured["platform"] = step_runner.post_action_delay_seconds.platform
             captured["common"] = step_runner.post_action_delay_seconds.common
 
@@ -232,14 +232,17 @@ def test_run_fsq_core_case_runs_trailing_teardown_after_failure(tmp_path: Path) 
     assert [step.step_id for step in bundle.steps] == [
         "core_cli_teardown-step-001",
         "core_cli_teardown-step-002",
+        "core_cli_teardown-step-003",
         "core_cli_teardown-step-004",
     ]
-    assert [step.status for step in bundle.steps] == ["passed", "failed", "passed"]
+    assert [step.status for step in bundle.steps] == ["passed", "failed", "skipped", "passed"]
+    assert bundle.steps[2].step_execution_id is None
 
     manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
     assert [step["step_id"] for step in manifest["steps"]] == [
         "core_cli_teardown-step-001",
         "core_cli_teardown-step-002",
+        "core_cli_teardown-step-003",
         "core_cli_teardown-step-004",
     ]
     artifact_reasons = [event["payload"]["reason"] for event in manifest["events"] if event["event_type"] == "artifact_captured"]
@@ -265,9 +268,10 @@ def test_run_fsq_core_case_runs_trailing_web_close_browser_after_failure(tmp_pat
     assert [step.step_id for step in bundle.steps] == [
         "core_web_teardown-step-001",
         "core_web_teardown-step-002",
+        "core_web_teardown-step-003",
         "core_web_teardown-step-004",
     ]
-    assert [step.status for step in bundle.steps] == ["passed", "failed", "passed"]
+    assert [step.status for step in bundle.steps] == ["passed", "failed", "skipped", "passed"]
 
 
 def test_run_strict_fsq_core_case_writes_evidence_and_core_report(tmp_path: Path) -> None:

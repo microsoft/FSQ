@@ -79,7 +79,7 @@ export interface CasesResponse { platform: PlatformId; cases: CaseRecord[]; trun
 
 export interface TimelineEvent {
   sequence: number;
-  time?: string;
+  time?: string | null;
   phase?: string;
   stepId?: string;
   label?: string;
@@ -94,7 +94,17 @@ export interface TimelineEvent {
   toolOutputPreview?: unknown;
 }
 export interface StrictCaseStep {
+  aggregateStatus?: string;
+  evidenceErrors?: Record<string, unknown>[];
   stepId: string;
+  sourceStepId?: string;
+  stepExecutionId?: string | null;
+  invocationPath?: string[];
+  skipReason?: string | null;
+  blockedByStep?: string | null;
+  attemptIndex?: number;
+  maxAttempts?: number;
+  attempts?: Record<string, unknown>[];
   index: number;
   authoredActionName: string;
   actionName: string;
@@ -134,6 +144,20 @@ export interface UiSnapshotResponse {
   content: string;
 }
 export interface StepArtifact {
+  redacted?: boolean;
+  transformed?: boolean;
+  displayTransformed?: boolean;
+  coverage?: ReportFact;
+  compaction?: ReportFact;
+  captureOccurrence?: number | null;
+  stepExecutionId?: string | null;
+  availability?: string;
+  unavailableReason?: string | null;
+  normalizedContent?: string;
+  artifactId?: string;
+  captureReason?: string;
+  attemptIndex?: number;
+  truncated?: boolean;
   kind: 'screenshot' | 'ui_snapshot';
   phase: string;
   timestamp: string | null;
@@ -145,6 +169,7 @@ export interface StepArtifact {
   sizeBytes?: number;
 }
 export interface StepArtifactsResponse {
+  comparison?: ReportFact | null;
   available: boolean;
   stepId: string;
   artifacts: StepArtifact[];
@@ -306,3 +331,15 @@ export interface RequestResource<T> {
   data: T | null;
   error: ApiErrorBody | null;
 }
+export type ReportFact = Record<string, unknown>;
+export interface PublicRunReport {
+  schema_version: 'fsq.report/v1';
+  run: ReportFact; source: ReportFact; execution: ReportFact; verification: ReportFact; evidence: ReportFact; processing: ReportFact;
+  steps: ReportFact[]; tool_calls: ReportFact[]; logs: ReportFact[]; artifacts: ReportFact[];
+  metrics: ReportFact; lineage: ReportFact; comparison: ReportFact; warnings: unknown[];
+}
+export interface RunReportResponse { workspace: string; run_id: string; platform: PlatformId; report: PublicRunReport; warnings: unknown[] }
+export interface HistoryRun { result?: ReportFact | null; evidence?: ReportFact | null; liveness?: string | null; persisted_status?: string | null; run_id: string; platform: PlatformId; mode?: string | null; status: string | null; started_at?: string | null; duration_ms?: number | null; source?: ReportFact | null; warnings: unknown[] }
+export interface HistoryResponse { workspace: string; platforms: PlatformId[]; filters: ReportFact; matched_count: number; returned_count: number; truncated: boolean; runs: HistoryRun[]; warnings: unknown[] }
+export type ReportFormat = 'json' | 'junit' | 'html' | 'bundle';
+export interface ReportExportResponse { run_id: string; platform: PlatformId; export_id: string; format: ReportFormat; files: { file_id: string; name: string; mime_type: string; size_bytes: number; sha256?: string; download_url: string }[]; warnings: unknown[] }

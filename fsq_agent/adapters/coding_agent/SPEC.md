@@ -24,6 +24,10 @@ The adapter must not be imported by Application, Agent, Execution, Core, Case DS
 
 The runtime implements required public `run_task`, `run_pre_plan`, and `run_verification` operations. It receives or constructs `CodingAgentPolicy` through the public Agent API and does not import Agent-private modules.
 
+Runtime composition binds the Models-owned Execution-allocated context, Core evidence-journal sink, execution identities, and cancellation boundary before external actions. The public factory retains settings and optional harness-factory inputs. The adapter does not import Execution, allocate Runs, update owner records, freeze results, generate final reports, or transition metadata.
+
+The main runtime owns the Harness returned by its default or supplied `harness_factory` for that invocation and closes it through `HarnessInterface.close` on success, startup failure after construction, inference failure, or cancellation. It also closes its Provider session even if Harness disposal fails. A caller supplying a shared borrowed Harness uses a wrapper with non-owning disposal. Test collaborators implement the same close contract without external effects.
+
 ## Internal Structure
 
 - `__init__.py`: public factory and concrete-runtime export.
@@ -45,6 +49,8 @@ The runtime implements required public `run_task`, `run_pre_plan`, and `run_veri
 
 Neutral engine dependency/configuration, model, tool conversion, streaming, content filtering, timeout, and structured-output failures map to safe FSQ results/events. The adapter branches on `EngineError` categories, not SDK error strings/types. Generic runtime failures use `agent_runtime_error` for both failure category and reason. Provider content-filter and incomplete-response failures retain their distinct categories and reasons. Cancellation propagates after scoped cleanup; cleanup does not overwrite the primary failure.
 
+The construction-timeout boundary disposes any late-created owned Harness rather than abandoning it. Late construction never permits tool invocation. Synchronous resource disposal does not block the event loop; cancellation does not detach cleanup while owned resources remain releasable. Primary failures, including failures already converted to StepResult, retain precedence; cleanup-only failures remain visible and do not fabricate an authored browser/application lifecycle step.
+
 ## Current Invariants
 
 - Main execution, pre-plan, and verification use the same neutral engine contracts for model settings, tracing, tool-output filtering, event metadata, and structured output. The adapter does not depend on OpenAI Agents SDK or implement a tool-continuation loop.
@@ -61,6 +67,8 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 - Neutral tool events are the single source of model-call events. FSQ adds run/task identity, redaction, capability metadata, display text, and existing persisted event types without duplicate calls/events.
 - After streamed main execution returns an `AgentResult`, the adapter emits exactly one `dynamic_agent_token_usage` event when neutral usage measurements are available. Its safe payload contains the configured provider and model plus available request, input, output, total, cached-input, and reasoning token counts. It does not estimate missing usage, inspect prompts or responses, include pre-plan or verification usage, write Run files directly, or mutate `run.json`.
 - Capability calls continue through Core `StepRunner`; AgentTool calls continue through Tools-owned behavior.
+- Every actual capability invocation receives stable source identity and a unique execution identity before action, including repeated calls and recovery attempts. New `runner_step_id` and result `step_id` alias `step_execution_id`. Core durable acknowledgements are independent of engine stream completion, final tool JSON, and context truncation; neutral progress events correlate identities without becoming a second execution ledger.
+- Structured `runner_result` preserves measured timing, primary action failure, secondary evidence errors, artifact availability, and identities before display truncation. Unknown measurements are null with reasons. AgentTools, pre-plan entries, and runner summary records do not inflate real capability counts; measured main-only usage is not estimated per step.
 - Capability tool bindings format neutral invalid-input failures through their existing failure-result shape, including capability provenance, without executing StepRunner or a platform action. The engine retains call IDs and returns the failure to the model for continuation.
 - Harness construction remains lazy and browser/application lifecycle remains explicit capability behavior.
 - CLI and Control Plane inject the same runtime factory at composition boundaries.
@@ -71,3 +79,5 @@ Neutral engine dependency/configuration, model, tool conversion, streaming, cont
 Model-paired engine construction, all three runtime operations, output contracts, tool events, context-budget replacements, and measured main-only usage work through both private engine backends without SDK imports in the adapter. Shared real-client transport tests exercise actual FSQ schemas and tool/result continuation; isolated runtime tests preserve neutral collaborator injection, task snapshot isolation, and existing OpenAI/Azure/Copilot behavior.
 
 Effort verification uses configured non-default values to establish propagation through all three Agent phases and visual evaluator composition, with the same task snapshot and no extra inference. Runtime behavior follows the selected preset's value rather than fixing a mutable platform default in tests.
+
+Context-binding verification proves that the shared Core sink receives actual capability facts once even when progress delivery fails or model-facing outputs are shortened, and that cancellation preserves persisted facts and backend resource cleanup.

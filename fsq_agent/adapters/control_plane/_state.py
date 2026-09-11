@@ -87,7 +87,7 @@ class ControlPlaneState:
             task.source.update(values)
             self._notify()
 
-    def update_case_step_result(self, request_id: str, step_id: str, result: dict[str, Any]) -> None:
+    def update_case_step_result(self, request_id: str, step_id: str, result: dict[str, Any], *, source_index: int | None = None) -> None:
         if not step_id:
             return
         with self._condition:
@@ -96,7 +96,12 @@ class ControlPlaneState:
             if not isinstance(steps, list):
                 return
             for step in steps:
-                if isinstance(step, dict) and step.get("stepId") == step_id:
+                if isinstance(step, dict) and (step.get("stepId") == step_id or step.get("sourceStepId") == step_id or (source_index is not None and step.get("index") == source_index)):
+                    execution_id = result.get("stepExecutionId")
+                    if execution_id:
+                        attempts = [item for item in step.get("attempts", []) if item.get("stepExecutionId") != execution_id]
+                        attempts.append(dict(result))
+                        step["attempts"] = attempts
                     step.update(result)
                     self._notify()
                     return
@@ -116,14 +121,11 @@ class ControlPlaneState:
             task = self._require(request_id)
             if task.status in _TERMINAL_STATUSES:
                 return
-            if task.cancel_requested and status in _TERMINAL_STATUSES:
-                status = "cancelled"
-                summary = "Run cancelled."
             task.status = status
             if summary is not None:
                 task.summary = summary
             if status in _TERMINAL_STATUSES:
-                self._mark_unfinished_strict_steps_skipped(task)
+                self._mark_unfinished_strict_steps_incomplete(task)
                 task.completed_at = _now()
                 if self._current_request_id == request_id:
                     self._current_request_id = None
@@ -189,13 +191,9 @@ class ControlPlaneState:
             task = self._require(request_id)
             if task.status in _TERMINAL_STATUSES:
                 return
-            if task.cancel_requested:
-                status = "cancelled"
-                summary = "Run cancelled."
-                result = {"status": "cancelled"}
             task.result = result
             task.report_available = report_available
-            self._mark_unfinished_strict_steps_skipped(task)
+            self._mark_unfinished_strict_steps_incomplete(task)
             task.status = status
             task.summary = summary
             task.completed_at = _now()
@@ -297,7 +295,7 @@ class ControlPlaneState:
             "status": task.status,
         }
 
-    def _mark_unfinished_strict_steps_skipped(self, task: TaskRecord) -> None:
+    def _mark_unfinished_strict_steps_incomplete(self, task: TaskRecord) -> None:
         if task.mode != "strict":
             return
         steps = task.source.get("caseSteps")
@@ -305,8 +303,8 @@ class ControlPlaneState:
             return
         for step in steps:
             if isinstance(step, dict) and not step.get("status"):
-                step["status"] = "skipped"
-                step["message"] = "Action was not executed."
+                step["status"] = "incomplete"
+                step["message"] = "No authoritative final result is available for this action."
 
     def _require(self, request_id: str) -> TaskRecord:
         task = self._tasks.get(request_id)

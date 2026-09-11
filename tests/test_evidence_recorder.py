@@ -98,7 +98,7 @@ def test_evidence_recorder_writes_manifest_json(tmp_path: Path) -> None:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert payload["bundle_id"] == "bundle-1"
     assert payload["run_id"] == "run-1"
-    assert payload["manifest_path"] == str(tmp_path / "evidence-manifest.json")
+    assert payload["manifest_path"] == "evidence-manifest.json"
     assert payload["steps"][0]["failure_category"] == "action_error"
     assert payload["steps"][0]["phase_reports"][1]["phase"] == "invoke"
     assert payload["steps"][0]["phase_reports"][1]["error_message"] == "tap failed"

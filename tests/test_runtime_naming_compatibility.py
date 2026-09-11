@@ -205,6 +205,17 @@ def test_released_and_new_runs_coexist_without_rewriting_history(released_worksp
     document = html_path.read_text(encoding="utf-8")
     assert "openai_agents.runner" in document
     assert "artifacts/screenshots/before.png" in document
+    assert "Historical Run source snapshot and digest are unavailable" in document
+    from fsq_agent.core.evidence import EvidenceRecorder
+    from fsq_agent.models import ReportGenerationError, RunReportExportOptions
+    from fsq_agent.report import RunReportService
+    from fsq_agent.report._export import export_report
+
+    report = RunReportService().project(old_run, {"normalized_evidence": EvidenceRecorder.recover_bundle(old_run)})
+    destination = old_run / "unverified-export.json"
+    with pytest.raises(ReportGenerationError, match="source identity"):
+        export_report(report, RunReportExportOptions(format="json", destination=destination))
+    assert not destination.exists()
     after = _snapshot(tmp_path)
     assert after.pop(html_path.relative_to(tmp_path))
     assert after == before

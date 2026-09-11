@@ -143,6 +143,8 @@ class ReportGenerator:
                     tool_name=str(tool_name),
                     tool_origin=self._tool_origin(str(tool_name), start_payload.get("tool_origin") or event_payload.get("tool_origin")),
                     status="failed" if event_type == "tool_call_failed" else "completed",
+                    transport_status="failed" if event_type == "tool_call_failed" else "completed",
+                    execution_status=event_payload.get("status") if event_payload.get("status") in {"passed", "failed", "success", "skipped", "cancelled", "incomplete", "error"} else None,
                     started_sequence=start.get("sequence"),
                     completed_sequence=event.get("sequence"),
                     started_at=start.get("timestamp"),

@@ -1,15 +1,16 @@
 # Release Media
 
-This directory owns the v0.1.0 public demo video, product screenshots, subtitles, naming rules, privacy review, and new-user acceptance.
+This directory owns the public demo media, product screenshots, subtitles, naming rules, privacy review, and new-user acceptance.
 
-The README uses `fsq-v0.1.0-android-demo-preview.gif` for an inline animated preview that works on GitHub, followed by the GitHub-hosted full video at <https://github.com/user-attachments/assets/aa9d0a12-2f93-4894-8349-52a013424939>. It keeps one secondary link to the hosted YouTube demo at <https://youtu.be/QqCahxGDdS0>. The README does not depend on a separate autoplay demo page because GitHub sanitizes embedded video players.
+The README first screen uses `fsq-control-plane-demo.gif`, a 20-second silent tour captured from the current Control Plane UI. It shows the real `Goal → Evidence → Candidate YAML → Strict Replay → Runs report → Portable HTML` workflow. The existing v0.1.0 full demo remains available through GitHub media attachment and YouTube.
 
-The edited MP4 is hosted outside the Git repository through GitHub media attachment and YouTube. The original local screen recording is intentionally not committed.
+The current-UI tour is delivered as a lightweight GIF. A separate live-demo video can be recorded and hosted later without committing large video files to Git history. Original local captures are intentionally not committed.
 
 ## Naming
 
 - `fsq-v0.1.0-demo-thumbnail.png` — linked video thumbnail;
 - `fsq-v0.1.0-android-demo-preview.gif` — lightweight README animation built from approved product screenshots;
+- `fsq-control-plane-demo.gif` — current Control Plane README first-screen tour;
 - `https://github.com/user-attachments/assets/aa9d0a12-2f93-4894-8349-52a013424939` — GitHub README media preview;
 - `01-describe-goal.png` — goal entry and setup;
 - `02-execute-workflow.png` — execution timeline;

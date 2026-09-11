@@ -1,4 +1,5 @@
 import type {
+  HistoryResponse, RunReportResponse, ReportExportResponse, ReportFormat,
   ApiErrorBody,
   AzureConfigPayload,
   OpenAIConfigPayload,
@@ -33,7 +34,23 @@ import type {
   WorkspacePlatformMutationResponse,
 } from './types';
 
+import { historyValid, publicReportValid, exportValid, diff as reportDiffValid } from './reportValidation';
+
 const API_BASE = '/api/control-plane';
+
+function validateHistory(value: unknown): HistoryResponse {
+  if (!historyValid(value)) invalidResponse('history', 'Invalid persisted Run fields.');
+  return value;
+}
+function validateRunReport(value: unknown): RunReportResponse {
+  if (!record(value) || !string(value.workspace) || !string(value.run_id) || !platform(value.platform) || !publicReportValid(value.report) || !arrayOf(value.warnings,string)) invalidResponse('report', 'Invalid report fields.');
+  if (value.report.run.run_id !== value.run_id || value.report.run.platform !== value.platform) invalidResponse('report', 'Mismatched report identity.');
+  return value as unknown as RunReportResponse;
+}
+function validateReportExport(value: unknown): ReportExportResponse {
+  if (!exportValid(value)) invalidResponse('export', 'Invalid report download mapping.');
+  return value;
+}
 const platforms = new Set<PlatformId>(['android', 'web', 'windows', 'macos']);
 const modes = new Set(['explore', 'strict']);
 const statuses = new Set(['preparing', 'running', 'finalizing', 'success', 'failed', 'inconclusive', 'cancelled', 'error']);
@@ -100,7 +117,7 @@ function readinessRecord(value: unknown): boolean {
 }
 function timelineEvent(value: unknown): boolean {
   if (!record(value) || !nonNegativeInteger(value.sequence)) return false;
-  return ['time', 'phase', 'stepId', 'label', 'status', 'message', 'level', 'toolCallId'].every((key) => value[key] === undefined || string(value[key]))
+  return (value.time === undefined || nullableString(value.time)) && ['phase', 'stepId', 'label', 'status', 'message', 'level', 'toolCallId'].every((key) => value[key] === undefined || string(value[key]))
     && (value.tool === undefined || nullableString(value.tool))
     && (value.durationMs === undefined || value.durationMs === null || finiteNumber(value.durationMs));
 }
@@ -112,6 +129,8 @@ export function validateRunSnapshot(value: unknown, path = 'run snapshot'): RunS
   const validSource = record(source)
     && (source.goal === undefined || string(source.goal))
     && (source.casePath === undefined || string(source.casePath))
+    && (source.caseContent === undefined || string(source.caseContent))
+    && (source.caseSteps === undefined || arrayOf(source.caseSteps, strictCaseStep))
     && (value.mode === 'explore' ? string(source.goal) && source.casePath === undefined : string(source.casePath) && source.goal === undefined);
   const validActiveStep = activeStep === null || (record(activeStep) && string(activeStep.stepId) && (activeStep.label === undefined || string(activeStep.label)));
   if (!validSource || !string(value.startedAt) || !nullableString(value.completedAt) || !bool(value.cancelRequested)
@@ -123,6 +142,15 @@ export function validateRunSnapshot(value: unknown, path = 'run snapshot'): RunS
     invalidResponse(path, 'Invalid run snapshot fields.');
   }
   return value as unknown as RunSnapshot;
+}
+
+function strictCaseStep(value: unknown): boolean {
+  if (!record(value) || !string(value.stepId) || !nonNegativeInteger(value.index) || !string(value.authoredActionName) || !string(value.actionName) || !string(value.kind)) return false;
+  return ['sourceStepId','stepExecutionId','skipReason','blockedByStep','failureCategory','message','status','aggregateStatus'].every(key => value[key] == null || string(value[key]))
+    && (value.evidenceErrors == null || arrayOf(value.evidenceErrors, record))
+    && ['attemptIndex','maxAttempts','durationMs'].every(key => value[key] == null || nonNegativeInteger(value[key]))
+    && (value.invocationPath == null || arrayOf(value.invocationPath,string))
+    && (value.attempts == null || arrayOf(value.attempts, item => record(item) && string(item.stepExecutionId) && string(item.status) && (item.attemptIndex == null || nonNegativeInteger(item.attemptIndex))));
 }
 
 function validateBootstrap(value: unknown): BootstrapResponse {
@@ -171,8 +199,14 @@ function validateStepArtifacts(value: unknown): StepArtifactsResponse {
     && (item.format === undefined || string(item.format)) && (item.contentBase64 === undefined || string(item.contentBase64))
     && (item.content === undefined || string(item.content)) && (item.error === undefined || string(item.error))
     && (item.sizeBytes === undefined || nonNegativeInteger(item.sizeBytes))
+    && ['artifactId','captureReason','normalizedContent','availability','unavailableReason'].every(key => item[key] == null || string(item[key]))
+    && (item.stepExecutionId == null || string(item.stepExecutionId)) && (item.captureOccurrence == null || nonNegativeInteger(item.captureOccurrence))
+    && ['redacted','transformed','displayTransformed'].every(key => item[key] == null || bool(item[key]))
+    && ['coverage','compaction'].every(key => item[key] == null || record(item[key]))
+    && (item.attemptIndex == null || nonNegativeInteger(item.attemptIndex)) && (item.truncated == null || bool(item.truncated))
     && (string(item.error) || (item.kind === 'screenshot' ? string(item.contentBase64) : string(item.content)));
   if (!record(value) || !bool(value.available) || !string(value.stepId) || !arrayOf(value.artifacts, artifact) || !nullableString(value.message)) invalidResponse('step artifacts', 'Invalid step artifact fields.');
+  if (value.comparison !== undefined && value.comparison !== null && !reportDiffValid(value.comparison)) invalidResponse('step artifacts', 'Invalid shared snapshot comparison.');
   return value as unknown as StepArtifactsResponse;
 }
 function validateReplayFrames(value: unknown): ReplayFramesResponse {
@@ -386,6 +420,45 @@ export function toApiError(error: unknown): ApiErrorBody {
 }
 
 export const controlPlaneClient = {
+  history: (workspaceName: string, filters: Record<string, string> = {}, signal?: AbortSignal) => {
+    const query = new URLSearchParams({ workspace: workspaceName });
+    for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);
+    return jsonRequest(`/history?${query}`, validateHistory, { signal }).then(value => { if (value.workspace !== workspaceName) invalidResponse('history', 'Mismatched Workspace.'); return value; });
+  },
+  runReport: (workspaceName: string, platformId: PlatformId, runId: string, baselineRunId?: string, signal?: AbortSignal, relatedRunIds: string[] = []) => {
+    const query = new URLSearchParams({ workspace: workspaceName });
+    if (baselineRunId) query.set('baselineRunId', baselineRunId);
+    relatedRunIds.forEach(id => query.append('relatedRunId', id));
+    return jsonRequest(`/history/${encodeURIComponent(platformId)}/${encodeURIComponent(runId)}?${query}`, validateRunReport, { signal }).then(value => { if (value.workspace !== workspaceName || value.platform !== platformId || value.run_id !== runId) invalidResponse('report', 'Mismatched requested Run.'); return value; });
+  },
+  exportReport: (workspaceName: string, platformId: PlatformId, runId: string, format: ReportFormat, baselineRunId?: string, signal?: AbortSignal, relatedRunIds: string[] = []) => jsonRequest(`/history/${encodeURIComponent(platformId)}/${encodeURIComponent(runId)}/exports`, validateReportExport, { method: 'POST', body: JSON.stringify({ workspaceName, format, ...(baselineRunId ? { baselineRunId } : {}), ...(relatedRunIds.length ? { relatedRunIds } : {}) }), signal }).then(value => {
+    if (value.run_id !== runId || value.platform !== platformId || value.format !== format) invalidResponse('export', 'Mismatched export identity.');
+    for (const file of value.files) {
+      const expected = `${API_BASE}/history/${encodeURIComponent(platformId)}/${encodeURIComponent(runId)}/exports/${encodeURIComponent(value.export_id)}/files/${encodeURIComponent(file.file_id)}`;
+      const url = new URL(file.download_url, window.location.origin);
+      if (!file.download_url.startsWith('/') || url.origin !== window.location.origin || url.pathname !== expected || url.searchParams.getAll('workspace').length !== 1 || url.searchParams.get('workspace') !== workspaceName || [...url.searchParams.keys()].some(key => key !== 'workspace') || url.hash) invalidResponse('export', 'Download mapping escapes requested scope.');
+    }
+    return value;
+  }),
+  historyArtifactUrl: (workspaceName: string, platformId: PlatformId, runId: string, artifactId: string) => `${API_BASE}/history/${encodeURIComponent(platformId)}/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}?workspace=${encodeURIComponent(workspaceName)}`,
+  historyArtifactImage: async (workspaceName: string, platformId: PlatformId, runId: string, artifactId: string, signal?: AbortSignal) => {
+    const response = await fetch(controlPlaneClient.historyArtifactUrl(workspaceName, platformId, runId, artifactId), { signal });
+    if (!response.ok) throw await responseError(response);
+    const mime = response.headers.get('Content-Type')?.split(';')[0];
+    if (!mime || !['image/png','image/jpeg','image/webp'].includes(mime)) invalidResponse('artifact image', 'Unsupported image content type.');
+    const length = Number(response.headers.get('Content-Length'));
+    if (!Number.isFinite(length) || length <= 0 || length > 16 * 1024 * 1024) invalidResponse('artifact image', 'Image exceeds the display limit.');
+    const blob = await response.blob();
+    if (!blob.size || blob.size > 16 * 1024 * 1024) invalidResponse('artifact image', 'Image exceeds the display limit.');
+    return blob;
+  },
+  historyArtifactText: async (workspaceName: string, platformId: PlatformId, runId: string, artifactId: string, signal?: AbortSignal) => {
+    const response = await fetch(controlPlaneClient.historyArtifactUrl(workspaceName, platformId, runId, artifactId), { signal });
+    if (!response.ok) throw await responseError(response);
+    const length = Number(response.headers.get('Content-Length'));
+    if (!Number.isFinite(length) || length > 512 * 1024) throw new Error('This artifact exceeds the 512 KiB display limit. Download the original artifact to inspect it.');
+    return response.text();
+  },
   bootstrap: (signal?: AbortSignal) => jsonRequest('/bootstrap', validateBootstrap, { signal }),
   readiness: (workspaceName: string, platform: PlatformId, signal?: AbortSignal, targetId?: string | null) =>
     platform === 'android' ? jsonRequest('/readiness', validateReadiness, { method: 'POST', body: JSON.stringify({workspaceName, platform, targetId: targetId || null}), signal })

@@ -4,6 +4,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,8 +14,29 @@ from fsq_agent.adapters.coding_agent._runtime import DefaultCodingAgentRuntime, 
 from fsq_agent.agent import Verifier
 from fsq_agent.agent_engine import ToolCall, ToolOutputEntry
 from fsq_agent.config import Settings
-from fsq_agent.models import ConfigurationError, GoalPrePlan, KnowledgeBundle, ReportArtifact, RunEvent, SkillBundle, StepResult
+from fsq_agent.execution import DynamicExecutionRequest, DynamicExecutionService
+from fsq_agent.models import GoalPrePlan, KnowledgeBundle, ReportArtifact, RunEvent, RunExecutionContext, SkillBundle, StepResult, ToolExecutionError
 from fsq_agent.observation import ExecutionLogger
+
+
+def _coordinate(agent):
+    async def coordinator(task, event_sink=None):
+        result = await DynamicExecutionService(agent=agent).execute(DynamicExecutionRequest(task=task, settings=agent.settings, event_sink=event_sink))
+        return result.task_result
+
+    return SimpleNamespace(run=coordinator)
+
+
+async def _run_in_context(agent, task, run_id, event_sink=None):
+    from fsq_agent.core.evidence import EvidenceRecorder
+
+    run_dir = agent.settings.output.runs_dir / run_id
+    return await agent.run_in_context(
+        task,
+        RunExecutionContext(run_id=run_id, run_dir=run_dir, platform=agent.settings.harness.platform),
+        event_sink,
+        evidence_sink=EvidenceRecorder(run_id=run_id, output_dir=run_dir),
+    )
 
 
 @pytest.mark.asyncio
@@ -36,8 +58,10 @@ async def test_agent_run_requires_configured_model_provider_auth(tmp_path: Path,
         }
     )
     settings.output.runs_dir = tmp_path / "runs"
-    with pytest.raises(ConfigurationError, match="not configured"):
-        await FsqAgent.from_settings(settings, lambda configured, *, harness_factory=None: DefaultCodingAgentRuntime(configured, object())).run(task, run_id="smoke-run")
+    with pytest.raises(ToolExecutionError, match="Run execution failed") as error:
+        await _coordinate(FsqAgent.from_settings(settings, lambda configured, *, harness_factory=None: DefaultCodingAgentRuntime(configured, object()))).run(task)
+    assert error.value.context["run_id"]
+    assert error.value.context["exception_type"] == "ConfigurationError"
 
 
 class _KnowledgeLoader:
@@ -72,6 +96,28 @@ def _settings_with_knowledge(
     return settings
 
 
+def _record_test_evidence(context):
+    from fsq_agent.models import ExecutableStep, RunnerEvent, RunnerStepResult
+
+    sink = context.get("evidence_sink")
+    allocated = context.get("context")
+    if sink is not None and allocated is not None:
+        step = sink.allocate_step_identity(ExecutableStep(step_id="observed", action_name="observe", kind="observation", params={}))
+        sink.record_event(
+            RunnerEvent(
+                run_id=allocated.run_id,
+                event_type="step_start",
+                step_id=step.step_id,
+                source_step_id=step.source_step_id,
+                step_execution_id=step.step_execution_id,
+                invocation_path=step.invocation_path,
+            )
+        )
+        sink.record_step_result(
+            RunnerStepResult(step_id=step.step_id, source_step_id=step.source_step_id, step_execution_id=step.step_execution_id, invocation_path=step.invocation_path, status="passed")
+        )
+
+
 class _Runtime:
     def __init__(self) -> None:
         self.last_task: Task | None = None
@@ -83,8 +129,10 @@ class _Runtime:
         skills: list[object],
         run_id: str,
         event_sink: object | None = None,
+        **execution_context,
     ) -> list[StepResult]:
         self.last_task = task
+        _record_test_evidence(execution_context)
         return [
             StepResult(
                 step_id=1,
@@ -101,6 +149,7 @@ class _Runtime:
         run_id: str,
         events_path: Path | None,
         event_sink: object | None = None,
+        **execution_context,
     ) -> list[StepResult]:
         return []
 
@@ -144,8 +193,10 @@ class _GoalRunRuntime(_Runtime):
         skills: list[object],
         run_id: str,
         event_sink: object | None = None,
+        **execution_context,
     ) -> list[StepResult]:
         self.last_task = task
+        _record_test_evidence(execution_context)
         satisfied = task.verification_goal or "Verification goal missing."
         return [
             StepResult(
@@ -167,6 +218,7 @@ class _CancelledRuntime:
         skills: list[object],
         run_id: str,
         event_sink: object | None = None,
+        **execution_context,
     ) -> list[StepResult]:
         raise asyncio.CancelledError()
 
@@ -177,6 +229,7 @@ class _CancelledRuntime:
         run_id: str,
         events_path: Path | None,
         event_sink: object | None = None,
+        **execution_context,
     ) -> list[StepResult]:
         return []
 
@@ -231,21 +284,29 @@ async def test_agent_uses_supplied_run_ids_without_managing_metadata(tmp_path: P
         verification_goal="A report exists.",
     )
 
-    result = await agent.run(task, run_id="supplied-run-1")
-    second_result = await agent.run(task, run_id="supplied-run-2")
+    outcome = await _run_in_context(agent, task, "supplied-run-1")
+    second_outcome = await _run_in_context(agent, task, "supplied-run-2")
+    assert outcome.task.id == second_outcome.task.id == task.id
+    assert reporter.run_ids == []
+    assert not (settings.output.runs_dir / "supplied-run-1" / "run.json").exists()
+    assert not (settings.output.runs_dir / "supplied-run-2" / "run.json").exists()
+    result = await _coordinate(agent).run(task)
+    second_result = await _coordinate(agent).run(task)
 
-    assert result.report.run_id == reporter.run_ids[0]
-    assert second_result.report.run_id == reporter.run_ids[1]
-    assert reporter.run_ids == ["supplied-run-1", "supplied-run-2"]
-    assert not (settings.output.runs_dir / result.report.run_id / "run.json").exists()
-    assert not (settings.output.runs_dir / second_result.report.run_id / "run.json").exists()
+    assert result.report.path.is_file()
+    assert second_result.report.path.is_file()
+    assert result.report.run_id != second_result.report.run_id
+    assert result.report.run_id.startswith("smoke-")
+    assert (settings.output.runs_dir / result.report.run_id / "run.json").is_file()
+    assert (settings.output.runs_dir / second_result.report.run_id / "run.json").is_file()
 
 
 @pytest.mark.parametrize("run_id", ["", " ", ".", "..", "../outside", "nested/run", "nested\\run", "C:relative", "bad\x00name"])
 async def test_agent_rejects_invalid_run_identity_before_side_effects(run_id: str) -> None:
     agent = FsqAgent(Settings(), Verifier(), _Reporter(), _KnowledgeLoader(), _SkillLoader(), _Runtime())
+    context = RunExecutionContext(run_id=run_id, run_dir=Path("unused"), platform="android")
     with pytest.raises(ValueError, match="Run ID"):
-        await agent.run(Task(description="test"), run_id=run_id)
+        await agent.run_in_context(Task(description="test"), context)
 
 
 def test_tool_output_budget_filter_artifacts_ordinary_sensitive_markers() -> None:
@@ -330,18 +391,19 @@ async def test_agent_run_emits_and_persists_live_events(tmp_path: Path, monkeypa
         verification_goal="A report exists.",
     )
 
-    result = await agent.run(task, event_sink=events.append, run_id="smoke-events-run")
+    result = await _coordinate(agent).run(task, event_sink=events.append)
 
     assert [event.type for event in events] == ["run_started", "agent_started", "run_completed"]
     assert [event.sequence for event in events] == [1, 2, 3]
     timeline_path = tmp_path / result.report.run_id / "events.jsonl"
     assert timeline_path.exists()
-    assert "run_completed" in timeline_path.read_text(encoding="utf-8")
+    assert "agent_started" in timeline_path.read_text(encoding="utf-8")
 
 
 async def test_agent_events_redact_configured_values_before_persistence_and_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_provider_refresh(monkeypatch)
     settings = Settings()
+    settings.output.runs_dir = tmp_path / "runs"
     private_value = "private-value-2617"
     settings.runtime_secrets.set_values({"TEST_ACCOUNT_PASSWORD": private_value})
     runtime = _Runtime()
@@ -349,12 +411,12 @@ async def test_agent_events_redact_configured_values_before_persistence_and_disp
     agent = FsqAgent(settings, Verifier(), _Reporter(), _KnowledgeLoader(), _SkillLoader(), runtime, ExecutionLogger(tmp_path))
     task = Task(id=f"task-{private_value}", name=f"Check {private_value}", description="Task", key_actions=["Inspect"], verification_goal="Inspection complete.")
 
-    await agent.run(task, event_sink=events.append, run_id="private-events-run")
+    await _run_in_context(agent, task, "private-events-run", events.append)
 
     assert runtime.last_task.name == f"Check {private_value}"
     assert private_value not in (tmp_path / "private-events-run" / "events.jsonl").read_text(encoding="utf-8")
     assert all(private_value not in event.model_dump_json() for event in events)
-    assert events[0].message == "Check ***"
+    assert events[0].message == "Check [REDACTED]"
 
 
 @pytest.mark.parametrize("notification", ["logger", "sink"])
@@ -367,7 +429,7 @@ async def test_failure_notification_cannot_replace_primary_exception_or_run_stat
     run_ids = []
 
     class FailedRuntime(_Runtime):
-        async def run_task(self, task, knowledge, skills, run_id, event_sink=None):
+        async def run_task(self, task, knowledge, skills, run_id, event_sink=None, **execution_context):
             run_ids.append(run_id)
             raise primary
 
@@ -385,9 +447,9 @@ async def test_failure_notification_cannot_replace_primary_exception_or_run_stat
     settings.output.runs_dir = tmp_path / "runs"
     agent = FsqAgent(settings, Verifier(), _Reporter(), _KnowledgeLoader(), _SkillLoader(), FailedRuntime(), FailedLogger())
     task = Task(description="Task", key_actions=["Inspect"], verification_goal="Inspection complete.")
-    with pytest.raises(type(primary)) as failure:
+    with pytest.raises(asyncio.CancelledError if cancelled else ToolExecutionError) as failure:
         await DynamicExecutionService(agent=agent).execute(DynamicExecutionRequest(task=task, settings=settings, event_sink=event_sink))
-    assert failure.value is primary
+    assert (failure.value if cancelled else failure.value.__cause__) is primary
     assert load_run_metadata(settings.output.runs_dir / run_ids[0]).status == ("cancelled" if cancelled else "error")
 
 
@@ -422,10 +484,11 @@ async def test_initial_event_failure_is_recorded_and_execution_keeps_original_st
         await asyncio.wait_for(entered.wait(), timeout=5)
         if cancelled:
             execution.cancel("Initial event dispatch cancelled")
-        with pytest.raises(asyncio.CancelledError if cancelled else RuntimeError) as failure:
+        with pytest.raises(asyncio.CancelledError if cancelled else ToolExecutionError) as failure:
             await asyncio.wait_for(execution, timeout=5)
         if not cancelled:
-            assert failure.value is primary
+            assert failure.value.__cause__ is primary
+            assert failure.value.context["run_id"] == events[0].run_id
     finally:
         if not execution.done():
             execution.cancel()
@@ -465,11 +528,12 @@ async def test_agent_run_persists_run_failed_for_cancellation(tmp_path: Path, mo
     )
 
     with pytest.raises(asyncio.CancelledError):
-        await agent.run(task, event_sink=events.append, run_id="smoke-cancelled-run")
+        await _coordinate(agent).run(task, event_sink=events.append)
 
     assert [event.type for event in events] == ["run_started", "agent_started", "run_failed"]
-    assert events[-1].message == "CancelledError"
-    assert events[-1].payload["exception_type"] == "CancelledError"
+    run_files = list(settings.output.runs_dir.glob("*/run.json"))
+    assert json.loads(run_files[0].read_text())["status"] == "cancelled"
+    assert json.loads((run_files[0].parent / "execution-result.json").read_text())["outcome"] == "cancelled"
     timeline_paths = await asyncio.to_thread(lambda: list(tmp_path.glob("smoke-*/events.jsonl")))
     assert len(timeline_paths) == 1
     timeline = await asyncio.to_thread(timeline_paths[0].read_text, encoding="utf-8")
@@ -501,7 +565,7 @@ async def test_agent_run_preplans_goal_only_task_before_execution(tmp_path: Path
         acceptance_criteria=["Goal completed: Access Downloads"],
     )
 
-    result = await agent.run(task, event_sink=events.append, run_id="pre-plan-run")
+    result = await _coordinate(agent).run(task, event_sink=events.append)
 
     assert result.status == "success"
     assert runtime.pre_plan_goal == "Access Downloads"
@@ -557,7 +621,7 @@ async def test_agent_run_refreshes_provider_before_pre_plan(tmp_path: Path, monk
         acceptance_criteria=["Goal completed: Access Downloads"],
     )
 
-    result = await agent.run(task, run_id="refresh-run")
+    result = await _coordinate(agent).run(task)
 
     assert result.status == "success"
     assert calls[:3] == ["refresh", "refresh_closed", "pre_plan"]
@@ -591,7 +655,7 @@ async def test_agent_pre_plan_receives_loaded_configured_skills(tmp_path: Path, 
         verification_goal="Goal completed: Access Downloads",
     )
 
-    result = await agent.run(task, run_id="skills-run")
+    result = await _coordinate(agent).run(task)
 
     assert result.status == "success"
     assert runtime.pre_plan_skills == [skill]
@@ -630,7 +694,7 @@ Raw case content:
         acceptance_criteria=["Goal completed: Execute the referenced case content from settings.fsq.yaml."],
     )
 
-    result = await agent.run(task, run_id="reference-run")
+    result = await _coordinate(agent).run(task)
 
     assert result.status == "success"
     assert runtime.pre_plan_reference_type == "raw_case"
@@ -807,3 +871,33 @@ async def test_optional_knowledge_read_cancellation_propagates(tmp_path: Path, m
     with pytest.raises(asyncio.CancelledError) as failure:
         await tool.invoke(call)
     assert failure.value is cancellation
+
+
+def test_complete_run_entry_remains_owned_by_execution(tmp_path):
+    agent = FsqAgent(_settings_with_knowledge(tmp_path), Verifier(), None, _KnowledgeLoader(), _SkillLoader(), _Runtime())
+    assert not hasattr(agent, "run")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_json", [False, True])
+async def test_event_persistence_redacts_structured_and_json_string_arguments(as_json):
+    from fsq_agent.agent._events import RunEventEmitter
+
+    events = []
+    values = {"password": "ARG_SECRET", "authorization": "Bearer HEADER_SECRET", "nested": {"access_token": "TOKEN_SECRET"}, "key": "Enter"}
+    await RunEventEmitter(sink=events.append).emit(RunEvent(run_id="run", task_id="task", type="tool_call_started", title="Call", tool_arguments=json.dumps(values) if as_json else values))
+    assert "ARG_SECRET" not in events[0].model_dump_json()
+    assert "HEADER_SECRET" not in events[0].model_dump_json()
+    assert "TOKEN_SECRET" not in events[0].model_dump_json()
+    args = json.loads(events[0].tool_arguments) if as_json else events[0].tool_arguments
+    assert args["key"] == "Enter"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [{"id_token": "CANARY_ID"}, "https://example.test/?refresh_token=CANARY_QUERY", "Bearer CANARY_BARE"])
+async def test_event_credential_family_stays_redacted(value):
+    from fsq_agent.agent._events import RunEventEmitter
+
+    events = []
+    await RunEventEmitter(sink=events.append).emit(RunEvent(run_id="run", task_id="task", type="planning_update", title="progress", payload={"value": value}))
+    assert "CANARY" not in events[0].model_dump_json()

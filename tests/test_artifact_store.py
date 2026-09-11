@@ -18,12 +18,12 @@ def test_artifact_store_writes_json_artifact_with_relative_ref(tmp_path: Path) -
         payload={"nodes": [{"text": "Login"}]},
     )
 
-    expected_path = tmp_path / "artifacts" / "ui-trees" / "step-1-finalize-ui-tree.json"
+    expected_path = tmp_path / ref.path
     assert expected_path.exists()
     assert json.loads(expected_path.read_text(encoding="utf-8")) == {"nodes": [{"text": "Login"}]}
-    assert ref.artifact_id == "step-1-finalize-ui-tree"
+    assert "step-1-finalize-ui-tree" in ref.artifact_id
     assert ref.kind == "ui_tree"
-    assert ref.path == Path("artifacts/ui-trees/step-1-finalize-ui-tree.json")
+    assert ref.path.parent == Path("artifacts/ui-trees")
     assert ref.mime_type == "application/json"
     assert ref.step_id == "step-1"
     assert ref.phase == "finalize"
@@ -40,11 +40,11 @@ def test_artifact_store_writes_text_log_artifact(tmp_path: Path) -> None:
         text="tap started\ntap finished\n",
     )
 
-    expected_path = tmp_path / "artifacts" / "logs" / "step-1-invoke-driver-log.txt"
+    expected_path = tmp_path / ref.path
     assert expected_path.read_text(encoding="utf-8") == "tap started\ntap finished\n"
-    assert ref.artifact_id == "step-1-invoke-driver-log"
+    assert "step-1-invoke-driver-log" in ref.artifact_id
     assert ref.kind == "log"
-    assert ref.path == Path("artifacts/logs/step-1-invoke-driver-log.txt")
+    assert ref.path.parent == Path("artifacts/logs")
     assert ref.mime_type == "text/plain"
 
 
@@ -59,9 +59,9 @@ def test_artifact_store_writes_screenshot_bytes_artifact(tmp_path: Path) -> None
         data=b"fake-png",
     )
 
-    expected_path = tmp_path / "artifacts" / "screenshots" / "step-1-finalize-screen.png"
+    expected_path = tmp_path / ref.path
     assert expected_path.read_bytes() == b"fake-png"
-    assert ref.artifact_id == "step-1-finalize-screen"
+    assert "step-1-finalize-screen" in ref.artifact_id
     assert ref.kind == "screenshot"
-    assert ref.path == Path("artifacts/screenshots/step-1-finalize-screen.png")
+    assert ref.path.parent == Path("artifacts/screenshots")
     assert ref.mime_type == "image/png"

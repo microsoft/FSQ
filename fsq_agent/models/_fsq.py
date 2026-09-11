@@ -95,6 +95,7 @@ class FsqCase(BaseModel):
     path: Path
     config: FsqCaseConfig
     commands: list[Any]
+    source_text: str | None = Field(default=None, exclude=True, repr=False)
 
     @property
     def id(self) -> str:

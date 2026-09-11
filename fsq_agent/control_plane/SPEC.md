@@ -13,11 +13,11 @@ The module is an entry-layer application. Shared workspace initialization, targe
 - `execution`: Coordinates dynamic and deterministic runs, lifecycle ordering, cancellation/teardown, reporting inputs, and candidate Case recording.
 - `config`: Loads/saves the user-level active provider and root-based workspace registry, discovers platform status, creates workspaces, adds/updates independent platform configurations, resolves explicit registered roots, loads one selected platform config plus its committed preset, and validates provider, workspace-platform, dynamic, and strict readiness.
 - `agent`: Runs Explore tasks through `FsqAgent` and emits existing safe `RunEvent` values.
-- `fsq`: Discovers and validates strict cases through `FsqCaseLoader` and adapts validated commands through the active registry snapshot.
+- `case_dsl`: Discovers and validates strict Cases through canonical `FsqCaseLoader` and the active registry snapshot.
 - `core`: Supplies shared Android device discovery, builds active platform harnesses through public factories, and executes canonical strict steps through the shared runner/evidence contracts.
 - `providers`: Uses non-interactive provider preparation for readiness, observable GitHub device authorization/model discovery/selected-model activation for Config, and live connection testing.
 - `ai_services`: Supplies public AI-assertion evaluator construction where Explore or authored `assertWithAI` requires a provider; the injected Core evaluator contract is unchanged.
-- `report`: Uses existing report generation and report-artifact contracts.
+- `report`: public report/comparison/export contracts consumed through Application; no transport-owned renderer, classifier, or snapshot-diff implementation.
 - External dependencies: Python standard-library HTTP, threading, subprocess, path, MIME, JSON, base64, and browser-opening facilities. Optional platform backend dependencies remain lazy runtime concerns of their owning modules.
 
 The module must not import `cli`, `capabilities`, module-private `_*.py` files from another public module, concrete private harnesses/drivers, OpenAI Agents SDK runtime types, or frontend source. Other domain/runtime modules must not import `control_plane`; `cli` may import its public server API.
@@ -31,6 +31,20 @@ Current `__init__.py` exports via explicit `__all__`:
 - `run_control_plane(options: ControlPlaneServerOptions) -> None`: Blocking server entry used by CLI.
 
 The public HTTP prefix is `/api/control-plane`.
+
+### Persisted Run history and reports
+
+History uses `/api/control-plane/history` independently of live `/runs/{request_id}`. Application resolves explicit registered Workspace/platform/Run identities on every request, with no fallback to startup directory, current Devices selection, Provider, or target readiness. v2/v1 and metadata-free history follow Application compatibility rules without rewriting facts.
+
+- `GET /history?workspace=<name>` delegates bounded list filters `platform`, repeated `status`, `mode`, `case`, `since`, and `limit` (20 default, 200 maximum), preserving counts, warnings, and truncation.
+- `GET /history/{platform}/{run_id}?workspace=<name>` delegates `get_run_report`, preserving public report snake_case fields and separate outcomes; optional `baselineRunId`/repeated `relatedRunId` remain same-Workspace/platform.
+- `GET /history/{platform}/{run_id}/artifacts/{artifact_id}?workspace=<name>` streams only Application-resolved source artifacts with validated membership, identity, containment, type, size, and digest.
+- `POST /history/{platform}/{run_id}/exports` accepts exactly `workspaceName`, format, and optional baseline/related IDs; uses default local profile and Run-contained output, returning 201 with atomic export ID/file mappings. No browser path, profile file, report content, host root, or upload destination is accepted.
+- `GET /history/{platform}/{run_id}/exports/{export_id}/files/{file_id}?workspace=<name>` serves only validated export-manifest mappings, including after restart. Host paths remain private; no arbitrary Run-file or directory-listing route exists.
+
+All history routes require loopback bind/peer and current scope validation; export additionally requires same-origin writes. Responses are no-store/nosniff with no CORS. Active formats are attachments; generated offline HTML has Report's restrictive CSP. GET reads do not create reports, execute, authenticate, or inspect UI. Explicit exports write only derived files, and errors never overwrite execution truth.
+
+Live task snapshots remain transport progress, not authoritative historical verdicts. An allocated terminal task exposes registered Workspace/platform/Run identity for `Open report`, never a durable request-id link. Strict rows use source/invocation-to-attempt mapping; only explicit backend outcomes mark skipped. Step-artifact projection retains all screenshot/UI-snapshot captures and uses Application's normalized comparison, with no second diff algorithm. Missing or incomplete evidence never implies success.
 
 ### Bootstrap and discovery
 
@@ -138,7 +152,7 @@ Task status is `preparing`, `running`, `finalizing`, `success`, `failed`, `incon
 Control Plane projects existing execution facts into:
 
 - Timeline rows with sequence, time, phase, stable step id when normalized execution metadata supplies one, step/tool label, duration, and safe message. The `status` field is included only when the source event carries an explicit result/progress status; Control Plane does not fabricate `running` for generic RunEvent updates that have no explicit status. Safe event details may include bounded/redacted `payload`, `toolCallId`, `toolArguments`, and `toolOutputPreview` fields when present on the source event.
-- Strict run source step rows with the authored action index, authored action name, canonical action name, step kind, and final result facts when available. Final strict action status, duration, failure category, and safe error/message text come from the matching `RunnerStepResult` or persisted manifest `steps[]` entry for the same `step_id`, not from low-level `RunnerEvent` records such as `step_finish`, `phase_finish`, `harness_call_finish`, or finalize artifact events. Low-level events remain log/progress facts only and must not override a failed, cancelled, skipped, or passed final step result. When a terminal strict run contains an authored action step with no matching final step result because execution stopped before that command, Control Plane marks that action as `skipped` for presentation instead of leaving it pending.
+- Strict source rows retain authored index/name, canonical action, kind, source identity, and invocation path linked by Execution inventory to attempts/results. Normalized logical outcomes supply status, duration, primary failure, and message; progress/artifact events do not override them. Only explicit unexecuted outcomes with reasons become skipped; unfinished or ambiguous facts remain incomplete/unknown.
 - Safe logs with level, phase, tool, status, and message.
 - The newest screenshot artifact reference and monotonically changing revision.
 - The newest normalized `ui_snapshot` artifact reference and monotonically changing revision.

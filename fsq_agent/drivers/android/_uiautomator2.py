@@ -74,6 +74,9 @@ class UiAutomator2AndroidDriver(AIAssertionBackendToolMixin):
         self.serial = serial
         self.device = device if device is not None else self._connect(serial)
 
+    def close(self) -> None:
+        return None
+
     def context(self) -> dict[str, object]:
         info = self._device_info()
         width = info.get("displayWidth")
@@ -240,12 +243,38 @@ class UiAutomator2AndroidDriver(AIAssertionBackendToolMixin):
     )
     def ui_snapshot(self, params: AndroidUiTreeParams) -> dict[str, object]:
         source_xml = self._dump_hierarchy_xml()
+        compacted = True
+        source_nodes = None
+        retained_nodes = None
+        clipped_attributes = None
         try:
+            source_root = _parse_xml_safely(source_xml)
             compact_xml = self._compact_ui_snapshot_xml(source_xml)
+            source_nodes = sum(1 for _ in source_root.iter())
+            retained_nodes = sum(1 for _ in _parse_xml_safely(compact_xml).iter())
+            clipped_attributes = sum(len(value) > 50 for node in source_root.iter() for key, value in node.attrib.items() if key in {"text", "content-desc", "hint"})
+        except ElementTree.ParseError:
+            compact_xml = source_xml
+            compacted = False
         # Snapshot compaction must fall back for any local or optional-backend failure by contract.
         except Exception:  # noqa: BLE001
             compact_xml = self._raw_hierarchy_xml_or(source_xml)
-        return {"xml": compact_xml}
+            compacted = False
+        return {
+            "xml": compact_xml,
+            "coverage": {
+                "status": "partial" if compacted and compact_xml != source_xml else "unknown",
+                "reason": "semantic_compaction" if compacted else "raw_fallback",
+                "source_characters": len(source_xml),
+                "retained_characters": len(compact_xml),
+            },
+            "compaction": {
+                "applied": compacted,
+                "text_attribute_limit": 50 if compacted else None,
+                "layout_nodes_removed": max(0, source_nodes - retained_nodes) if source_nodes is not None and retained_nodes is not None else None,
+                "clipped_attributes": clipped_attributes,
+            },
+        }
 
     def _dump_hierarchy_xml(self) -> str:
         try:

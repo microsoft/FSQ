@@ -24,7 +24,7 @@ Platform-neutral task, run, report, knowledge, capability, and execution exports
 - `AgentTaskInput`: Pydantic model describing the structured task envelope rendered into the model input. It includes a schema version, the task, complete key actions for execution planning, the single `verification_goal`, optional runtime policy text, and the final output contract name expected for the run.
 - `AgentPlanItem`: Pydantic model for one planned or adjusted agent step in final output.
 - `AgentFinalOutput`: Pydantic model for the SDK-neutral structured agent final output contract. It contains schema version, task status, summary, pre-plan, plan updates, goal-satisfaction claims, evidence, and errors.
-- `ToolCallRecord`: Pydantic model for a normalized real tool invocation reconstructed from run events, including true tool name, origin (`agent_tool`, `common`, `platform`, `runtime`, or `unknown`), arguments, output preview, artifact reference, status, timing, and error fields.
+- `ToolCallRecord`: Normalized real tool invocation with name, origin, safe arguments/output, evidence references, timing, and errors. Transport completion and actual execution status are distinct; compatibility `status` retains transport meaning and is not the capability verdict.
 - `FsqCaseHookAction`: Pydantic model for one normalized FSQ lifecycle hook action. It stores the authored hook action name (`runCase` or `runShell`), the non-empty string value, and any safe metadata needed to preserve order and validation context. It does not execute hooks.
 - `FsqCaseHook`: Pydantic model for one FSQ lifecycle hook entry from `onCaseStart` or `onCaseComplete`. It accepts an authored YAML mapping containing `runCase`, `runShell`, or both; rejects entries with no supported hook action or unknown hook keys; rejects empty string values; and preserves the authored key order as an ordered list of `FsqCaseHookAction` values so `runShell` before `runCase` and `runCase` before `runShell` remain distinguishable.
 - `CaseLifecycleSettings`: Pydantic model for config-level strict case lifecycle hooks. It exposes `on_case_start`/`onCaseStart` and `on_case_complete`/`onCaseComplete`, reuses the same `FsqCaseHook` entry model as case metadata, and defaults omitted lifecycle fields to empty lists. It validates configuration shape only and does not execute hooks, resolve hook paths, or run shell commands.
@@ -34,10 +34,17 @@ Platform-neutral task, run, report, knowledge, capability, and execution exports
 - `ExecutionStep`: Pydantic model for one planned tool action with expected outcome and retry policy.
 - `StepResult`: Pydantic model for one executed, skipped, failed, or adjusted pre-plan step outcome, timings, evidence references, and error summary.
 - `VerificationResult`: Pydantic model describing whether the task goal was achieved and why.
-- `TaskResult`: Pydantic model returned by the agent after execution, verification, and report generation.
+- `TaskResult`: Complete-operation compatibility result from Execution after execution, verification, and report processing. Its required `ReportArtifact` may reference the frozen minimal execution result when rich reporting fails.
 - `RunEvent`: Pydantic model for one live execution timeline event emitted during a task run, including run/task identity, sequence, timestamp, event type, title, message, optional tool call metadata, output preview, duration, and structured payload.
 - `RunEventSink`: Callable type accepted by orchestration/runtime/tool code to receive `RunEvent` values synchronously or asynchronously.
 - `ReportArtifact`: Pydantic model describing generated report paths and evidence bundle paths.
+- `RunMetadata`, `RunSource`, `RunResultSummary`, `RunStepCounts`, `RunRuntime`, and `RunArtifactIndex`: canonical immutable Run models, re-exported with identical object identity by Execution/Application where supported. New metadata is `fsq.run/v2`; supported v1 remains readable without invented fields.
+- `RunExecutionContext`: immutable allocated Run identity, platform, trusted Run directory, and safe provenance; no live provider, harness, sink, coordinator, or callback. Trusted local paths are not public report fields.
+- `DynamicAgentOutcome`: neutral in-context task/runtime/verification outcomes, safe errors, invocation references, and measured timing without a required report artifact.
+- `RunExecutionResult`: immutable `fsq.execution-result/v1` execution/verification facts, logical counts, primary failure, and required evidence health; derived processing cannot change it.
+- `EvidenceJournalRecord`: `fsq.evidence-event/v1` envelope with monotonic sequence, Run/source/execution identities, timestamp, event kind, and typed safe fact; distinct from Agent progress.
+- `PublicRunReport`: `fsq.report/v1` persisted/derived Run, source, outcome, evidence, logical-step/attempt, log, artifact, metric, processing, lineage, comparison, and warning contract.
+- `RunReportExportOptions`, `RunReportExportResult`, and `RunShareProfile`: validated JSON/JUnit/HTML/bundle export and sharing boundaries. Trusted internal destinations are not browser response fields; nested schema components are not separate public exports.
 - `KnowledgeBundle`: Pydantic model containing loaded private knowledge and loader diagnostics for agent context. Loader diagnostics are operational metadata and must not be rendered into model-facing execution prompts.
 - `PAGE_KNOWLEDGE_INDEX_SCHEMA_VERSION`: Constant containing the supported page-knowledge index schema version.
 - `PAGE_KNOWLEDGE_PAGE_SCHEMA_VERSION`: Constant containing the supported page-knowledge page-node schema version.
@@ -79,7 +86,7 @@ Android platform exports:
 - `AndroidTapOnParams`: Pydantic model for `tap_on` parameters. It requires either a `target` string or a non-empty `locator`.
 - `AndroidTapAtParams`: Pydantic model for `tap_at` parameters. It requires a `point` with integer `x` and `y` Android screen coordinates and accepts an optional `reference_screen_size` so strict replay can scale recorded coordinates to the current device size.
 - `AndroidLongPressOnParams`: Pydantic model for `long_press_on` parameters. It uses the same target contract as `AndroidTapOnParams`.
-- `AndroidInputTextParams`: Pydantic model for `input_text` parameters. It requires string `text`, optional serialized `textType` defaulting to `literal`, and either a `target` or non-empty `locator`. When `textType="runtimeSecret"`, `text` is an allowed environment variable name resolved by `core` immediately before driver invocation; concrete Android drivers receive only resolved literal strings.
+- `AndroidInputTextParams`: required text, optional `textType` defaulting to literal, and target or nonempty locator. Runtime-secret text names a Workspace reference resolved by Core before invocation; drivers receive only resolved literal strings.
 - `AndroidPressKeyParams`: Pydantic model for `press_key` parameters with one normalized required key string.
 - `AndroidSwipeParams`: Pydantic model for `swipe` parameters. It accepts either a direction string or both `start` and `end` points, with optional `reference_screen_size` for point-based strict replay scaling and optional duration in milliseconds.
 - `AndroidUiTreeParams`: Pydantic model for the Android `uiTree` replay alias of the canonical `ui_snapshot` driver observation capability. It accepts no fields and exists so dynamic agents and strict Android cases can request a compact current Android UI hierarchy through the normal harness action schema path. The model must remain fieldless in the Android compact-snapshot cycle; compaction options are not user-configurable parameters. Android compact UI snapshots preserve the `{"xml": ...}` payload shape, may omit layout-only/default data, and clip long text-like attributes to the first 50 characters.
@@ -93,18 +100,18 @@ Android platform exports:
 
 Web platform exports:
 
-- `WebLocator`: Pydantic model for Web target locators with optional `role`, `name`, `text`, `label`, `placeholder`, `testId`, `css`, and `xpath` fields. Web action parameter models that accept either a semantic `target` or `locator` require at least one populated target signal.
+- `WebLocator`: optional `role`, `name`, `text`, `label`, `placeholder`, `testId`, `css`, `xpath`, `altText`, `title`, and `ref`; target-or-locator actions require a populated signal.
 - `WebStartBrowserParams`: Pydantic model for the explicit `start_browser` Web lifecycle capability. It accepts no fields in the first lifecycle batch.
 - `WebCloseBrowserParams`: Pydantic model for the explicit `close_browser` Web lifecycle capability. It accepts no fields in the first lifecycle batch.
-- `WebNavigateToParams`: Pydantic model for `navigate_to` parameters, including required `url` and optional Playwright-safe `wait_until` lifecycle state.
-- `WebNavigateBackParams`: Pydantic model for `navigate_back` parameters. It accepts no fields.
-- `WebClickOnParams`: Pydantic model for `click_on` parameters. It requires either an exact snapshot `target` or non-empty `locator`, with optional human-readable `element`, `double_click`, `button`, and `modifiers` fields.
-- `WebTypeTextParams`: Pydantic model for `type_text` parameters. It requires string `text`, optional serialized `textType` defaulting to `literal`, and either an exact snapshot `target` or non-empty `locator`, with optional human-readable `element`, `submit`, and `slowly` fields. When `textType="runtimeSecret"`, `text` is resolved by `core` before the Web driver receives the command.
-- `WebSelectOptionParams`: Pydantic model for `select_option` parameters. It requires one or more `values` plus either an exact snapshot `target` or non-empty `locator`, with optional human-readable `element`.
-- `WebHoverOnParams`: Pydantic model for `hover_on` parameters. It requires either an exact snapshot `target` or non-empty `locator`, with optional human-readable `element`.
+- `WebNavigateToParams`: required `url` and optional `waitUntil` lifecycle state.
+- `WebNavigateBackParams`: optional `waitUntil` lifecycle state.
+- `WebClickOnParams`: snapshot target or nonempty locator, optional button and double fields.
+- `WebTypeTextParams`: required text, optional `textType` defaulting to literal, target or locator, and optional clear; runtime-secret names resolve through Core before invocation.
+- `WebSelectOptionParams`: target or locator and at least one of value, label, index, or values.
+- `WebHoverOnParams`: snapshot target or nonempty locator.
 - `WebPressKeyParams`: Pydantic model for `press_key` parameters with one normalized required key string.
 - `WebWaitForParams`: Pydantic model for `wait_for` parameters. It requires a populated snapshot `target`, non-empty `locator`, visible `text`, URL text/pattern, or bounded `timeout_ms`; optional `state` applies to target/locator waits, and `timeout_ms` bounds condition waits or acts as a fixed delay when supplied alone.
-- `WebTakeScreenshotParams`: Pydantic model for `take_screenshot` parameters. It accepts optional exact snapshot `target` or non-empty `locator`, optional human-readable `element`, optional image `type`, and optional `full_page`; artifact filenames are not user-controlled through the parameter model.
+- `WebTakeScreenshotParams`: optional `fullPage` and `omitBackground`; artifact paths remain storage-owned.
 - `WebAssertVisibleParams`: Pydantic model for Web `assert_visible` parameters. It requires either `target` or non-empty `locator` plus optional assertion metadata.
 - `WebAssertNotVisibleParams`: Pydantic model for Web `assert_not_visible` parameters. It requires either `target` or non-empty `locator` plus optional assertion metadata.
 - `WebTextAssertion`: Pydantic model for Web text assertion predicates, supporting `contains` and `equals`.
@@ -124,7 +131,7 @@ macOS platform exports:
 
 - `MacOSLocator`: Pydantic model for macOS target locators with optional serialized fields `accessibilityId`, `name`, `label`, `value`, `role`, `controlType`, `className`, `xpath`, `predicate`, and `point`. macOS action parameter models that accept a locator require at least one populated locator signal when no semantic `target` or explicit `point` is supplied.
 - `MacOSPoint`: Pydantic model for integer macOS screen coordinates with `x` and `y` fields.
-- `MacOSLaunchAppParams`: Pydantic model for `launch_app` driver parameters, including optional `bundle_id`, `app_path`, and `arguments` plus boolean `new_session` defaulting to false. Its field descriptions identify application identity inputs, session-creation-only inputs, and explicit session replacement for LLM callers. Runtime identity defaults come from environment-backed settings rather than shareable YAML.
+- `MacOSLaunchAppParams`: optional bundle/application identity and arguments plus `new_session` default false. Descriptions distinguish identity, session-only inputs, and explicit session replacement; defaults come from Workspace target settings.
 - `MacOSKillAppParams`: Pydantic model for `kill_app` driver parameters, including optional `bundle_id` and optional `close_session`. Its field descriptions distinguish application termination from Appium session closure for LLM callers.
 - `MacOSClickOnParams`: Pydantic model for `click_on` parameters. It requires a semantic `target`, non-empty `locator`, or explicit `point`, with optional modifier metadata.
 - `MacOSDoubleClickOnParams`: Pydantic model for `double_click_on` parameters. It uses the same target/locator/point contract as `MacOSClickOnParams`.
@@ -151,7 +158,7 @@ Shared settings exports:
 - `AgentRuntimeSettings.reasoning_effort`: accepts exactly `low`, `mid`, or `high` with a code-owned default of `mid` when omitted. Invalid supplied values, including `auto`, empty text, and null, fail configuration-model validation. This is a platform policy value, not a native vendor enum, optional SDK default, Workspace target field, or user Provider setting. Validation remains local to Models without importing `agent_engine`; native request types and conversion belong to that independent package.
 - `AgentPromptConfig`: Pydantic model containing optional Jinja template file paths and scalar prompt variables. It does not contain inline or file-backed custom instruction fields; project-specific guidance belongs in project knowledge, and reusable guidance belongs in configured skills.
 - `LocalToolOutputSettings`: Pydantic model controlling run-local tool-output artifacts and model-facing inline history. Its internal defaults use `recent_inline_output_count=3`, a 30,000-character per-output limit, and a 60,000-character cumulative inline budget; every other output uses a concise artifact reference. One-option policy fields are not exposed as YAML knobs.
-- `RuntimeSecretSettings`: Pydantic model listing environment variable names that runtime-secret text input may reference. Values are loaded through normal environment or `.env` loading, validated for presence by runtime initialization, resolved only in memory, and never stored in YAML case files.
+- `RuntimeSecretSettings`: Workspace runtime-secret names and private in-memory values, validated before protected actions; serialized runtime settings and Cases contain no private values.
 - `ExecutionSettings`: Pydantic model grouping runner-owned execution policy that applies across dynamic and strict execution.
 - `PostActionDelaySettings`: Pydantic model containing non-negative post-action delay defaults in seconds. `platform` defaults to `1.0` and applies to PlatformTool capabilities when capability metadata does not override it. `common` defaults to `0.0` and applies to CommonTool capabilities when capability metadata does not override it.
 
@@ -159,10 +166,10 @@ Platform settings exports:
 
 - `CaseLifecycleSettings`: Pydantic model selecting config-level strict case lifecycle hooks used by strict execution. It reuses FSQ hook entry models so config-level hooks and case-level hooks share validation and ordering semantics.
 - `HarnessSettings`: Pydantic model selecting the platform harness configuration used by goal-driven task execution. It contains platform-specific harness settings only; runner-owned execution pacing belongs to `ExecutionSettings`.
-- `AndroidHarnessSettings`: Pydantic model for the built-in Android harness runtime construction. YAML selects the Android backend; configuration loading fills optional `app_id` and device `serial` from `FSQ_ANDROID_APP_ID` and `FSQ_ANDROID_SERIAL`. Strict-core execution does not enable AI assertion evaluators through this settings model.
-- `WebHarnessSettings`: Pydantic model for the built-in Web harness runtime construction. YAML selects the Playwright backend, local browser channel, headless mode, optional base URL, and optional viewport settings; configuration loading fills the required local browser executable path from `FSQ_WEB_BROWSER_EXECUTABLE_PATH`. Strict-core execution does not enable AI assertion evaluators through this settings model.
-- `WindowsHarnessSettings`: Pydantic model for the built-in Windows harness runtime construction. YAML selects backend `pywinauto`; configuration loading fills local executable path, pywinauto backend kind, optional window title regex, and optional default launch arguments from `FSQ_WINDOWS_APP_PATH`, `FSQ_WINDOWS_BACKEND_KIND`, `FSQ_WINDOWS_WINDOW_TITLE_RE`, and `FSQ_WINDOWS_LAUNCH_ARGS`. Legacy YAML fields for those local values remain compatibility inputs for older configs, but environment values take precedence. Strict-core execution does not enable AI assertion evaluators through this settings model.
-- `MacOSHarnessSettings`: Pydantic model for the built-in macOS harness runtime construction. YAML selects backend `appium_mac2` and stable non-sensitive defaults including page-source depth, action timeout seconds, and `new_command_timeout_seconds` defaulting to 300 seconds for Appium session command-idle expiry. Configuration loading fills operator-local Appium server URL, bundle id, and app path from `FSQ_MACOS_APPIUM_SERVER_URL`, `FSQ_MACOS_BUNDLE_ID`, and `FSQ_MACOS_APP_PATH`. Strict-core execution does not enable AI assertion evaluators through this settings model.
+- `AndroidHarnessSettings`: preset backend policy, Workspace app target, and transient per-Run serial without environment fallback.
+- `WebHarnessSettings`: preset Playwright policy, Workspace browser channel, and discovered/configured executable path.
+- `WindowsHarnessSettings`: preset backend-kind policy and Workspace application path, title constraint, and launch arguments.
+- `MacOSHarnessSettings`: preset Mac2/snapshot/timeout policy and Workspace bundle/application identity. Only `FSQ_MACOS_APPIUM_SERVER_URL` overrides the preset endpoint; command-idle timeout defaults to 300 seconds independently of action timeout.
 - `AgentContextSettings`: Pydantic model grouping knowledge-root resources used to build agent context.
 - `AgentKnowledgeSettings`: Pydantic model containing the configured private knowledge `root_dir`, nested skill resource configuration, and optional pre-plan page-knowledge configuration.
 - `KnowledgeSkillSettings`: Pydantic model containing the skill directory under the knowledge root and the configured `SkillConfig` items loaded from that directory.
@@ -193,6 +200,18 @@ Exception exports:
 - `VerificationError`: Raised when verification cannot complete.
 - `ReportGenerationError`: Raised when report generation fails.
 
+## Run And Report Contracts
+
+Stable source-step identity and invocation occurrence identify logical leaves; attempts receive unique execution identities, also used by new compatibility `step_id` fields. Unattempted leaves have no invented execution ID, and historical ambiguity is explicit. Results retain authored/canonical action, kind, source, lifecycle phase, attempt, primary action outcome/failure, independent evidence errors, and artifact references. Logical counts do not count retries or containers twice.
+
+Measured timing uses UTC boundaries and monotonic prepare/invoke/settle/finalize durations; nested capture time is not added twice. Unknown measurements are null with unit/scope/unavailability reasons. Artifacts have unique kind/execution/phase/capture identities, contained relative paths, MIME, safe byte/digest metadata, availability, transformations, and truncation. `fsq.evidence/v2` records acknowledged journal checkpoint coverage; supported legacy manifests remain readable.
+
+Public report sections retain Run/source/execution/verification/evidence/processing/steps/tool_calls/logs/artifacts/metrics/lineage/comparison/warnings. Derived `run.gate` is passed, failed, error, or incomplete without overwriting execution or verification. Trustworthy completed success plus required evidence permits passed; known blocking product failure is failed; infrastructure failure, cancelled/interrupted unfinished execution, or missing required evidence is error; active/inconclusive/unresolved completion is incomplete. Precedence is error, failed, incomplete. Post-freeze processing interruption alone preserves the frozen disposition. JUnit maps error and incomplete to error.
+
+Comparison distinguishes single-step before/after from explicit baseline/current. Matching uses validated platform, source occurrence, execution mapping, and digests; missing/unmatched/clipped facts remain visible. Cross-Run references include Run plus artifact/execution identity, with `runs/<run_id>/` bundle namespaces. Differences are observations with algorithm provenance, not automatic regression verdicts.
+
+Share profiles produce separate copies with allowlisted display-text/optional-field redaction and validated image masks. Schema, identities, outcomes, gate, counts, measurements, references, original digests, and lineage cannot be rewritten. Transformations carry derived digests and omission records, not secret replacement values. An optional digest-bound Case review declaration is user-supplied export metadata, not independent approval or persisted Run truth. Path validation and IO remain Application/Report responsibilities.
+
 ## Platform Contract Blocks
 
 Shared platform contracts:
@@ -212,14 +231,14 @@ Web contracts:
 - Web parameter models include browser lifecycle, locator, navigation, click, text typing, select, hover, key, wait, screenshot, page snapshot, deterministic assertions, and Web AI assertion models.
 - Web settings are grouped under `WebHarnessSettings` and are selected by `HarnessSettings.platform == "web"`.
 - Web explicit observation command is represented as `ui_snapshot`/`uiSnapshot`; automatic runner evidence captures normalized `ui_snapshot` content sourced from Web page/accessibility snapshot data.
-- Web action parameter design follows Playwright MCP's LLM-facing core automation conventions where appropriate: action targets are replayable semantic locators or stable unique selectors, optional `element` fields are human-readable descriptions for interaction permission/auditing, screenshots are evidence/debugging observations rather than the normal action-selection substrate, and unsafe/opt-in capability families are not exposed.
+- Web action targets use semantic locators or current snapshot references. Unknown fields, including unsupported `element`, are rejected. Screenshots are evidence/debugging observations, not the normal action-selection substrate; unsafe/opt-in families are not exposed.
 
 Windows contracts:
 
 - Windows parameter models include locator, lifecycle, desktop click variants, text input, key input, UI snapshot, deterministic visibility assertions, and Windows AI assertion models.
 - Windows settings are grouped under `WindowsHarnessSettings` and are selected by `HarnessSettings.platform == "windows"`.
 - Windows explicit observation command is represented as `ui_snapshot`/`uiSnapshot`; automatic runner evidence captures normalized `ui_snapshot` content through the same driver observation contract.
-- Windows launch defaults such as app path, pywinauto backend kind, window title regex, and configured launch arguments are runtime settings filled from environment variables by `config`. `WindowsLaunchAppParams.extra_args` remains a per-step append-only override rather than a replacement for settings ownership.
+- Windows launch defaults are composed from Workspace targets and preset policy by Config. `WindowsLaunchAppParams.extra_args` remains an append-only per-step override, not replacement configuration ownership.
 - Windows action parameter design follows desktop conventions shared with macOS where possible: public replay aliases use `clickOn`, `doubleClickOn`, `rightClickOn`, `typeText`, `pressKey`, and `uiSnapshot`; coordinate-only actions are not exposed in the first Windows batch.
 
 macOS contracts:
@@ -237,6 +256,7 @@ macOS contracts:
 - `_task.py`: Task, plan, step, result, and verification models.
 - `_agent_io.py`: Structured agent task input, final output, plan item, schema version, and normalized tool-call record models.
 - `_events.py`: Live run event model and event sink type alias.
+- `_runs.py`: shared Run metadata, frozen result, safe context, dynamic outcome, and provenance values.
 - `_platform_runtime.py`: Shared `PlatformRuntimeCheck` boundary model, its status/readiness invariants, and the pure Web executable product/channel identity contract. It does not discover installed browsers, inspect filesystem existence or permissions, install runtimes, or own host-specific candidate paths.
 - `_fsq.py`: FSQ AI Test DSL case metadata, reusable lifecycle hook models, config lifecycle hook settings, and case models.
 - `_tools.py`: Unified capability metadata, replay policy, invocation/result contracts, registry snapshot models, AgentTool definition/call/result models, and temporary backward-compatible diagnostic aliases.
@@ -244,7 +264,7 @@ macOS contracts:
 - `_core.py`: Shared execution-core contract models for executable steps, strict replay refs, pure wait params, runner phases/events, harness context/results, artifact references, evidence manifests, and active platform parameter models used across `fsq`, `cli`, and `core`.
 - `_settings.py`: Settings value models.
 - `_skills.py`: Skill configuration and loaded skill bundle models.
-- `_report.py`: Report artifact and evidence models.
+- `_report.py`: report artifact, public report, sharing, and export boundary models.
 - `_knowledge.py`: Knowledge bundle model.
 - `_page_knowledge.py`: Public page-knowledge graph schema models and goal pre-plan output models.
 - `_exceptions.py`: Shared exception hierarchy.
@@ -270,7 +290,7 @@ Domain exceptions defined here inherit from `FsqAgentError` and carry concise hu
 - Shared capability, platform, task, and evidence contracts belong here rather than to concrete Core implementations. Independent inference contracts remain in `agent_engine`; module-specific application, execution, and service records follow their documented public ownership without creating duplicate domain models.
 - Capability metadata is the authoritative executable contract for recordable CommonTools and PlatformTools. `CapabilityDefinition`, `ReplayPolicy`, step kind, post-action delay overrides, and registry snapshots are the runtime authority instead of separate harness function or static Android action schemas. Live `CapabilityExecutorKind` values are `common` and `driver`; `harness` is not a live executor kind. Decorator declarations and platform catalog validation live in `capabilities`; `models` owns only the serializable contracts they produce. AgentTools use separate dynamic-only definition/call/result models and do not enter strict capability registries.
 - Shared platform parameter contracts and strict replay reference contracts must live in this module when they are consumed by more than one project module. Android parameter models are shared by `fsq` for YAML normalization, by `core` for dispatch validation, and by concrete drivers for typed backend calls. Strict replay references are shared by `fsq` parsing and `cli` strict replay resolution.
-- FSQ lifecycle hook metadata is a shared case contract. The models preserve operator-authored hook action order but do not execute hooks, resolve hook paths, run shell commands, construct registries, or generate evidence. Hook execution belongs to the strict CLI entry layer, while hook YAML validation belongs to the `fsq`/model boundary.
+- FSQ lifecycle metadata preserves authored order without executing hooks, resolving paths, running shell commands, constructing registries, or generating evidence. Execution owns hook semantics; Case DSL/Models owns validation.
 - Config-level case lifecycle hook settings reuse the same `FsqCaseHook` entry models as Case metadata. This keeps `caseLifecycle` configuration and `*.fsq.yaml` lifecycle fields aligned while preserving module boundaries: `models` validates shape, `config` loads settings, and Application coordinates lifecycle execution through owning modules.
 - `ReplayPolicy(kind="fsq_command").alias` preserves primary authored FSQ command names such as `tapOn`, `inputText`, `assertWithAI`, and `waitMs`, while canonical capability names such as `tap_on`, `input_text`, `assert_with_ai`, and `wait_ms` are stored in executable invocations. `CapabilityDefinition` does not carry a duplicate `aliases` list for these primary replay command names.
 - Android `uiTree` is a replay alias for the driver-owned, read-only canonical `ui_snapshot` observation capability. It may be exposed to dynamic agents through registry metadata and returns the current backend UI hierarchy. Dynamic recording skips observation capabilities even when their replay aliases remain valid for authored strict YAML cases. Automatic Android runner evidence uses the same normalized `ui_snapshot` artifact naming and content source.
@@ -281,7 +301,7 @@ Domain exceptions defined here inherit from `FsqAgentError` and carry concise hu
 - Windows driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Runtime-only step metadata such as evidence policy, timeout fields, source references, retry policy, replay-source metadata, redaction state, and step identifiers stays on `ExecutableStep` rather than inside Windows driver parameter models.
 - Windows mouse parameter models enforce endpoint and coordinate invariants at validation time.
 - macOS driver parameter models forbid unexpected fields and provide canonical `model_dump(mode="json", exclude_none=True)` output. Runtime-only step metadata such as evidence policy, timeout fields, source references, retry policy, replay-source metadata, redaction state, and step identifiers stays on `ExecutableStep` rather than inside macOS driver parameter models.
-- Runtime-secret text references are represented by text-entry parameter fields, not by a separate pre-resolution `RuntimeSecretRef` object. Omitted `textType` means literal text for YAML compatibility; `textType="runtimeSecret"` means `text` is an environment variable name resolved by `core` before driver invocation.
+- Runtime-secret references are text-entry fields, not a separate `RuntimeSecretRef`. Omitted `textType` means literal for compatibility; `runtimeSecret` names a Workspace secret resolved by Core before invocation.
 - `WaitMsParams` belongs to the inherited `wait_ms` CommonTool capability and its strict replay alias `waitMs`. It lets recorded strict cases replay pure waits without routing through Android gesture or driver APIs.
 - Web browser lifecycle is represented by explicit no-field parameter models `WebStartBrowserParams` and `WebCloseBrowserParams`; `navigate_to` is navigation on an already-started browser/page, not an implicit startup contract.
 - Web `ui_snapshot` is a driver-owned, read-only explicit observation capability with replay alias `uiSnapshot`. It returns Web accessibility/page snapshot content, remains valid for authored strict YAML cases, is skipped by dynamic recording, and must not reuse Android-oriented `ui_tree` or `uiTree` naming. Automatic Web runner evidence uses the same normalized `ui_snapshot` artifact naming.

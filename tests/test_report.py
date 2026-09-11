@@ -159,6 +159,8 @@ def test_report_generator_summarizes_tool_calls_from_events(tmp_path: Path) -> N
             "tool_name": "tap_on",
             "tool_origin": "harness",
             "status": "completed",
+            "transport_status": "completed",
+            "execution_status": None,
             "started_sequence": 10,
             "completed_sequence": 11,
             "started_at": "2026-05-09T00:00:00Z",

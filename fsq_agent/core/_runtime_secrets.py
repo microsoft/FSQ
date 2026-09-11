@@ -33,6 +33,10 @@ class RuntimeSecretStore:
     def warnings(self) -> tuple[str, ...]:
         return self._warnings
 
+    def redaction_values(self) -> tuple[str, ...]:
+        """Supply known private values only to in-process persistence sanitizers."""
+        return tuple(value for value in self._values.values() if value)
+
     def resolve(self, name: str) -> str:
         normalized = name.strip()
         if not normalized:

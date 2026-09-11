@@ -85,8 +85,9 @@ class FsqCaseLoader:
                 context={"path": str(case_path)},
             )
         try:
-            return self.load_text(case_path.read_text(encoding="utf-8"), case_path)
-        except (OSError, yaml.YAMLError) as exc:
+            source_text = case_path.read_bytes().decode("utf-8")
+            return self.load_text(source_text, case_path)
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
             raise ConfigurationError("Unable to read FSQ case file.", context={"path": str(case_path)}) from exc
 
     def load_text(self, content: str, path: str | Path) -> FsqCase:
@@ -98,7 +99,7 @@ class FsqCaseLoader:
             _reject_cycles(docs)
         except (yaml.YAMLError, RecursionError) as exc:
             raise ConfigurationError("Invalid Case YAML.", context={"path": str(case_path), "code": "case.yaml"}) from exc
-        return self._build_case(case_path, docs)
+        return self._build_case(case_path, docs).model_copy(update={"source_text": content})
 
     def load_cases(self, path: str | Path) -> list[FsqCase]:
         root = Path(path).expanduser().resolve()

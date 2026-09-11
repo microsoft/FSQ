@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import threading
 from dataclasses import dataclass, field
@@ -24,16 +23,15 @@ from fsq_agent.execution import (
     LifecycleExecutionRequest,
     LifecycleExecutionService,
     RecordingService,
-    RunArtifactIndex,
-    RunResultSummary,
+    RunLifecycleService,
     RunSource,
-    RunStepCounts,
     allocate_run,
     collect_strict_lifecycle_cases,
+    load_run_metadata,
     run_strict_lifecycle_case,
     transition_run,
 )
-from fsq_agent.models import ExecutableStep, FsqCase, RunnerEvent, RunnerStepResult, Task
+from fsq_agent.models import EvidenceBundle, ExecutableStep, FsqCase, RunnerEvent, RunnerStepResult, Task
 
 from ._cases import build_strict_registry_context, resolve_case
 from ._evidence import EvidenceProjection, configured_secret_values, safe_exception_message
@@ -242,8 +240,6 @@ async def _run_explore(prepared: PreparedRun, state: ControlPlaneState) -> None:
             )
         )
         result = execution.task_result
-        if state.is_cancel_requested(request_id):
-            _raise_async_cancelled()
         projection.bind_run(result.report.run_id)
         state.transition(request_id, "finalizing", summary="Finalizing evidence, report, and recording.")
         projection.load_persisted_manifest()
@@ -260,11 +256,38 @@ async def _run_explore(prepared: PreparedRun, state: ControlPlaneState) -> None:
             },
             report_available=result.report.path.exists(),
         )
-    except asyncio.CancelledError:
-        state.finish(request_id, status="cancelled", summary="Run cancelled.")
-        raise
+    except (asyncio.CancelledError, TaskCancelledError) as exc:
+        _finish_explore_error(prepared, state, projection, exc, cancelled=True)
+        if isinstance(exc, asyncio.CancelledError):
+            raise
     except Exception as exc:  # noqa: BLE001 - background failures are normalized into task state.
-        state.finish(request_id, status="error", summary=safe_exception_message(exc, settings=settings, unexpected=True))
+        _finish_explore_error(prepared, state, projection, exc)
+
+
+def _finish_explore_error(prepared, state: ControlPlaneState, projection: EvidenceProjection, exc: BaseException, *, cancelled: bool = False) -> None:
+    context = getattr(exc, "context", {})
+    context = context if isinstance(context, dict) else {}
+    run_id = context.get("run_id") or getattr(exc, "run_id", None)
+    platform = context.get("platform") or getattr(exc, "platform", None)
+    if isinstance(run_id, str) and platform == prepared.settings.harness.platform:
+        run_dir = Path(prepared.settings.output.runs_dir) / run_id
+        if run_dir.resolve().parent == Path(prepared.settings.output.runs_dir).resolve() and run_dir.is_dir():
+            projection.bind_run(run_id)
+            projection.load_persisted_manifest()
+            try:
+                frozen = RunLifecycleService.load_result(run_dir)
+            except (OSError, ValueError):
+                pass
+            else:
+                state.finish(
+                    prepared.request_id,
+                    status=frozen.outcome,
+                    summary=projection.safe_text(frozen.summary),
+                    result={"status": frozen.outcome, "processingError": "Execution processing stopped."},
+                    report_available=True,
+                )
+                return
+    state.finish(prepared.request_id, status="cancelled" if cancelled else "error", summary="Run cancelled." if cancelled else safe_exception_message(exc, settings=prepared.settings, unexpected=True))
 
 
 def _run_strict(prepared: PreparedRun, state: ControlPlaneState) -> None:
@@ -306,13 +329,13 @@ def _run_strict(prepared: PreparedRun, state: ControlPlaneState) -> None:
         harness = HarnessFactory().create_harness(
             platform=settings.harness.platform,
             harness_settings=settings.harness,
-            artifact_store=ArtifactStore(run_dir=run_dir),
+            artifact_store=ArtifactStore(run_dir=run_dir, secret_values=configured_secret_values(settings)),
             ai_assertion_evaluator=evaluator,
             runtime_secret_settings=settings.runtime_secrets,
             app_id=_android_app_id(settings, prepared.case) if settings.harness.platform == "android" else None,
             serial=prepared.target_id if settings.harness.platform == "android" else None,
         )
-        recorder = _ProjectionEvidenceRecorder(run_id=run_id, output_dir=run_dir, projection=projection)
+        recorder = _ProjectionEvidenceRecorder(run_id=run_id, output_dir=run_dir, projection=projection, secret_values=configured_secret_values(settings))
         artifact = (
             LifecycleExecutionService(runner=run_strict_lifecycle_case)
             .execute(
@@ -320,7 +343,7 @@ def _run_strict(prepared: PreparedRun, state: ControlPlaneState) -> None:
                     case_path=prepared.case_path,
                     case=prepared.case,
                     settings=settings,
-                    harness=_CancellableHarness(harness, state, request_id),
+                    harness=harness,
                     output_dir=run_dir,
                     run_id=run_id,
                     registry=prepared.registry,
@@ -336,47 +359,36 @@ def _run_strict(prepared: PreparedRun, state: ControlPlaneState) -> None:
             )
             .report
         )
-        state.raise_if_cancelled(request_id)
         state.transition(request_id, "finalizing", summary="Finalizing strict evidence and report.")
-        metadata = transition_run(run_dir, metadata, "finalizing")
         projection.load_persisted_manifest()
-        status, summary = _strict_report_status(artifact.path)
-        result_status = "success" if status == "passed" else "failed"
-        transition_run(
-            run_dir,
-            metadata,
-            result_status,
-            result=RunResultSummary(summary=summary, steps=_strict_report_step_counts(artifact.path)),
-            artifacts=RunArtifactIndex(
-                report=artifact.path.with_suffix(".json").name,
-                report_markdown=artifact.path.name,
-                events="events.jsonl" if (run_dir / "events.jsonl").is_file() else None,
-                evidence_manifest=artifact.evidence_manifest_path.name if artifact.evidence_manifest_path else None,
-            ),
-        )
+        persisted = load_run_metadata(run_dir)
+        result_status = persisted.status
+        summary = persisted.result.summary
         state.finish(
             request_id,
             status=result_status,
             summary=projection.safe_text(summary),
-            result={"status": status},
+            result={"status": result_status},
             report_available=artifact.path.exists(),
         )
     except TaskCancelledError:
+        terminal = None
         if run_dir is not None and metadata is not None:
-            _best_effort_terminal_run(run_dir, metadata, "cancelled")
-        state.finish(request_id, status="cancelled", summary="Run cancelled.")
+            terminal = _best_effort_terminal_run(run_dir, metadata, "cancelled")
+        state.finish(request_id, status=terminal.status if terminal else "cancelled", summary=terminal.result.summary if terminal else "Run cancelled.")
     except Exception as exc:  # noqa: BLE001
+        terminal = None
         if run_dir is not None and metadata is not None:
-            _best_effort_terminal_run(run_dir, metadata, "error")
-        state.finish(request_id, status="error", summary=safe_exception_message(exc, settings=settings, unexpected=True))
+            terminal = _best_effort_terminal_run(run_dir, metadata, "error")
+        state.finish(request_id, status=terminal.status if terminal else "error", summary=terminal.result.summary if terminal else safe_exception_message(exc, settings=settings, unexpected=True))
     finally:
         if evaluator is not None:
             evaluator.close()
 
 
 class _ProjectionEvidenceRecorder(EvidenceRecorder):
-    def __init__(self, *, run_id: str, output_dir: Path, projection: EvidenceProjection) -> None:
-        super().__init__(run_id=run_id, output_dir=output_dir)
+    def __init__(self, *, run_id: str, output_dir: Path, projection: EvidenceProjection, secret_values: tuple[str, ...] = ()) -> None:
+        super().__init__(run_id=run_id, output_dir=output_dir, secret_values=secret_values)
         self.projection = projection
 
     def record_event(self, event: RunnerEvent) -> None:
@@ -388,48 +400,8 @@ class _ProjectionEvidenceRecorder(EvidenceRecorder):
         self.projection.project_step_result(result)
 
 
-class _CancellableHarness:
-    def __init__(self, harness: Any, state: ControlPlaneState, request_id: str) -> None:
-        self._harness = harness
-        self._state = state
-        self._request_id = request_id
-
-    def _check(self) -> None:
-        self._state.raise_if_cancelled(self._request_id)
-
-    def get_context(self):
-        self._check()
-        return self._harness.get_context()
-
-    def action_space(self):
-        return self._harness.action_space()
-
-    def before_action(self, step, context) -> None:
-        self._check()
-        return self._harness.before_action(step, context)
-
-    def invoke_action(self, step, context):
-        self._check()
-        return self._harness.invoke_action(step, context)
-
-    def after_action(self, step, context, action_result) -> None:
-        self._check()
-        return self._harness.after_action(step, context, action_result)
-
-    def capture_artifact(self, *args, **kwargs):
-        self._check()
-        return self._harness.capture_artifact(*args, **kwargs)
-
-    def classify_error(self, error, phase, step):
-        return self._harness.classify_error(error, phase, step)
-
-
 def _projection(settings: Settings, state: ControlPlaneState, request_id: str) -> EvidenceProjection:
     return EvidenceProjection(state, request_id, Path(settings.output.runs_dir), secret_values=configured_secret_values(settings))
-
-
-def _raise_async_cancelled() -> None:
-    raise asyncio.CancelledError
 
 
 def _task_from_goal(goal: str, request_id: str) -> Task:
@@ -482,26 +454,21 @@ def _validate_android_app_id(settings: Settings, *, root_case: FsqCase, case: Fs
         raise ValueError("Android app id is required for strict execution.")
 
 
-def _strict_report_status(path: Path) -> tuple[str, str]:
-    json_path = path.with_suffix(".json")
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    summary = payload.get("summary") if isinstance(payload, dict) else None
-    status = str(summary.get("status") if isinstance(summary, dict) else "failed")
-    failed = summary.get("failed_steps", 0) if isinstance(summary, dict) else 0
-    return status, "Strict replay passed." if status == "passed" else f"Strict replay failed with {failed} failed step(s)."
-
-
-def _strict_report_step_counts(path: Path) -> RunStepCounts:
-    payload = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    summary = payload.get("summary") if isinstance(payload, dict) else None
-    total = int(summary.get("total_steps", 0) or 0) if isinstance(summary, dict) else 0
-    failed = int(summary.get("failed_steps", 0) or 0) if isinstance(summary, dict) else 0
-    return RunStepCounts(total=total, passed=max(0, total - failed), failed=failed)
-
-
-def _best_effort_terminal_run(run_dir: Path, metadata, status: str) -> None:
+def _best_effort_terminal_run(run_dir: Path, metadata, status: str):
     try:
-        transition_run(run_dir, metadata, status)
+        current = load_run_metadata(run_dir)
+        if current.status in {"success", "failed", "inconclusive", "cancelled", "error"}:
+            return current
+        lifecycle = RunLifecycleService()
+        try:
+            frozen = lifecycle.load_result(run_dir)
+        except FileNotFoundError:
+            try:
+                bundle = lifecycle.read_evidence(run_dir)
+            except FileNotFoundError:
+                bundle = EvidenceBundle(bundle_id=f"{current.run_id}-evidence", run_id=current.run_id)
+            frozen = lifecycle.freeze(run_dir, current, bundle=bundle, status=status)
+        return lifecycle.finalize(run_dir, current, execution_result=frozen)
     except Exception:  # noqa: BLE001, S110 - preserve the original execution failure.
         pass
 

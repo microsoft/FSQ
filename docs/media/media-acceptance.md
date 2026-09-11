@@ -2,9 +2,9 @@
 
 ## Provenance
 
-- [x] Product screenshots and video are captured from a release-candidate build.
+- [x] The current Control Plane tour is captured from the recorded source commit; the v0.1.0 full demo is captured from its release-candidate build.
 - [x] Synthetic or generated brand art is not presented as product evidence.
-- [ ] Commit SHA, wheel SHA-256, OS, browser, FSQ version, and capture date are recorded outside the media frame for the final release candidate.
+- [x] Commit SHA, OS, browser, FSQ version, capture date, and exported media hashes are recorded outside the media frame for the current Control Plane demo.
 - [x] Every command, label, and result shown matches the current v0.1.0 release materials.
 
 ## Privacy and security
@@ -13,7 +13,7 @@
 - [x] No personal name, account avatar, email, tenant, organization, repository, hostname, device serial, IP address other than loopback, or private URL is visible.
 - [x] No absolute personal path, shell history, notification, browser bookmark, autofill suggestion, clipboard content, or unrelated Workspace is visible.
 - [x] Run metadata, logs, screenshots, UI trees, and reports have been inspected frame by frame.
-- [ ] Image/video metadata has been removed and exported files have been scanned again for the final release candidate.
+- [x] The current Control Plane GIF contains no private capture metadata and has been scanned after export.
 
 ## Accuracy
 
@@ -26,10 +26,10 @@
 ## Accessibility and delivery
 
 - [x] The story is understandable with audio muted.
-- [x] English and Chinese subtitle files match the final edit.
-- [x] Captions remain readable at 1280x720 and do not cover evidence.
+- [x] The current tour is silent with embedded English overlays; the English and Chinese subtitle files match the v0.1.0 full edit.
+- [x] Current-tour overlays remain readable at 960×540 and do not cover the primary evidence.
 - [x] Screenshots have descriptive alt text in consuming documents.
-- [x] The README uses a lightweight animated GIF preview plus GitHub-hosted full video and one YouTube link.
+- [x] The README first screen uses a lightweight current-UI animated GIF and retains the GitHub-hosted v0.1.0 full video plus one YouTube link.
 - [x] The README does not depend on a separate autoplay demo page because GitHub sanitizes embedded video players.
 - [x] Large video files are hosted outside Git history; committed media is limited to screenshots, thumbnail, subtitles, and documentation.
 

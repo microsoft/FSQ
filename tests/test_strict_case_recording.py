@@ -17,8 +17,98 @@ def _write_event(path: Path, event: RunEvent) -> None:
         handle.write(event.model_dump_json() + "\n")
 
 
+def test_renamed_save_retains_both_digests_outside_candidate_yaml(tmp_path):
+    import hashlib
+
+    from fsq_agent.application import CaseSaveRequest, save_recorded_case
+
+    run = tmp_path / "origin"
+    run.mkdir()
+    candidate = run / "recorded.fsq.yaml"
+    candidate.write_text("schemaVersion: fsq.ai-test/v1\nname: original\nplatform: web\n---\n- waitMs:\n    duration_ms: 1\n")
+    mapping = [{"command_index": 0, "source_step_id": "original-step", "step_execution_id": "executed-step", "invocation_path": ["agent", "1"]}]
+    recording = run / "recording.json"
+    recording.write_text(json.dumps({"source_run_id": "origin", "command_mapping": mapping, "draft": False}))
+    before = candidate.read_bytes(), recording.read_bytes()
+    request = CaseSaveRequest(candidate_path=candidate, destination_directory=tmp_path / "cases", platform="web", case_name="renamed")
+    saved = save_recorded_case(request)
+    assert saved.outcome == "created"
+    relation = json.loads((run / "lineage.jsonl").read_text().splitlines()[-1])
+    assert relation["candidate_digest"] == hashlib.sha256(before[0]).hexdigest()
+    assert relation["case_digest"] == hashlib.sha256(saved.path.read_bytes()).hexdigest()
+    assert relation["candidate_digest"] != relation["case_digest"]
+    assert (run / relation["saved_snapshot_path"]).read_bytes() == saved.path.read_bytes()
+    assert relation["command_mapping"] == mapping
+    assert (candidate.read_bytes(), recording.read_bytes()) == before
+    assert save_recorded_case(request).outcome == "unchanged"
+    assert len((run / "lineage.jsonl").read_text().splitlines()) == 2
+
+
 def _record_with_service(**kwargs):
     return RecordingService().record(**kwargs)
+
+
+async def test_explore_renamed_save_and_real_strict_lifecycle_keep_execution_lineage(tmp_path):
+    from fsq_agent._capability_bootstrap import build_capability_registry
+    from fsq_agent.application import CaseSaveRequest, save_recorded_case
+    from fsq_agent.case_dsl import FsqCaseLoader
+    from fsq_agent.core import ArtifactStore, EvidenceRecorder, HarnessFactory, StepRunner
+    from fsq_agent.execution import DynamicExecutionRequest, DynamicExecutionService
+    from fsq_agent.execution.lifecycle import run_strict_lifecycle_case
+    from fsq_agent.models import DynamicAgentOutcome, ExecutableStep, PostActionDelaySettings, RunReportExportOptions
+    from fsq_agent.report import RunReportService
+
+    settings = Settings(harness=HarnessSettings(platform="web"))
+    settings.workspace.root_dir = tmp_path
+    settings.output.runs_dir = tmp_path / ".fsq/runs/web"
+    settings.cases.dir = tmp_path / "cases/web"
+    registry = build_capability_registry(platform="web")
+
+    def harness(run_dir):
+        return HarnessFactory().create_harness(platform="web", harness_settings=settings.harness, artifact_store=ArtifactStore(run_dir))
+
+    class Agent:
+        async def run_in_context(self, task, context, event_sink=None, *, evidence_sink, cancellation_check=None):
+            gateway = harness(context.run_dir)
+            try:
+                runner = StepRunner(gateway, capability_registry=registry, evidence_sink=evidence_sink, post_action_delay_seconds=PostActionDelaySettings(platform=0, common=0))
+                observed = runner.run_step(context.run_id, ExecutableStep(step_id="wait", kind="action", action_name="waitMs", params={"duration_ms": 1}))
+                assert observed.status == "passed"
+                return DynamicAgentOutcome(task=task, steps=[], verification=VerificationResult(status="success", summary="Wait completed."))
+            finally:
+                gateway.close()
+
+    explored = await DynamicExecutionService(agent=Agent()).execute(
+        DynamicExecutionRequest(task=Task(description="Wait", planning_reference_kind="goal", planning_reference_text="Wait"), settings=settings, record=True)
+    )
+    assert explored.recording.status == "recorded"
+    candidate = explored.recording.recorded_case_path
+    before = candidate.read_bytes()
+    saved = save_recorded_case(CaseSaveRequest(candidate_path=candidate, destination_directory=settings.cases.dir, platform="web", case_name="renamed-wait"))
+    strict_dir = settings.output.runs_dir / "strict-renamed"
+    gateway = harness(strict_dir)
+    try:
+        run_strict_lifecycle_case(
+            case_path=saved.path,
+            case=FsqCaseLoader().load_case(saved.path),
+            settings=settings,
+            harness=gateway,
+            output_dir=strict_dir,
+            run_id=strict_dir.name,
+            registry=registry,
+            registry_snapshot=registry.snapshot(),
+            resolve_steps=lambda steps, _: steps,
+            post_action_delay_seconds=PostActionDelaySettings(platform=0, common=0),
+        )
+    finally:
+        gateway.close()
+    service = RunReportService()
+    origin = service.project(candidate.parent, normalized_evidence=EvidenceRecorder.recover_bundle(candidate.parent))
+    combined = service.project(strict_dir, normalized_evidence=EvidenceRecorder.recover_bundle(strict_dir), baseline=origin, related_runs=[origin])
+    assert combined.comparison["baseline_current"]["steps"][0]["status"] == "matched"
+    assert combined.lineage["related_runs"][0]["run"]["run_id"] == candidate.parent.name
+    assert service.export(combined, RunReportExportOptions(format="json", destination=tmp_path / "lineage.json")).path.is_file()
+    assert candidate.read_bytes() == before
 
 
 def _recordable_web_run(
@@ -635,8 +725,14 @@ def test_record_dynamic_goal_publication_failure_preserves_recording_and_existin
     published_path = published_path.with_name("unrelated.fsq.yaml")
     published_path.write_text("existing", encoding="utf-8")
 
+    import os
+
+    original_replace = os.replace
+
     def fail_replace(_source: Path, _destination: Path) -> None:
-        raise OSError("replace failed")
+        if Path(_destination).parent == settings.cases.dir:
+            raise OSError("replace failed")
+        original_replace(_source, _destination)
 
     monkeypatch.setattr("fsq_agent.execution.recording.os.link", fail_replace)
 
@@ -654,6 +750,8 @@ def test_record_dynamic_goal_publication_failure_preserves_recording_and_existin
     assert published_path.read_text(encoding="utf-8") == "existing"
     assert list(settings.cases.dir.iterdir()) == [published_path]
     assert any("publication" in warning.lower() for warning in recording.warnings)
+    assert recording.publication_status == "failed"
+    assert recording.publication_errors
     manifest = json.loads((run_dir / "recording.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "recorded"
     assert manifest["validation_status"] == "passed"

@@ -7,7 +7,9 @@ from fsq_agent.config import Settings
 
 def test_create_case_agent_uses_public_runtime_factory(monkeypatch) -> None:
     settings = Settings()
-    sentinel = object()
+    from types import SimpleNamespace
+
+    sentinel = SimpleNamespace()
     captured = {}
 
     def fake_from_settings(configured, runtime_factory):

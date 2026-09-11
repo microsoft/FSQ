@@ -90,6 +90,18 @@ def test_core_evidence_report_generator_writes_markdown_and_json(tmp_path: Path)
     assert payload["artifacts"][0]["path"] == "artifacts/screenshots/step-2-finalize-failure.png"
 
 
+def test_core_report_does_not_count_skipped_and_cancelled_as_failures(tmp_path: Path) -> None:
+    bundle = EvidenceBundle(run_id="partial", bundle_id="partial", steps=[RunnerStepResult(step_id="skip", status="skipped"), RunnerStepResult(step_id="cancel", status="cancelled")])
+    manifest = tmp_path / "evidence-manifest.json"
+    manifest.write_text(bundle.model_dump_json(), encoding="utf-8")
+    CoreEvidenceReportGenerator().generate_from_manifest(manifest)
+    report = json.loads((tmp_path / "core-report.json").read_text(encoding="utf-8"))
+    assert report["summary"]["failed_steps"] == 0
+    assert report["summary"]["skipped_steps"] == 1
+    assert report["summary"]["cancelled_steps"] == 1
+    assert report["summary"]["status"] == "cancelled"
+
+
 def test_core_evidence_report_groups_lifecycle_steps(tmp_path: Path) -> None:
     manifest_path = tmp_path / "evidence-manifest.json"
     bundle = EvidenceBundle(
@@ -198,7 +210,7 @@ def test_core_evidence_report_groups_lifecycle_steps(tmp_path: Path) -> None:
 
     markdown = artifact.path.read_text(encoding="utf-8")
     assert "## Lifecycle Summary" in markdown
-    assert "| Before case | `passed` | `2` | `2` | `0` |" in markdown
+    assert "| Before case | `passed` | `1` | `1` | `0` |" in markdown
     assert "| Main case | `passed` | `1` | `1` | `0` |" in markdown
     assert "| After case | `failed` | `1` | `0` | `1` |" in markdown
     assert "| Phase | Source | Action | Step | Status | Failure Category | Error |" in markdown
@@ -211,8 +223,8 @@ def test_core_evidence_report_groups_lifecycle_steps(tmp_path: Path) -> None:
     assert payload["summary"]["lifecycle"]["onCaseStart"] == {
         "label": "Before case",
         "status": "passed",
-        "total_steps": 2,
-        "passed_steps": 2,
+        "total_steps": 1,
+        "passed_steps": 1,
         "failed_steps": 0,
     }
     assert payload["summary"]["lifecycle"]["onCaseComplete"]["status"] == "failed"

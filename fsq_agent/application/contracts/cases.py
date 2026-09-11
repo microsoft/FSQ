@@ -44,13 +44,14 @@ class CaseTestRequest(BaseModel):
 class CaseTestResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     run_id: str
-    status: Literal["success", "failed"]
+    status: Literal["success", "failed", "inconclusive", "cancelled", "error"]
     summary: str
     report_path: Path
     evidence_manifest_path: Path | None = None
     suggestion_path: Path | None = None
     candidate_case_path: Path | None = None
     warnings: list[str] = Field(default_factory=list)
+    processing: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class CaseFormatRequest(BaseModel):

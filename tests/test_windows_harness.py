@@ -1,11 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from io import BytesIO
 from typing import Any
 
 import pytest
-from PIL import Image
 
 from fsq_agent.core import (
     ArtifactStore,
@@ -354,27 +352,10 @@ def test_windows_harness_uses_empty_artifacts_when_evidence_window_capture_fails
     )
     context = harness.get_context()
 
-    screenshot_ref = harness.capture_artifact(
-        kind="screenshot",
-        reason="before-action" if phase == "prepare" else "after-action",
-        context=context,
-        step_id="step-1",
-        phase=phase,
-    )
-    snapshot_ref = harness.capture_artifact(
-        kind="ui_snapshot",
-        reason="before-action" if phase == "prepare" else "after-action",
-        context=context,
-        step_id="step-1",
-        phase=phase,
-    )
-
-    screenshot = (tmp_path / screenshot_ref.path).read_bytes()
-    image = Image.open(BytesIO(screenshot))
-    image.load()
-    assert image.size == (1, 1)
-    assert image.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
-    assert (tmp_path / snapshot_ref.path).read_text(encoding="utf-8") == "{}"
+    for kind in ("screenshot", "ui_snapshot"):
+        with pytest.raises(RuntimeError, match="window is unavailable"):
+            harness.capture_artifact(kind=kind, reason="capture", context=context, step_id="step-1", phase=phase)
+    assert not list(tmp_path.rglob("*.png"))
 
 
 def test_windows_harness_does_not_hide_invoke_capture_failures(tmp_path) -> None:
@@ -432,15 +413,11 @@ def test_windows_runner_lifecycle_captures_before_and_after_when_window_capture_
         step=_step(action_name, params),
     )
 
-    assert result.status == "passed"
-    assert result.failure_category is None
-    assert [report.status for report in result.phase_reports] == ["passed", "passed", "passed"]
-    assert [artifact.kind for report in result.phase_reports for artifact in report.artifact_refs] == [
-        "screenshot",
-        "ui_snapshot",
-        "screenshot",
-        "ui_snapshot",
-    ]
+    assert result.status == "failed"
+    assert result.failure_category == "artifact_error"
+    assert result.action_status == "passed"
+    assert len(result.evidence_errors) == 4
+    assert all(ref.availability == "failed" for phase in result.phase_reports for ref in phase.artifact_refs)
 
 
 def test_windows_harness_assert_with_ai_uses_injected_evaluator(tmp_path) -> None:

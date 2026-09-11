@@ -9,6 +9,7 @@ from enum import IntEnum
 from pathlib import Path
 
 import click
+from pydantic import ValidationError
 
 from fsq_agent.adapters.control_plane import ControlPlaneServerOptions, run_control_plane
 from fsq_agent.application import (
@@ -19,6 +20,7 @@ from fsq_agent.application import (
     CaseFormatRequest,
     CaseTestRequest,
     DoctorRequest,
+    ExportRunReportRequest,
     GenerateRunHtmlRequest,
     ListRunsRequest,
     ReadRunLogsRequest,
@@ -32,6 +34,7 @@ from fsq_agent.application import (
     create_case,
     diagnose_workspace,
     event_record,
+    export_run_report,
     format_case,
     generate_run_html,
     initialize_workspace,
@@ -97,6 +100,15 @@ class ProtocolGroup(click.Group):
             if standalone_mode:
                 raise SystemExit(ExitCode.USAGE) from exc
             raise click.exceptions.Exit(ExitCode.USAGE) from exc
+        except ValidationError as exc:
+            error = ApplicationError(
+                code=ApplicationErrorCode.CASE_INVALID,
+                category=ApplicationErrorCategory.REQUEST_VALIDATION,
+                message="Command arguments are invalid.",
+                action="Check the documented argument limits and required fields.",
+                details={"fields": [".".join(str(part) for part in item["loc"]) for item in exc.errors(include_input=False)]},
+            )
+            return _top_level_error(error, _requested_output(invocation_args), _requested_operation(invocation_args), standalone_mode)
         except ApplicationError as exc:
             return _top_level_error(
                 exc,
@@ -115,15 +127,26 @@ class ProtocolGroup(click.Group):
             return _finish_invocation(result, standalone_mode)
 
 
+def _case_exit_code(status: str) -> ExitCode:
+    if status == "cancelled":
+        return ExitCode.INTERRUPTED
+    if status == "error":
+        return ExitCode.INTERNAL
+    return ExitCode.CASE_FAILED
+
+
 def _requested_output(args: list[str] | None) -> str:
     values = args or []
     if "--json" in values and "format" in values:
         return "json"
     for index, value in enumerate(values):
         if value == "--output" and index + 1 < len(values):
-            return values[index + 1]
+            return values[index + 1] if values[index + 1] in {"human", "json", "jsonl"} else "human"
         if value.startswith("--output="):
-            return value.partition("=")[2]
+            output = value.partition("=")[2]
+            return output if output in {"human", "json", "jsonl"} else "human"
+        if not value.startswith("-"):
+            break
     return "human"
 
 
@@ -280,7 +303,7 @@ def case_create(context: click.Context, platform: str, goal: str, name: str | No
     except Exception as exc:  # noqa: BLE001 - transport boundary normalization.
         _application_error(context, normalize_application_error(exc))
     if result.status != "success" or result.publication_outcome == "conflict":
-        raise click.exceptions.Exit(ExitCode.CASE_FAILED)
+        raise click.exceptions.Exit(_case_exit_code(result.status))
 
 
 @case_group.command(name="test")
@@ -309,6 +332,37 @@ def case_test(context: click.Context, case_path: Path, platform: str, suggest: b
     except Exception as exc:  # noqa: BLE001 - transport boundary normalization.
         _application_error(context, normalize_application_error(exc))
     if result.status != "success":
+        raise click.exceptions.Exit(_case_exit_code(result.status))
+
+
+@case_group.command(name="format")
+@click.argument("case_path", type=click.Path(path_type=Path))
+@click.option("--check", is_flag=True, help="Validate and check canonical formatting (default).")
+@click.option("--diff", "show_diff", is_flag=True, help="Preview the canonical formatting diff.")
+@click.option("--write", is_flag=True, help="Validate and atomically write canonical formatting.")
+@click.option("--json", "json_output", is_flag=True, help="Return structured static diagnostics and results.")
+@click.pass_context
+def case_format(context: click.Context, case_path: Path, check: bool, show_diff: bool, write: bool, json_output: bool) -> None:
+    if json_output:
+        context.obj["output"] = "json"
+    if sum((check, show_diff, write)) > 1:
+        raise click.UsageError("Choose only one of --check, --diff, or --write.")
+    result = format_case(CaseFormatRequest(current_directory=Path.cwd(), case_path=case_path, mode="write" if write else "diff" if show_diff else "check"))
+    if context.obj["output"] == "human":
+        label = "Invalid Case" if not result.valid else "Formatted" if result.changed else "Already canonical" if result.formatted else "Formatting required"
+        click.echo(f"{label}: {result.path}")
+        click.echo(f"Scope: {result.validation_scope}")
+        for warning in result.warnings:
+            click.echo(f"Warning: {warning}")
+        for diagnostic in result.diagnostics:
+            click.echo(f"{diagnostic.code}: {diagnostic.field_path} {diagnostic.message}")
+        if result.diff:
+            click.echo(result.diff, nl=False)
+    else:
+        _emit_terminal(context, result.model_dump(mode="json"))
+    if not result.valid:
+        raise click.exceptions.Exit(ExitCode.USAGE)
+    if not result.formatted:
         raise click.exceptions.Exit(ExitCode.CASE_FAILED)
 
 
@@ -431,7 +485,20 @@ def runs_list(context: click.Context, platform: str | None, statuses: tuple[str,
         click.echo("RUN ID  PLATFORM  MODE  STATUS  STARTED  DURATION  CASE/GOAL")
         for item in result.runs:
             source = item.source.case_id or item.source.goal_summary if item.source else "—"
-            click.echo(f"{item.run_id}  {item.platform}  {item.mode or '—'}  {item.status}  {item.started_at or '—'}  {item.duration_ms or '—'}  {source}")
+            click.echo(
+                f"{item.run_id}  {item.platform}  {item.mode or '—'}  {item.status}  {item.started_at.astimezone() if item.started_at else '—'}  {item.duration_ms if item.duration_ms is not None else '—'}  {source}"
+            )
+            if item.liveness is not None:
+                click.echo(f"  Persisted: {item.persisted_status or 'unknown'}; owner: {item.liveness}")
+            if item.result and item.result.failed_step:
+                click.echo(f"  Failed step: {item.result.failed_step}")
+            if item.evidence:
+                click.echo(f"  Evidence: {item.evidence.get('status', 'unknown')}")
+            for warning in item.warnings:
+                click.echo(f"  Warning: {warning}")
+        click.echo(f"Returned {result.returned_count} of {result.matched_count}" + (" (truncated)" if result.truncated else ""))
+        for warning in result.warnings:
+            click.echo(f"Warning: {warning}")
     else:
         _emit_terminal(context, result.model_dump(mode="json"))
 
@@ -458,11 +525,13 @@ def runs_show(context: click.Context, run_id: str, platform: str | None, open_re
         shown = shown.model_copy(update={"html_path": generated.html_path})
     if context.obj["output"] == "human":
         run = shown.run
-        source = run.source.case_id or run.source.goal_summary or "—"
+        source = (run.source.case_id or run.source.goal_summary or "—") if run.source else "Unknown"
         click.echo(f"Run ID: {run.run_id}")
         click.echo(f"Platform: {run.platform}")
-        click.echo(f"Mode: {run.mode}")
-        click.echo(f"Status: {run.status}")
+        click.echo(f"Mode: {run.mode or 'unknown'}")
+        click.echo(f"Status: {run.status or 'unknown'}")
+        click.echo(f"Persisted status: {run.persisted_status or 'unknown'}")
+        click.echo(f"Owner liveness: {run.liveness or 'unknown'}")
         click.echo(f"Started: {run.started_at.astimezone() if run.started_at else '—'}")
         click.echo(f"Completed: {run.completed_at.astimezone() if run.completed_at else '—'}")
         click.echo(f"Duration: {run.duration_ms if run.duration_ms is not None else '—'} ms")
@@ -486,6 +555,42 @@ def runs_show(context: click.Context, run_id: str, platform: str | None, open_re
             click.echo(f"Warning: {warning}")
     else:
         _emit_terminal(context, shown.model_dump(mode="json"))
+
+
+@runs.command(name="export")
+@click.argument("run_id")
+@click.option("--platform", type=PLATFORMS)
+@click.option("--format", "report_format", type=click.Choice(["json", "junit", "html", "bundle"]), required=True)
+@click.option("--output", "output_path", type=click.Path(path_type=Path))
+@click.option("--baseline", "baseline_run_id")
+@click.option("--related-run", "related_run_ids", multiple=True)
+@click.option("--share-profile", type=click.Path(path_type=Path, exists=True, dir_okay=False))
+@click.pass_context
+def runs_export(
+    context: click.Context, run_id: str, platform: str | None, report_format: str, output_path: Path | None, baseline_run_id: str | None, related_run_ids: tuple[str, ...], share_profile: Path | None
+) -> None:
+    result = export_run_report(
+        ExportRunReportRequest(
+            current_directory=Path.cwd(),
+            run_id=run_id,
+            platform=platform,
+            format=report_format,
+            output_path=output_path,
+            baseline_run_id=baseline_run_id,
+            related_run_ids=related_run_ids,
+            share_profile=share_profile,
+        )
+    )
+    if context.obj["output"] == "human":
+        click.echo(f"Run: {result.run_id}")
+        click.echo(f"Execution: {result.execution_status or 'unknown'}")
+        click.echo(f"Report gate: {result.report_gate}")
+        click.echo(f"Export: {result.format}")
+        click.echo(f"Output: {result.output_path}")
+        for warning in result.warnings:
+            click.echo(f"Warning: {warning}")
+    else:
+        _emit_terminal(context, result.model_dump(mode="json"))
 
 
 @runs.command(name="logs")
@@ -643,6 +748,8 @@ def _emit_safe_internal_diagnostic(error: ApplicationError) -> None:
 
 
 def _error_exit_code(error: ApplicationError) -> ExitCode:
+    if error.code == ApplicationErrorCode.RUN_CANCELLED:
+        return ExitCode.INTERRUPTED
     mapping = {
         "request_validation": ExitCode.USAGE,
         "workspace_configuration": ExitCode.WORKSPACE,
@@ -660,34 +767,3 @@ def _context_operation(context: click.Context) -> str:
         parts.append(current.info_name or current.command.name or "unknown")
         current = current.parent
     return ".".join(reversed(parts)) or "fsq"
-
-
-@case_group.command(name="format")
-@click.argument("case_path", type=click.Path(path_type=Path))
-@click.option("--check", is_flag=True, help="Validate and check canonical formatting (default).")
-@click.option("--diff", "show_diff", is_flag=True, help="Preview the canonical formatting diff.")
-@click.option("--write", is_flag=True, help="Validate and atomically write canonical formatting.")
-@click.option("--json", "json_output", is_flag=True, help="Return structured static diagnostics and results.")
-@click.pass_context
-def case_format(context, case_path, check, show_diff, write, json_output):
-    if json_output:
-        context.obj["output"] = "json"
-    if sum((check, show_diff, write)) > 1:
-        raise click.UsageError("Choose only one of --check, --diff, or --write.")
-    result = format_case(CaseFormatRequest(current_directory=Path.cwd(), case_path=case_path, mode="write" if write else "diff" if show_diff else "check"))
-    if context.obj["output"] == "human":
-        label = "Invalid Case" if not result.valid else "Formatted" if result.changed else "Already canonical" if result.formatted else "Formatting required"
-        click.echo(f"{label}: {result.path}")
-        click.echo(f"Scope: {result.validation_scope}")
-        for warning in result.warnings:
-            click.echo(f"Warning: {warning}")
-        for diagnostic in result.diagnostics:
-            click.echo(f"{diagnostic.code}: {diagnostic.field_path} {diagnostic.message}")
-        if result.diff:
-            click.echo(result.diff, nl=False)
-    else:
-        _emit_terminal(context, result.model_dump(mode="json"))
-    if not result.valid:
-        raise click.exceptions.Exit(2)
-    if not result.formatted:
-        raise click.exceptions.Exit(1)

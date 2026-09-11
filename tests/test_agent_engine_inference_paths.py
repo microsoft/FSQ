@@ -15,11 +15,19 @@ from fsq_agent.adapters.coding_agent import DefaultCodingAgentRuntime
 from fsq_agent.agent_engine import AgentResult, EngineError, ModelRequest, ModelResult, OutputContract, _openai_backend
 from fsq_agent.ai_services import AIAssertionEvaluator, CaseSuggestionAnalyzer, build_ai_assertion_evaluator, build_case_suggestion_analyzer
 from fsq_agent.config import Settings, refresh_provider_settings, save_azure_openai_provider
-from fsq_agent.models import AgentFinalOutput, AgentRuntimeSettings, AIAssertionRequest, ConfigurationError, GoalPrePlan, KnowledgeBundle, PlanningError, Task
+from fsq_agent.core.evidence import EvidenceRecorder
+from fsq_agent.models import AgentFinalOutput, AgentRuntimeSettings, AIAssertionRequest, ConfigurationError, GoalPrePlan, KnowledgeBundle, PlanningError, RunExecutionContext, Task
 from fsq_agent.providers import build_model_provider_session, test_model_provider_connection
 
 
 class _NoActionHarness:
+    def __init__(self, evaluator=None):
+        self.evaluator = evaluator
+
+    def close(self):
+        if self.evaluator is not None:
+            self.evaluator.close()
+
     def action_space(self) -> list:
         return []
 
@@ -27,6 +35,18 @@ class _NoActionHarness:
 class _NoHelperTools:
     def build_tools(self, **kwargs) -> list:
         return []
+
+
+async def _run_main(runtime, task, run_id):
+    run_dir = runtime.settings.output.runs_dir / run_id
+    return await runtime.run_task(
+        task,
+        KnowledgeBundle(),
+        [],
+        run_id,
+        context=RunExecutionContext(run_id=run_id, run_dir=run_dir, platform=runtime.settings.harness.platform),
+        evidence_sink=EvidenceRecorder(run_id=run_id, output_dir=run_dir),
+    )
 
 
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
@@ -147,7 +167,7 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
                 result = await runtime.run_pre_plan("Open the app.", KnowledgeBundle(), [], "integration-run")
                 assert result.verification_goal == "The app is open."
         elif path == "main":
-            result = await runtime.run_task(task, KnowledgeBundle(), [], "integration-run")
+            result = await _run_main(runtime, task, "integration-run")
             assert result[-1].status == ("failed" if failure_kind else "success")
             assert result[-1].tool_name == "agent_runtime.runner"
         else:
@@ -250,7 +270,7 @@ async def test_reasoning_effort_task_snapshot_and_injected_evaluator_survive_pro
         evaluator = kwargs["ai_assertion_evaluator"]
         assert isinstance(evaluator, AIAssertionEvaluator)
         evaluators.append(evaluator)
-        return _NoActionHarness()
+        return _NoActionHarness(evaluator)
 
     monkeypatch.setattr("fsq_agent.providers._session.create_model_provider", CapturingProvider)
     monkeypatch.setattr("fsq_agent.adapters.coding_agent._runtime.HarnessFactory.create_harness", create_harness)
@@ -286,7 +306,7 @@ async def test_reasoning_effort_task_snapshot_and_injected_evaluator_survive_pro
     assert resolved.agent_runtime.reasoning_effort == effort
     assert resolved.agent_runtime.model == "first-deployment"
 
-    assert (await runtime.run_task(task, KnowledgeBundle(), [], "snapshot-run"))[-1].status == "success"
+    assert (await _run_main(runtime, task, "snapshot-run"))[-1].status == "success"
     assert (await runtime.run_verification(task, [], "snapshot-run", None))[-1].status == "success"
     assert len(evaluators) == 1
     assert [request.name for _, request in agent_requests] == ["snapshot-agent pre-planner", "snapshot-agent", "snapshot-agent verifier"]
@@ -295,7 +315,7 @@ async def test_reasoning_effort_task_snapshot_and_injected_evaluator_survive_pro
 
     next_runtime = DefaultCodingAgentRuntime(next_settings, _NoHelperTools(), engine=CapturingEngine())
     await next_runtime.run_pre_plan("Inspect.", KnowledgeBundle(), [], "next-run")
-    assert (await next_runtime.run_task(task, KnowledgeBundle(), [], "next-run"))[-1].status == "success"
+    assert (await _run_main(next_runtime, task, "next-run"))[-1].status == "success"
     assert (await next_runtime.run_verification(task, [], "next-run", None))[-1].status == "success"
     assert [(name, request.reasoning_effort) for name, request in agent_requests] == [("first-deployment", effort)] * 3 + [("next-deployment", next_effort)] * 3
     assert [(name, request.reasoning_effort) for name, request in model_requests] == [("first-deployment", effort), ("next-deployment", next_effort)]

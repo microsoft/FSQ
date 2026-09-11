@@ -24,6 +24,9 @@ it('validates macOS diagnostic records including commands and verdicts',async()=
 });
 
 it.each([
+  ['history', () => controlPlaneClient.history('mobile')],
+  ['report', () => controlPlaneClient.runReport('mobile', 'web', 'run-1')],
+  ['report export', () => controlPlaneClient.exportReport('mobile', 'web', 'run-1', 'html')],
   ['bootstrap', () => controlPlaneClient.bootstrap()],
   ['readiness', () => controlPlaneClient.readiness('mobile', 'web')],
   ['targets', () => controlPlaneClient.targets('mobile', 'web')],
@@ -244,4 +247,27 @@ it('rejects malformed stream snapshots and non-image screen responses', async ()
   await expect(controlPlaneClient.screen('request-1', 1)).rejects.toMatchObject({
     body: expect.objectContaining({ code: 'invalid_response' }),
   });
+});
+
+it('rejects rendered history fields with invalid types', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ workspace: 'demo', platforms: ['web'], filters: {}, matched_count: 1, returned_count: 1, truncated: false, warnings: [], runs: [{ run_id: 'r1', platform: 'web', status: 'success', started_at: { unsafe: 'object' }, warnings: [] }] })));
+  await expect(controlPlaneClient.history('demo')).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
+it('rejects another Run or format in a successful export response', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ run_id: 'other', platform: 'android', export_id: 'e1', format: 'json', files: [{ file_id: 'report', name: 'report.json', mime_type: 'application/json', size_bytes: 3, download_url: '/api/control-plane/history/android/other/exports/e1/files/report?workspace=another' }], warnings: [] })));
+  await expect(controlPlaneClient.exportReport('demo', 'web', 'r1', 'html')).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
+it('accepts unknown historical status and completed tool transport facts', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({ workspace: 'demo', platforms: ['web'], filters: {}, matched_count: 1, returned_count: 1, truncated: false, warnings: [], runs: [{ run_id: 'history', platform: 'web', status: null, started_at: null, mode: null, warnings: [] }] })));
+  expect((await controlPlaneClient.history('demo')).runs[0].status).toBeNull();
+  const report = { schema_version: 'fsq.report/v1', run: { run_id: 'r1', platform: 'web', gate: { status: 'incomplete', reasons: [] } }, source: {}, execution: { outcome: 'inconclusive' }, verification: { status: 'unknown' }, evidence: { status: 'unavailable' }, processing: {}, steps: [], artifacts: [], metrics: {}, lineage: {}, comparison: {}, warnings: [], logs: [], tool_calls: [{ status: 'completed', tool_name: 'read_file', tool_origin: 'agent_tool' }] };
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ workspace: 'demo', run_id: 'r1', platform: 'web', report, warnings: [] })));
+  expect((await controlPlaneClient.runReport('demo', 'web', 'r1')).report.tool_calls[0].status).toBe('completed');
+});
+
+it('accepts backend recording warning with nullable live timestamp', () => {
+  const value={requestId:'r',runId:'run',workspaceName:'w',platform:'web',targetId:'chrome',mode:'explore',status:'failed',source:{goal:'g'},startedAt:'2026-09-08T00:00:00Z',completedAt:null,cancelRequested:false,events:[{sequence:1,time:null,phase:'finalizing',label:'Dynamic recording',status:'failed',message:'Recording unavailable'}],activeStep:null,result:null,summary:'failed',screenshotRevision:0,uiSnapshotRevision:0,evidenceAvailable:false,reportAvailable:false,terminal:true};
+  expect(validateRunSnapshot(value).events[0].time).toBeNull();
 });

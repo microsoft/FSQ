@@ -102,7 +102,8 @@ class CapabilityExecutionResult(BaseModel):
     artifact_refs: list[HarnessArtifactRef] = Field(default_factory=list)
     error_message: str | None = None
     failure_category: FailureCategory | None = None
-    duration_ms: int = Field(default=0, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    unavailable_reason: str | None = "unmeasured"
     replay: ReplayPolicy | None = None
     sensitivity: bool = False
     safe_replay_params: dict[str, Any] = Field(default_factory=dict)

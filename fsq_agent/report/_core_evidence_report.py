@@ -36,15 +36,24 @@ class CoreEvidenceReportGenerator:
 
     def _build_report(self, bundle: EvidenceBundle, manifest_path: Path) -> dict[str, Any]:
         steps = [step.model_dump(mode="json") for step in bundle.steps]
-        failed_steps = [step for step in bundle.steps if step.status != "passed"]
+        for step in steps:
+            if step.get("status") not in {"passed", "failed", "skipped", "cancelled", "incomplete"}:
+                step["original_status"] = step.get("status")
+                step["status"] = "incomplete"
+        logical = self._logical_steps(steps)
+        failed_steps = [step for step in logical if step["status"] == "failed"]
         lifecycle_steps = self._lifecycle_steps(steps)
         summary: dict[str, Any] = {
-            "status": "failed" if failed_steps else "passed",
-            "step_count": len(bundle.steps),
-            "passed_steps": len([step for step in bundle.steps if step.status == "passed"]),
+            "status": self._status([step["status"] for step in logical]),
+            "step_count": len(logical),
+            "passed_steps": len([step for step in logical if step["status"] == "passed"]),
             "failed_steps": len(failed_steps),
             "artifact_count": len(bundle.artifacts),
         }
+        for status in ("skipped", "cancelled", "incomplete"):
+            count = sum(step["status"] == status for step in logical)
+            if count:
+                summary[f"{status}_steps"] = count
         report: dict[str, Any] = {
             "run_id": bundle.run_id,
             "bundle_id": bundle.bundle_id,
@@ -56,7 +65,7 @@ class CoreEvidenceReportGenerator:
             "artifacts": [artifact.model_dump(mode="json") for artifact in bundle.artifacts],
         }
         if lifecycle_steps:
-            lifecycle_summary = self._lifecycle_summary(lifecycle_steps)
+            lifecycle_summary = self._lifecycle_summary(self._lifecycle_steps(logical))
             summary["lifecycle"] = lifecycle_summary
             report["lifecycle"] = {"summary": lifecycle_summary, "steps": lifecycle_steps}
         return report
@@ -77,6 +86,7 @@ class CoreEvidenceReportGenerator:
             f"- Artifacts: `{summary['artifact_count']}`",
             "",
         ]
+        lines.extend(f"- {status.title()} steps: {summary[f'{status}_steps']}" for status in ("skipped", "cancelled", "incomplete") if summary.get(f"{status}_steps"))
 
         lifecycle = report.get("lifecycle") if isinstance(report.get("lifecycle"), dict) else None
         if lifecycle:
@@ -93,7 +103,7 @@ class CoreEvidenceReportGenerator:
             )
             lines.extend(f"| `{step['step_id']}` | `{step['status']}` | `{step.get('failure_category') or ''}` | {step.get('error_message') or ''} |" for step in report["steps"])
 
-        failed_steps = [step for step in report["steps"] if step["status"] != "passed"]
+        failed_steps = [step for step in report["steps"] if step["status"] == "failed"]
         if failed_steps:
             lines.extend(["", "## Failures", ""])
             lines.extend(f"- `{step['step_id']}` failed with `{step.get('failure_category') or 'unknown'}`: {step.get('error_message') or 'No error message.'}" for step in failed_steps)
@@ -144,6 +154,7 @@ class CoreEvidenceReportGenerator:
                     failed=phase_summary["failed_steps"],
                 )
             )
+            lines.extend(f"{phase_summary['label']} {status}: {phase_summary[f'{status}_steps']}" for status in ("skipped", "cancelled", "incomplete") if phase_summary.get(f"{status}_steps"))
         lines.append("")
         return lines
 
@@ -173,15 +184,40 @@ class CoreEvidenceReportGenerator:
         summary: dict[str, dict[str, Any]] = {}
         for phase in _LIFECYCLE_PHASES:
             phase_steps = [step for step in steps if step["phase"] == phase]
-            failed_steps = [step for step in phase_steps if step["status"] != "passed"]
+            failed_steps = [step for step in phase_steps if step["status"] == "failed"]
             summary[phase] = {
                 "label": _LIFECYCLE_LABELS[phase],
-                "status": "failed" if failed_steps else "passed",
+                "status": self._status([step["status"] for step in phase_steps], empty="passed"),
                 "total_steps": len(phase_steps),
                 "passed_steps": len([step for step in phase_steps if step["status"] == "passed"]),
                 "failed_steps": len(failed_steps),
             }
+            for status in ("skipped", "cancelled", "incomplete"):
+                count = sum(step["status"] == status for step in phase_steps)
+                if count:
+                    summary[phase][f"{status}_steps"] = count
         return summary
+
+    @staticmethod
+    def _logical_steps(steps):
+        logical = {}
+        for step in steps:
+            source_metadata = (step.get("source_ref") or {}).get("metadata") or {}
+            metadata = step.get("metadata") or {}
+            if (metadata.get("hook_action_name") or source_metadata.get("hook_action_name")) == "runCase":
+                continue
+            key = (step.get("source_step_id") or step.get("step_id"), str(step.get("invocation_path") or metadata.get("invocation_path") or "root"))
+            logical[key] = step
+        return list(logical.values())
+
+    @staticmethod
+    def _status(statuses: list[str], empty: str = "inconclusive") -> str:
+        if not statuses:
+            return empty
+        for status in ("cancelled", "failed", "incomplete"):
+            if status in statuses:
+                return "inconclusive" if status == "incomplete" else status
+        return "passed" if "passed" in statuses and "skipped" not in statuses else "inconclusive"
 
     def _lifecycle_steps(self, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         lifecycle_steps: list[dict[str, Any]] = []

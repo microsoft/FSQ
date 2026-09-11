@@ -12,11 +12,11 @@ from fsq_agent.agent._events import RunEventEmitter
 from fsq_agent.agent._runtime import CodingAgentRuntime, CodingAgentRuntimeFactory
 from fsq_agent.agent._verifier import Verifier
 from fsq_agent.config import Settings
+from fsq_agent.core.interfaces import EvidenceJournalSink
 from fsq_agent.knowledge import PrivateKnowledgeLoader
-from fsq_agent.models import KnowledgeBundle, PlanningError, RunEvent, RunEventSink, Task, TaskResult
+from fsq_agent.models import DynamicAgentOutcome, KnowledgeBundle, PlanningError, RunEvent, RunEventSink, RunExecutionContext, Task
 from fsq_agent.observation import ExecutionLogger
 from fsq_agent.providers import refresh_model_provider_session
-from fsq_agent.report import ReportGenerator
 from fsq_agent.skills import SkillLoader
 
 
@@ -25,7 +25,7 @@ class FsqAgent:
         self,
         settings: Settings,
         verifier: Verifier,
-        reporter: ReportGenerator,
+        reporter: Any,
         knowledge_loader: PrivateKnowledgeLoader,
         skill_loader: SkillLoader,
         runtime: CodingAgentRuntime,
@@ -51,7 +51,7 @@ class FsqAgent:
         skills_dir = knowledge.skills.dir
         knowledge_loader = PrivateKnowledgeLoader(knowledge_root)
         skill_loader = SkillLoader(skills_dir)
-        reporter = ReportGenerator(settings.output.runs_dir, secret_values=cls._runtime_secret_values(settings))
+        reporter = None
         event_logger = ExecutionLogger(settings.output.runs_dir)
         return cls(
             settings,
@@ -67,7 +67,16 @@ class FsqAgent:
     def _runtime_secret_values(settings: Settings) -> tuple[str, ...]:
         return tuple(sorted(set(settings.runtime_secrets.private_values().values()), key=len, reverse=True))
 
-    async def run(self, task: Task, event_sink: RunEventSink | None = None, *, run_id: str) -> TaskResult:
+    async def run_in_context(
+        self,
+        task: Task,
+        context: RunExecutionContext,
+        event_sink: RunEventSink | None = None,
+        *,
+        evidence_sink: EvidenceJournalSink | None = None,
+        cancellation_check: Callable[[], None] | None = None,
+    ) -> DynamicAgentOutcome:
+        run_id = context.run_id
         if not run_id.strip() or run_id in {".", ".."} or any(character in run_id for character in "/\\:\x00") or Path(run_id).name != run_id:
             raise ValueError("Run ID must be a nonempty single path component.")
         started = time.perf_counter()
@@ -89,49 +98,34 @@ class FsqAgent:
             provider_refresh_session = refresh_model_provider_session(self.settings)
             provider_refresh_session.close_sync()
             task = await self._augment_goal_only_task_with_pre_plan(task, skills, run_id, emitter)
-            results = await self.runtime.run_task(task, knowledge, skills, run_id, emitter.emit)
-            events_path = self.event_logger.log_root / run_id / "events.jsonl" if self.event_logger else None
+            if cancellation_check is not None:
+                cancellation_check()
+            results = await self.runtime.run_task(task, knowledge, skills, run_id, emitter.emit, context=context, evidence_sink=evidence_sink, cancellation_check=cancellation_check)
+            if cancellation_check is not None:
+                cancellation_check()
+            events_path = context.run_dir / "events.jsonl" if self.event_logger else None
             results.extend(await self.runtime.run_verification(task, results, run_id, events_path, emitter.emit))
+            if cancellation_check is not None:
+                cancellation_check()
             verification = await self.verifier.verify(task, results, events_path=events_path)
-            report = self.reporter.generate(run_id, task, results, verification)
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            result = TaskResult(
-                task_id=task.id,
-                status=verification.status,
+            await emitter.emit(RunEvent(run_id=run_id, task_id=task.id, type="run_completed", title="Execution completed", message=verification.summary, payload={"status": verification.status}))
+            return DynamicAgentOutcome(
+                task=task,
                 steps=results,
                 verification=verification,
-                report=report,
-                duration_ms=duration_ms,
-            )
-            await emitter.emit(
-                RunEvent(
-                    run_id=run_id,
-                    task_id=task.id,
-                    type="run_completed",
-                    title="Run completed",
-                    message=verification.summary,
-                    duration_ms=duration_ms,
-                    payload={"status": verification.status, "report_path": str(report.path)},
-                )
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                errors=[
+                    {"category": "agent_runtime_error", "message": step.error or "Runtime failed."}
+                    for step in results
+                    if step.status == "failed" and step.tool_name in {"agent_runtime.runner", "runtime"}
+                ],
             )
         except BaseException as exc:
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            message = str(exc) or exc.__class__.__name__
             with suppress(BaseException):
                 await emitter.emit(
-                    RunEvent(
-                        run_id=run_id,
-                        task_id=task.id,
-                        type="run_failed",
-                        title="Run failed",
-                        message=message,
-                        duration_ms=duration_ms,
-                        payload={"exception_type": exc.__class__.__name__},
-                    )
+                    RunEvent(run_id=run_id, task_id=task.id, type="run_failed", title="Execution interrupted", message=type(exc).__name__, payload={"exception_type": type(exc).__name__})
                 )
             raise
-        else:
-            return result
 
     def _load_pre_plan_knowledge(self) -> KnowledgeBundle:
         items: dict[str, str] = {}

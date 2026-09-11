@@ -149,7 +149,7 @@ def test_uiautomator2_driver_context_launch_kill_and_artifacts() -> None:
     assert driver.launch_app({})["status"] == "passed"
     assert driver.kill_app({})["status"] == "passed"
     assert driver.screenshot() == b"fake-png"
-    assert driver.ui_snapshot({}) == {"xml": "<hierarchy />"}
+    assert driver.ui_snapshot({})["xml"] == "<hierarchy />"
     assert device.calls == [
         ("app_start", "com.example.app", {}),
         ("app_stop", "com.example.app"),
@@ -261,7 +261,7 @@ def test_uiautomator2_driver_exposes_ui_snapshot_output_with_ui_tree_alias() -> 
 
     result = driver.ui_snapshot({})
 
-    assert result == {"xml": "<hierarchy />"}
+    assert result["xml"] == "<hierarchy />"
     assert device.calls == [("dump_hierarchy",)]
 
 
@@ -274,7 +274,7 @@ def test_uiautomator2_driver_uses_compressed_hierarchy_when_supported() -> None:
 
     result = driver.ui_snapshot({})
 
-    assert result == {"xml": '<hierarchy><node text="Compressed" /></hierarchy>'}
+    assert result["xml"] == '<hierarchy><node text="Compressed" /></hierarchy>'
     assert device.calls == [("dump_hierarchy", True)]
 
 
@@ -391,7 +391,7 @@ def test_uiautomator2_driver_returns_raw_snapshot_when_xml_is_malformed() -> Non
 
     result = driver.ui_snapshot({})
 
-    assert result == {"xml": "<hierarchy><node"}
+    assert result["xml"] == "<hierarchy><node"
     assert device.calls == [("dump_hierarchy",)]
 
 
@@ -411,7 +411,7 @@ def test_uiautomator2_driver_falls_back_to_raw_hierarchy_when_compaction_fails(
 
     result = driver.ui_snapshot({})
 
-    assert result == {"xml": '<hierarchy><node text="Raw" /></hierarchy>'}
+    assert result["xml"] == '<hierarchy><node text="Raw" /></hierarchy>'
     assert device.calls == [("dump_hierarchy", True), ("dump_hierarchy", False)]
 
 

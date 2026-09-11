@@ -34,7 +34,8 @@ fsq
 ├── runs
 │   ├── list
 │   ├── show RUN_ID
-│   └── logs RUN_ID
+│   ├── logs RUN_ID
+│   └── export RUN_ID
 ```
 
 Core Case forms are:
@@ -65,7 +66,7 @@ fsq init --platform macos --bundle-id com.example.app
 - `case test` executes an existing FSQ Case as authored. The source Case is immutable.
 - `case test --suggest` executes the authored Case exactly once, then permits read-only AI analysis of the parsed Case and bounded persisted execution facts. It may return Run-local suggestions or a candidate Case while preserving the completed execution result and never overwriting the source Case or configured Case directory.
 - When suggestion analysis produces an artifact, Human output displays each Run-local suggestion or candidate Case path and states that the source Case was not modified. JSON and JSONL terminal results expose the same paths through `suggestion_path` and `candidate_case_path`; absent artifacts remain `null`.
-- `runs` is the exact-current-Workspace read-only history surface. It aggregates configured platforms by default, supports an optional configured platform, and never deletes, mutates, retries, replays, cancels, or follows a Run.
+- `runs` is the exact-current-Workspace history and evidence-export surface. It queries recorded platform mappings and never deletes, retries, replays, cancels, follows, or changes Run outcomes. Explicit exports write only derived files at Application-authorized destinations.
 - `providers` exposes only user-level active-Provider configuration and readiness. Provider inventory is not a public CLI capability in the first release.
 - `doctor` performs read-only Workspace diagnostics across every identifiable configured platform and reports fixed component checks plus readiness for `case test`, `case test --suggest`, and `case create`; `ui` starts the Control Plane adapter.
 
@@ -119,7 +120,7 @@ Azure OpenAI configuration requires base URL, model/deployment name, and API key
 
 ## Global Machine Contract
 
-- `--output human|json|jsonl` selects presentation and defaults to `human`.
+- Global `--output human|json|jsonl` selects presentation before the command; `runs export --output PATH` independently selects a destination file.
 - `--non-interactive` forbids prompts and implicit interactive authentication.
 - Human output may be styled; JSON emits one complete operation envelope; JSONL emits one object per event followed by one terminal result or error object.
 - Machine output is stdout-only. Diagnostics that cannot be represented as protocol records use stderr. Secrets and hidden reasoning are never emitted.
@@ -137,9 +138,10 @@ Android Doctor presents ordered ADB executable, uiautomator2 dependency, existin
 fsq runs list [--platform PLATFORM] [--status STATUS]... [--mode strict|explore] [--since DURATION] [--case CASE_ID] [--limit NUMBER]
 fsq runs show RUN_ID [--platform PLATFORM] [--open]
 fsq runs logs RUN_ID [--platform PLATFORM] [--level LEVEL]... [--phase PHASE]... [--limit NUMBER]
+fsq runs export RUN_ID [--platform PLATFORM] --format json|junit|html|bundle [--output PATH] [--baseline RUN_ID] [--related-run RUN_ID]... [--share-profile PATH]
 ```
 
-All Run commands require the exact current registered Workspace root. Omitted platform means every configured platform; a supplied platform must be configured. `list` accepts repeatable status OR filters, one mode, exact normalized Case ID, a positive integer duration suffixed by `m`, `h`, or `d`, and limit `1..200` defaulting to `20`. Filtering precedes deterministic newest-first sorting and limiting. Empty results succeed. Human columns are Run ID, platform, mode, status, start, duration, and Case/Goal; machine output contains equivalent filters, counts, truncation, entries, and safe warnings.
+Run history/export requires the trustworthy readable exact registered root and recorded platform/Run mapping, not executable platform configuration or Provider/Driver/target readiness. Omitted platform queries recorded scopes; supplied platform must be identifiable. List keeps repeatable status OR filters, mode, exact Case ID, positive m/h/d duration, and limit 1..200 default 20, filtering before newest-first limiting with counts/truncation/warnings. This history exception does not relax execution/setup Workspace preconditions.
 
 `show` returns one bounded summary with source, result, timing, runtime metadata actually used, relative artifact paths, and warnings; it does not inline complete reports, logs, screenshots, or UI snapshots. Without platform, no match is `run.not_found` and multiple platform matches are `run.id_conflict`. Human times use the local timezone and machine times remain UTC ISO 8601.
 
@@ -147,7 +149,9 @@ All Run commands require the exact current registered Workspace root. Omitted pl
 
 `logs` accepts repeatable level and phase OR filters and limit `1..5000` defaulting to `200`. It filters first, selects the newest matching limit, and presents events in stable ascending sequence order. Missing historical sequence, duplicate sequence, or reverse file order produces safe warnings; invalid non-empty JSONL records invalidate the complete result. Human output is a concise safe table. JSON emits one result containing filters, counts, truncation, warnings, and events. JSONL emits one Application event envelope per event followed by one terminal result. No matches succeed; a missing or invalid event log does not masquerade as an empty log.
 
-Run queries sanitize secrets and unsafe backend details and return no unnecessary absolute host paths. Successfully reading a failed historical Run exits `0`. `run.not_found` exits `2`; Workspace, platform inventory, ID conflict, metadata, log, or unavailable-report errors exit `3`; HTML generation/opening, ID allocation, and internal failures exit `5`; interruption exits `130`.
+`export` delegates one required format to Application without browser interaction in Human/JSON/JSONL/non-interactive modes. Default destinations are unique Run-local exports; explicit paths identify one absent file, relative to the Workspace where applicable, never authoritative sources. There is no overwrite option. Baseline/related Runs require same-scope comparable lineage and hashes; bounded share profiles transform copies only, without commands, credential discovery, upload, or anonymity claims. Models/Report own status, resource, transformation, and JUnit semantics.
+
+Human export output shows original outcome, gate, format, destination, and warnings; machine modes return one operation envelope rather than report contents. Successful reading/export exits 0 even for failed Runs; exported conclusions remain non-passing. Invalid arguments/not-found exit 2, scope/identity/unavailable facts/unsafe destination/baseline/lineage errors 3, generation/infrastructure errors 5, and interruption 130. CI preserves test exit status independently of export/upload. Preflight before Run allocation creates no synthetic report.
 
 ## Compatibility
 

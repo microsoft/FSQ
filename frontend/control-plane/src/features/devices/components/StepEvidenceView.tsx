@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { controlPlaneClient, toApiError } from '../../../api/controlPlaneClient';
 import type { PlatformId, StepArtifact, StepArtifactsResponse } from '../../../api/types';
-import { changedSegments, diffLines } from '../replay/uiDiff';
-import { formatUiTreeContent, isStructuredXmlTree } from '../replay/uiTreeFormat';
+import { SnapshotDiffView } from '../../runs/SnapshotDiffView';
+import { CaptureQualifiers } from '../../runs/CaptureQualifiers';
 
 interface Props {
   requestId: string;
@@ -16,15 +16,11 @@ function preferred(artifacts: StepArtifact[], phase: 'before' | 'after') {
   return artifacts.find((artifact) => artifact.phase === phase) ?? null;
 }
 
-function InlineLine({ before, after, side }: { before: string; after: string; side: 'before' | 'after' }) {
-  const segments = changedSegments(before, after)[side];
-  return <>{segments[0]}{segments[1] && <mark>{segments[1]}</mark>}{segments[2]}</>;
-}
-
 function UiTreePre({ content }: { content: string }) {
-  const formatted = formatUiTreeContent(content);
-  const structured = isStructuredXmlTree(content);
-  return <pre aria-label={structured ? 'Structured XML UI Tree' : undefined}>{formatted}</pre>;
+  return <pre>{content}</pre>;
+}
+function Qualifiers({ artifact }: { artifact: StepArtifact }) {
+  return <CaptureQualifiers artifactId={artifact.artifactId} executionId={artifact.stepExecutionId} occurrence={artifact.captureOccurrence} attempt={artifact.attemptIndex} redacted={artifact.redacted} transformed={artifact.transformed} displayTransformed={artifact.displayTransformed} truncated={artifact.truncated} coverage={artifact.coverage} compaction={artifact.compaction} />;
 }
 
 interface StepEvidenceState {
@@ -73,22 +69,12 @@ export function StepEvidenceView({ requestId, stepId, kind, platform, targetLabe
   const before = preferred(matching, 'before');
   const after = preferred(matching, 'after');
   if (kind === 'screen') {
-    const shown = [before, after].filter((item): item is StepArtifact => Boolean(item?.contentBase64));
-    if (!shown.length) return <div className="evidence-message" role="alert"><strong>Action screenshots unavailable</strong><p>{matching.map((item) => item.error).filter(Boolean).join(' ')}</p></div>;
     return wrap(<div className={`step-screenshot-comparison${platform === 'android' ? ' step-screenshot-comparison--android' : ''}`}>
-      {shown.map((artifact) => <figure key={artifact.phase} className="step-screenshot-card"><figcaption>{artifact.phase === 'before' ? 'Before' : 'After'}</figcaption><img src={`data:${artifact.mimeType};base64,${artifact.contentBase64}`} alt={(platform ?? "Platform") + " " + artifact.phase + " screenshot for " + targetLabel + ", selected Action " + (state.payload?.stepId ?? state.stepId)} /></figure>)}
+      {matching.map((artifact, index) => <figure key={(artifact.artifactId ?? artifact.phase) + ':' + index} className="step-screenshot-card"><figcaption>{artifact.captureReason ?? (artifact.phase === 'before' ? 'Before' : 'After')}{artifact.attemptIndex ? ' · attempt ' + artifact.attemptIndex : ''}</figcaption>{artifact.contentBase64 ? <img src={`data:${artifact.mimeType};base64,${artifact.contentBase64}`} alt={(platform ?? "Platform") + " " + artifact.phase + " screenshot for " + targetLabel + ", selected Action " + (state.payload?.stepId ?? state.stepId)} /> : <p role="status">{artifact.error ?? artifact.unavailableReason ?? 'Screenshot unavailable.'}</p>}<Qualifiers artifact={artifact} /></figure>)}
     </div>);
   }
   if (!before?.content || !after?.content) {
-    const only = before?.content ? before : after;
-    return only?.content ? wrap(<div className="ui-snapshot"><div className="evidence-meta">{only.phase === 'before' ? 'Before' : 'After'} · selected Action</div><UiTreePre content={only.content} /></div>) : <div className="evidence-message" role="alert"><strong>Action UI Tree unavailable</strong><p>{matching.map((item) => item.error).filter(Boolean).join(' ')}</p></div>;
+    return wrap(<div className="ui-snapshot">{matching.map((artifact,index)=><section key={artifact.artifactId ?? index}><div className="evidence-meta">{artifact.captureReason ?? artifact.phase} · {artifact.artifactId ?? 'capture'} · selected Action</div><Qualifiers artifact={artifact}/>{artifact.truncated&&<p role="status">Snapshot content is truncated.</p>}{typeof artifact.content==='string'?<UiTreePre content={artifact.normalizedContent ?? artifact.content}/>:<p role="status">{artifact.error ?? artifact.unavailableReason ?? 'Snapshot unavailable.'}</p>}</section>)}</div>);
   }
-  const rows = diffLines(formatUiTreeContent(before.content), formatUiTreeContent(after.content));
-  return wrap(<div className="ui-diff" aria-label="Before and After UI Tree diff">
-    <div className="ui-diff-header"><strong>Before</strong><strong>After</strong></div>
-    <div className="ui-diff-body">
-      <div className="ui-diff-pane">{rows.map((row, index) => <div key={index} className={`ui-diff-row ui-diff-row--${row.kind}`}><span>{row.beforeNumber ?? ''}</span><code>{row.kind === 'changed' ? <InlineLine before={row.before} after={row.after} side="before" /> : row.before}</code></div>)}</div>
-      <div className="ui-diff-pane">{rows.map((row, index) => <div key={index} className={`ui-diff-row ui-diff-row--${row.kind}`}><span>{row.afterNumber ?? ''}</span><code>{row.kind === 'changed' ? <InlineLine before={row.before} after={row.after} side="after" /> : row.after}</code></div>)}</div>
-    </div>
-  </div>);
+  return wrap(<><SnapshotDiffView diff={state.payload?.comparison ?? null}/><details open><summary>All snapshot captures ({matching.length})</summary>{matching.map((artifact,index)=><section key={artifact.artifactId ?? index}><strong>{artifact.captureReason ?? artifact.phase}</strong><Qualifiers artifact={artifact}/>{artifact.content?<UiTreePre content={artifact.normalizedContent ?? artifact.content}/>:<p>{artifact.error ?? 'Unavailable'}</p>}</section>)}</details></>);
 }

@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from contextlib import nullcontext
 from typing import ClassVar
 
 from pydantic import BaseModel, ValidationError
@@ -9,11 +10,11 @@ from fsq_agent.core.evidence import ArtifactStore
 from fsq_agent.core.interfaces import AIAssertionEvaluatorProtocol, AndroidDriverInterface
 from fsq_agent.drivers._capabilities import (
     _capability_matches,
-    _default_driver_capability_definitions,
     _discover_driver_capability_definitions,
     _schema_from_capability_definition,
 )
 from fsq_agent.harnesses._common_tools import CommonPlatformTools
+from fsq_agent.harnesses._resources import OwnedResources
 from fsq_agent.models import (
     AndroidUiTreeParams,
     CapabilityDefinition,
@@ -54,10 +55,17 @@ class AndroidHarness:
         self.driver = driver
         self.artifact_store = artifact_store
         self.ai_assertion_evaluator = ai_assertion_evaluator
+        self._owned_resources = OwnedResources(driver, ai_assertion_evaluator)
         self.common_tools = CommonPlatformTools(
             platform="android",
         )
         self._configure_driver_ai_assertion_tool()
+
+    def capture_scope(self, callback):
+        return self.artifact_store.capture_scope(callback) if self.artifact_store is not None else nullcontext()
+
+    def close(self) -> None:
+        self._owned_resources.close()
 
     def get_context(self) -> HarnessContext:
         context = self.driver.context()
@@ -158,6 +166,11 @@ class AndroidHarness:
             kind=data["kind"],
             path=data["path"],
             mime_type=data.get("mime_type"),
+            size_bytes=data.get("size_bytes"),
+            sha256=data.get("sha256"),
+            availability=data.get("availability", "available"),
+            unavailable_reason=data.get("unavailable_reason"),
+            capture_occurrence=data.get("capture_occurrence"),
             created_at=data["created_at"],
             metadata=dict(data.get("metadata") or {}),
         )
@@ -174,8 +187,6 @@ class AndroidHarness:
         if isinstance(backend, str):
             metadata["backend"] = backend
         definitions = _discover_driver_capability_definitions(self.driver, platform="android", metadata=metadata)
-        if not definitions:
-            definitions = _default_driver_capability_definitions(platform="android")
         return definitions
 
     def _schema_from_capability(self, definition: CapabilityDefinition) -> HarnessFunctionSchema:

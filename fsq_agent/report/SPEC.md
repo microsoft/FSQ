@@ -4,6 +4,8 @@
 
 Generate human-readable and machine-readable reports inside the selected workspace platform's unique direct run directory from dynamic LLM task results and strict-core evidence manifests, including the checked dynamic `verification_goal`, strict lifecycle phase summaries, structured capability provenance, AgentTool/CommonTool/PlatformTool execution metadata, replay metadata, sensitivity-safe previews, and provider-backed AI assertion verdict metadata. Provide stored report lookup and deterministic on-demand static HTML derivation from persisted Run facts.
 
+Own the shared `fsq.report/v1` projection, deterministic comparison, and JSON/JUnit/portable-HTML/evidence-bundle exporters. Execution owns frozen conclusions and Core owns recovery; Report consumes persisted facts and normalized Models evidence, never reconstructs a live runtime or duplicates journal replay.
+
 ## Dependencies
 
 - `models`: Uses `Task`, `AgentFinalOutput`, `ToolCallRecord`, `StepResult`, `VerificationResult`, `ReportArtifact`, `EvidenceBundle`, `AIAssertionResult`, and `ReportGenerationError`.
@@ -15,6 +17,7 @@ The report module consumes persisted event, result, and evidence data. It must n
 Current `__init__.py` exports via `__all__`:
 
 - `ReportGenerator`: Generates reports for completed task runs under the configured output runs directory.
+- `RunReportService`: projects already resolved persisted Run inputs and recovered evidence, validates comparison/lineage, and exports through Models-owned options/results and sharing contracts. Application owns Workspace, relationship, artifact, and destination authorization.
 - `EvidenceBundler`: Creates a manifest for evidence references supplied by execution steps, including paths or snapshots produced by capability execution.
 - `FailureAnalyzer`: Classifies failures as success, tool usage error, semantic action unmet, execution issue, planning issue, verification issue, or a combined label when multiple rule-assisted signals are present.
 - `CoreEvidenceReportGenerator`: Generates Markdown and JSON reports from one deterministic core `evidence-manifest.json` path.
@@ -37,6 +40,20 @@ For strict-core evidence generated from case lifecycle hooks, `CoreEvidenceRepor
 
 The strict-core JSON summary should include lifecycle counts by phase: total, passed, failed, and status. The Markdown summary should include the same lifecycle breakdown in a concise table. The Markdown steps table should include lifecycle phase, source case name or path, action label, step id, status, failure category, and error. Action labels should prefer persisted replay aliases such as `tapOn`/`launchApp` when available, fall back to capability names, and show hook actions such as `runCase` or `runShell` with safe target/command context. Nested hook case steps should be labeled under the hook phase that triggered them, not only under their child case body phase.
 
+## Public Report And Export Invariants
+
+Canonical frozen results, execution evidence, progress logs, and supported v1/legacy reports remain distinct sources with explicit provenance, conflicts, and availability. Transport success is not action success. Dynamic runtime summaries and pre-plans do not become real capability counts; helper calls remain distinct. Metrics retain measured unit/scope and null-with-reason semantics, do not count attempts/containers/capture time twice, and never estimate per-step tokens or whole-Run usage from main-only usage.
+
+Evidence health follows recorded capture requirements without retroactively requiring optional historical evidence. Public gate and its error/failed/incomplete precedence follow Models while retaining the original primary action failure and frozen verification conclusion. Post-freeze processing failures alone do not change a trustworthy execution gate.
+
+Deterministic snapshot comparisons identify before/after or explicit baseline/current, source artifact hashes, normalization algorithm, and completeness. Cross-Run comparisons require same-platform validated source occurrence or recording-command mapping; order/name/prose similarity is not correspondence. Missing, transformed, clipped, or non-comparable evidence is not unchanged. Qualified Run/artifact identities and namespaced bundle paths prevent collisions; independent Run outcomes remain visible.
+
+JSON exports the complete public contract. JUnit emits one testcase per primary root Case/Goal invocation; steps/attempts/related Runs are details, not testcase counts. Passed/failed/error/incomplete gates map to pass/failure/error/error while retaining native statuses as properties. Portable HTML embeds escaped text and PNG evidence with inline CSS and fixed hash-CSP-protected controls, no network requests, eval, event-handler attributes, or active stored HTML/SVG/JavaScript. ZIP bundles contain the HTML, JSON, JUnit, selected sanitized inputs/evidence, inventory, and checksums; integrity does not prove authorship or anonymity.
+
+Sharing transforms export copies only using selected qualified artifact IDs, literal text replacements, allowed optional-field removals, and validated raster masks. Immutable identity/outcome/gate/count/reference/digest/lineage facts cannot be changed; original and derived digests remain distinct. Profile-sensitive values are not reproduced in transformation logs. Optional digest-bound Case review declarations are explicitly attributed export-time user declarations, not independent approval or Run mutations.
+
+One versioned resource policy applies to projection/export: at most eight related Runs plus one baseline, 256 KiB/256-rule share profiles, 16 MiB encoded/40 million pixel rasters, 512 KiB displayed snapshot text per artifact, 8 MiB inline text, 64 MiB raster content per report, and 512 MiB uncompressed bundles. Optional display omission/truncation is explicit and does not change source evidence or gate. Invalid identity, over-limit relationships/profiles, or bundle overflow fail rather than silently dropping selected files. Export verifies source snapshot/hash, containment, file constraints, and absent destination at write time; only explicit compatibility `report.html` rebuild may replace an existing derived file.
+
 ## Internal Structure
 
 - `__init__.py`: Public exports only.
@@ -45,6 +62,9 @@ The strict-core JSON summary should include lifecycle counts by phase: total, pa
 - `_core_evidence_report.py`: Markdown and JSON report generation from `EvidenceBundle` or a core `evidence-manifest.json` path, including strict lifecycle phase summarization when lifecycle metadata is present.
 - `_resolver.py`: Stored report lookup for LLM `report.*` and strict-core `core-report.*` files.
 - `_static_html.py`: Offline escaped HTML rendering, contained artifact projection, and atomic `report.html` persistence.
+- `_run_report.py`: public projection and legacy input adaptation.
+- `_comparison.py`: stable identity/lineage validation and normalized deterministic comparisons.
+- `_export.py`: destination checks, sharing transformations, format export, bundles, and inventories.
 - `_failure_analysis.py`: Failure classification helpers.
 - `templates/`: Optional report templates.
 - `SPEC.md`: Module design.
@@ -52,7 +72,7 @@ The strict-core JSON summary should include lifecycle counts by phase: total, pa
 ## Python Architecture
 
 - Architecture level: 2 Simple Package.
-- Public API: `ReportGenerator`, `EvidenceBundler`, `FailureAnalyzer`, `CoreEvidenceReportGenerator`, `resolve_report_path`, and `generate_static_run_report` exported from `__init__.py`.
+- Public API: `RunReportService`, `ReportGenerator`, `EvidenceBundler`, `FailureAnalyzer`, `CoreEvidenceReportGenerator`, `resolve_report_path`, and `generate_static_run_report` exported from `__init__.py`.
 - Internal modules: all `_*.py` files are private report implementation modules.
 - Domain boundaries: report owns rendering, stored report lookup, evidence manifest report generation, and failure classification from persisted facts. It does not execute capabilities, read live device state, call providers, parse FSQ YAML for execution, or decide recording eligibility.
 - Boundary models: task/result/final-output/evidence/report models and normalized tool call records come from `models`.
@@ -76,8 +96,8 @@ Static HTML generation requires enough trustworthy persisted metadata, report, e
 - Reports treat capability and AgentTool metadata as persisted execution evidence, not as live decorator state. Report generation must not depend on the module that originally declared a capability. Reports may display replay aliases from persisted `ReplayPolicy` metadata, but they must not expect `CapabilityDefinition.aliases` or per-capability schema strictness fields in persisted capability metadata. Automatic and explicit runner evidence uses normalized `ui_snapshot` artifacts across platforms, and reports render those artifacts uniformly.
 - Reports must preserve AI assertion evidence emitted by backend PlatformTools. For Android/Web/Windows/macOS `assert_with_ai`/`assertWithAI`, reports should include the prompt summary, verdict status, explanation, provider/model metadata safe for display, latency/token diagnostics when safe, screenshot artifact references, and any evaluator error. Reports must not re-inspect screenshot pixels or include hidden model reasoning.
 - Sensitive runtime-secret text input values must be redacted in reports. Reports may show safe metadata such as requested workspace secret name, text source type, allowlist/presence status, capability name, and replay alias, but never private values. Historical `get_runtime_secret` dependency events are not part of the target runtime-secret input path and need not be treated as active recording dependencies.
-- Report artifacts are stored below `<workspace>/.fsq/runs/<platform>/<run-id>`, equivalent to `output.runs_dir/<run-id>` after workspace-platform settings composition. Report does not discover workspace layout or write in an arbitrary caller directory.
-- LLM and strict-core reports intentionally keep separate internal shapes. CLI unifies only lookup and printing through `resolve_report_path`.
+- Initial reports live under the Run; explicit exports use only an Application-authorized destination. Report does not discover Workspace roots or write arbitrary paths.
+- Dynamic and strict reports keep compatible internal shapes and feed one public projection shared by CLI, Control Plane, portable HTML, and CI.
 - Static HTML is a derived offline view rebuilt only on explicit request. It contains a Run overview, source/result/runtime summary, step timeline, sanitized logs, escaped UI snapshots, contained screenshot/evidence links, Run-local suggestions, candidate Case, and allowlisted artifact inventory where available. It uses inline presentation resources, no network resources or requests, a restrictive Content Security Policy, escaped persisted text, and only links that resolve inside the Run directory. Artifact HTML, SVG, or JavaScript is never embedded as active content. `report.html` is not authoritative evidence and is not written back into `run.json`.
 - Failure analysis is rule-assisted. Provider-side incomplete Responses failures such as `response.incomplete` with `content_filter` must be classified as provider failures, not tool usage errors.
 - Deterministic core execution reports should be generated from persisted evidence manifests rather than live runner objects. This keeps report generation replayable and allows reports to be regenerated after real-device runs.

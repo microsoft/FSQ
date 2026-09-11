@@ -83,7 +83,7 @@ export function RunLogsView({ events, active }: { events: TimelineEvent[]; activ
   const tableStyle: LogStyle = { '--log-message-width': `${messageWidth}px` };
   return <div className="logs-region">
     <div className="logs-table-wrap" ref={scrollRef} onScroll={onScroll} data-following={following} tabIndex={-1} aria-label="Structured run logs history"><table className="logs-table" style={tableStyle}><caption className="visually-hidden">Structured run logs</caption><thead><tr><th>Time</th><th>Level</th><th>Phase</th><th>Tool</th><th>Status</th><th><span className="log-message-heading"><span>Message</span><button className="log-column-resizer" type="button" aria-label="Resize message column" onPointerDown={onMessageResizeStart} /></span></th><th>Event</th></tr></thead><tbody>
-      {events.map((event) => <tr key={event.sequence}><td><time dateTime={event.time}>{event.time ? new Date(event.time).toLocaleTimeString() : '—'}</time></td><td>{event.level ?? 'info'}</td><td>{event.phase ?? '—'}</td><td>{event.tool ?? event.label ?? '—'}</td><td>{event.status ?? '—'}</td><td><LogMessage event={event} /></td><td><EventDetails event={event} /></td></tr>)}
+      {events.map((event) => <tr key={event.sequence}><td><time dateTime={event.time ?? undefined}>{event.time ? new Date(event.time).toLocaleTimeString() : '—'}</time></td><td>{event.level ?? 'info'}</td><td>{event.phase ?? '—'}</td><td>{event.tool ?? event.label ?? '—'}</td><td>{event.status ?? '—'}</td><td><LogMessage event={event} /></td><td><EventDetails event={event} /></td></tr>)}
     </tbody></table></div>
   </div>;
 }

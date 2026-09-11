@@ -76,6 +76,7 @@ include = [
     "/docs/assets/social-preview.svg",
     "/docs/case-format.md",
     "/docs/cli-reference.md",
+    "/docs/ci-evidence.md",
     "/docs/demo.html",
     "/docs/getting-started.md",
     "/docs/getting-started.zh-CN.md",
@@ -84,6 +85,8 @@ include = [
     "/docs/releases",
     "/docs/support-and-stability.md",
     "/examples",
+    "/scripts/run-case-with-evidence.py",
+    "/scripts/serve-evidence-demo.py",
     "/LICENSE",
     "/pyproject.toml",
 ]

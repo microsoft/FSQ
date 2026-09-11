@@ -7,13 +7,16 @@ import { ConfigPage } from '../features/config/ConfigPage';
 import { DevicesPage, type DevicesLaunchIntent } from '../features/devices/DevicesPage';
 import { OverviewPage, type OverviewProviderState } from '../features/overview/OverviewPage';
 import { WorkspacePage, WorkspaceTitlebar } from '../features/workspace/WorkspacePage';
+import { RunsPage } from '../features/runs/RunsPage';
+import { parseRunRoute, runHash, type RunRoute } from '../features/runs/runRoute';
 
 type DevicesLaunchRequest =
   | Omit<Extract<DevicesLaunchIntent, { mode: 'explore' }>, 'id'>
   | Omit<Extract<DevicesLaunchIntent, { mode: 'strict' }>, 'id'>;
 
 export function ControlPlaneApp() {
-  const [activePage, setActivePage] = useState<'overview' | 'workspace' | 'devices' | 'config'>('overview');
+  const [activePage, setActivePageState] = useState<'overview' | 'workspace' | 'devices' | 'runs' | 'config'>(() => parseRunRoute(window.location.hash) ? 'runs' : 'overview');
+  const [runRoute, setRunRoute] = useState<RunRoute>(() => parseRunRoute(window.location.hash) ?? {});
   const [configDirty, setConfigDirty] = useState(false);
   const [configPending, setConfigPending] = useState(false);
   const [configUncertain, setConfigUncertain] = useState(false);
@@ -112,16 +115,55 @@ export function ControlPlaneApp() {
     requestAnimationFrame(() => document.getElementById('workspace-heading')?.focus());
   }, [selectedWorkspaceName, selectedWorkspace]);
 
+  const acceptedNavigation = useRef({ href: window.location.href, index: Number(window.history.state?.cpIndex ?? 0), page: activePage });
+  const navigationGuard = useRef({ activePage, configDirty, configPending, configUncertain, workspaceDirty, startPending, workspacePending });
+  navigationGuard.current = { activePage, configDirty, configPending, configUncertain, workspaceDirty, startPending, workspacePending };
   const canDiscardDraft = (destination: ControlPlanePageId) => {
-    if (startPendingRef.current || workspacePending || configPending) return false;
-    if (activePage === 'config' && destination !== 'config' && configUncertain && !window.confirm('The save result is unknown. Leaving does not cancel it. Continue?')) return false;
-    if (activePage === 'config' && destination !== 'config' && configDirty && !window.confirm('Discard unsaved Provider changes?')) return false;
-    if (activePage === 'workspace' && workspaceDirty && !window.confirm('Discard unsaved workspace changes?')) return false;
+    const current = navigationGuard.current;
+    if (startPendingRef.current || current.workspacePending || current.configPending) return false;
+    if (current.activePage === 'config' && destination !== 'config' && current.configUncertain && !window.confirm('The save result is unknown. Leaving does not cancel it. Continue?')) return false;
+    if (current.activePage === 'config' && destination !== 'config' && current.configDirty && !window.confirm('Discard unsaved Provider changes?')) return false;
+    if (current.activePage === 'workspace' && current.workspaceDirty && !window.confirm('Discard unsaved workspace changes?')) return false;
     return true;
+  };
+  const setActivePage = (page: typeof activePage, route?: RunRoute) => {
+    const url = page === 'runs' ? runHash(route ?? runRoute) : window.location.pathname + window.location.search;
+    const index = acceptedNavigation.current.index + 1;
+    window.history.pushState({ cpIndex: index, cpPage: page }, '', url);
+    acceptedNavigation.current = { href: window.location.href, index, page };
+    setActivePageState(page);
+  };
+  useEffect(() => {
+    window.history.replaceState({ ...window.history.state, cpIndex: acceptedNavigation.current.index, cpPage: acceptedNavigation.current.page }, '', window.location.href);
+    const onLocationChange = () => {
+      if (window.location.href === acceptedNavigation.current.href && window.history.state?.cpPage === acceptedNavigation.current.page) return;
+      const route = parseRunRoute(window.location.hash);
+      const savedPage = window.history.state?.cpPage;
+      const destination = route ? 'runs' : ['overview', 'workspace', 'devices', 'config'].includes(savedPage) ? savedPage : 'overview';
+      if (!canDiscardDraft(destination)) {
+        const old = acceptedNavigation.current;
+        window.history.replaceState({ cpIndex: old.index, cpPage: old.page }, '', old.href);
+        return;
+      }
+      setConfigDirty(false); setWorkspaceDirty(false);
+      setRunRoute(route ?? {});
+      setActivePageState(destination);
+      acceptedNavigation.current = { href: window.location.href, index: Number(window.history.state?.cpIndex ?? acceptedNavigation.current.index + 1), page: destination };
+    };
+    window.addEventListener('hashchange', onLocationChange);
+    window.addEventListener('popstate', onLocationChange);
+    return () => { window.removeEventListener('hashchange', onLocationChange); window.removeEventListener('popstate', onLocationChange); };
+  }, []);
+  const navigateRuns = (route: RunRoute) => {
+    if (!canDiscardDraft('runs')) return;
+    setConfigDirty(false); setWorkspaceDirty(false);
+    setRunRoute(route);
+    setActivePage('runs', route);
   };
 
   const navigate = (page: ControlPlanePageId) => {
-    if (page !== 'overview' && page !== 'workspace' && page !== 'devices' && page !== 'config') return;
+    if (page !== 'overview' && page !== 'workspace' && page !== 'devices' && page !== 'config' && page !== 'runs') return;
+    if (page === 'runs') { navigateRuns({ workspace: selectedWorkspaceName ?? undefined }); return; }
     if (!canDiscardDraft(page)) return;
     setConfigDirty(false);
     setWorkspaceDirty(false);
@@ -280,7 +322,10 @@ export function ControlPlaneApp() {
     onNavigate={navigate} {...shellWorkspaceProps}
   ><ConfigPage onDirtyChange={setConfigDirty} onSavePendingChange={setConfigPending} onSaveUncertainChange={setConfigUncertain} /></ControlPlaneShell>;
 
+  if (activePage === 'runs') return <ControlPlaneShell activePage="runs" title="Runs" description="Inspect persisted execution, verification, and evidence." onNavigate={navigate} {...shellWorkspaceProps}><RunsPage key={[runRoute.workspace,runRoute.platform,runRoute.run].join(':')} route={runRoute} workspaces={authoritativeWorkspaces} registryStatus={workspaceRegistryLoading ? 'loading' : workspaceRegistryError ? 'error' : 'ready'} registryError={workspaceRegistryError?.message} onRetryRegistry={() => { void refreshWorkspaces(); }} onNavigate={navigateRuns} /></ControlPlaneShell>;
+
   return <DevicesPage workspaces={authoritativeWorkspaces} workspaceRegistryReady={workspaceRegistryReady} selectedWorkspaceName={diagnosticWorkspace?.name ?? selectedWorkspace?.name ?? null} onWorkspaceChange={selectDeviceWorkspace}
+    onOpenReport={(workspace, platform, run) => navigateRuns({ workspace, platform, run })}
     onStartPendingChange={handleStartPendingChange}
     onRepairTarget={(name,platform)=>{if(startPendingRef.current)return;if(platform==='android'){setDiagnosticWorkspaceName(null);setSelectedWorkspaceName(name);}else{setDiagnosticWorkspaceName(name);setSelectedWorkspaceName(null);}setWorkspaceConfigurationOpen(true);setCreateRequested(false);setWorkspaceOutletPresentation('default');setActivePage('workspace');}}
     launchIntent={devicesLaunchIntent}

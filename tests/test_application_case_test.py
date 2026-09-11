@@ -158,9 +158,9 @@ def test_bounded_execution_facts_limit_items_strings_and_total_size() -> None:
 
 @pytest.mark.parametrize("execution_status", ["passed", "failed"])
 @pytest.mark.parametrize("analysis_error", [TimeoutError("provider unavailable"), EngineError("invalid_output", "Invalid suggestion output")])
-@pytest.mark.parametrize("finalization_fails", [False, True])
+@pytest.mark.parametrize("processing_write_fails", [False, True])
 def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_status: str, analysis_error: Exception, finalization_fails: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_status: str, analysis_error: Exception, processing_write_fails: bool
 ) -> None:
     case_path = tmp_path / "search.fsq.yaml"
     source = "schemaVersion: fsq.ai-test/v1\nname: Search\nplatform: web\n"
@@ -177,7 +177,7 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
         cases=SimpleNamespace(dir=tmp_path),
         output=SimpleNamespace(runs_dir=tmp_path / "runs"),
         harness=SimpleNamespace(android=SimpleNamespace(app_id=None)),
-        runtime_secrets=SimpleNamespace(),
+        runtime_secrets=SimpleNamespace(private_values=dict),
         execution=SimpleNamespace(post_action_delay_seconds=0),
     )
     order: list[str] = []
@@ -236,36 +236,32 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
     assert payload["candidate_case_status"] == "absent"
     assert case_path.read_text(encoding="utf-8") == source
 
-    if finalization_fails:
+    if processing_write_fails:
 
-        def fail_finalization(directory, metadata, status, **updates):
-            if status in {"success", "failed", "error"}:
-                raise OSError("secondary metadata write failure")
-            return transition(directory, metadata, status, **updates)
+        def fail_processing_write(path, content):
+            raise OSError("secondary processing write failure")
 
-        monkeypatch.setattr(case_test_module, "transition_run", fail_finalization)
+        monkeypatch.setattr(case_test_module, "_atomic_write", fail_processing_write)
 
     class FailingAnalyzer:
         def analyze(self, *, parsed_case, execution_report):
             raise analysis_error
 
-    with pytest.raises(ApplicationError) as error:
-        case_test_module.execute_case_test(
-            CaseTestRequest(current_directory=tmp_path, platform="web", case_path=case_path, suggest=True),
-            suggestion_analyzer_factory=lambda _settings: FailingAnalyzer(),
-        )
-
-    assert error.value.code == ApplicationErrorCode.CASE_SUGGESTION_FAILED
-    assert error.value.details["report_path"] == str(report_path)
-    assert error.value.__cause__ is analysis_error
+    completed = case_test_module.execute_case_test(
+        CaseTestRequest(current_directory=tmp_path, platform="web", case_path=case_path, suggest=True),
+        suggestion_analyzer_factory=lambda _settings: FailingAnalyzer(),
+    )
+    assert completed.status == expected_status
+    assert completed.processing["suggestion"]["status"] == "failed"
+    assert completed.report_path == report_path
+    assert any("case.suggestion_failed" in warning for warning in completed.warnings)
     assert report_path.read_text(encoding="utf-8") == "report"
     assert case_path.read_text(encoding="utf-8") == source
     assert len(list(run_dir.glob("*.fsq.yaml"))) == 0
     assert order == ["execute", "analyze", "execute"]
-    if not finalization_fails:
-        assert transitions[-1][0] == expected_status
-        assert transitions[-1][1]["artifacts"].report_markdown == report_path.name
-        assert transitions[-1][1]["result"].steps.total == 1
+    assert [status for status, _ in transitions] == ["running", "running"]
+    if processing_write_fails:
+        assert completed.processing["suggestion"]["persistence"] == "unavailable"
 
 
 def test_suggestion_cannot_introduce_run_metadata(tmp_path: Path) -> None:
@@ -312,3 +308,41 @@ def test_suggestion_uses_executed_metadata_after_external_edit(tmp_path: Path) -
     )
     assert FsqCaseLoader().load_case(candidate).config.name == "executed"
     assert FsqCaseLoader().load_case(source).config.name == "externally-edited"
+
+
+def test_suggestion_status_disk_failure_preserves_completed_result(tmp_path, monkeypatch):
+    from fsq_agent.application import _case_test
+    from fsq_agent.execution import RunResultSummary
+    from fsq_agent.models import ReportArtifact
+
+    source = tmp_path / "case.fsq.yaml"
+    source.write_text("schemaVersion: fsq.ai-test/v1\nname: demo\nplatform: web\n")
+    settings = SimpleNamespace(
+        cases=SimpleNamespace(dir=tmp_path),
+        output=SimpleNamespace(runs_dir=tmp_path),
+        harness=SimpleNamespace(android=SimpleNamespace(app_id=None)),
+        runtime_secrets=SimpleNamespace(private_values=dict),
+        execution=SimpleNamespace(post_action_delay_seconds=0),
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run.json").write_text("{}")
+    (run_dir / "execution-result.json").write_text('{"outcome":"success"}')
+    metadata = SimpleNamespace(run_id="run")
+    monkeypatch.setattr(_case_test, "require_initialized_workspace", lambda request: SimpleNamespace(workspace=tmp_path))
+    monkeypatch.setattr(_case_test, "load_workspace_platform_settings", lambda *args: settings)
+    monkeypatch.setattr(_case_test, "_registered_workspace_name", lambda root: "demo")
+    monkeypatch.setattr(_case_test, "build_capability_registry", lambda **kwargs: SimpleNamespace(snapshot=lambda: None))
+    monkeypatch.setattr(_case_test, "collect_strict_lifecycle_cases", lambda **kwargs: [])
+    monkeypatch.setattr(_case_test, "validate_strict_core_settings", lambda *args, **kwargs: None)
+    monkeypatch.setattr(_case_test, "allocate_run", lambda **kwargs: metadata)
+    monkeypatch.setattr(_case_test, "transition_run", lambda *args, **kwargs: metadata)
+    monkeypatch.setattr(_case_test.HarnessFactory, "create_harness", lambda *args, **kwargs: object())
+    monkeypatch.setattr(_case_test.RuntimeSecretStore, "from_settings", lambda *args: object())
+    monkeypatch.setattr(_case_test, "run_strict_lifecycle_case", lambda **kwargs: ReportArtifact(run_id="run", path=run_dir / "execution-result.json"))
+    monkeypatch.setattr(_case_test, "load_run_metadata", lambda path: SimpleNamespace(execution_result="execution-result.json", status="success", result=RunResultSummary(summary="Completed.")))
+    monkeypatch.setattr(_case_test, "_atomic_write", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+    result = _case_test.execute_case_test(CaseTestRequest(current_directory=tmp_path, platform="web", case_path=source, suggest=True), suggestion_analyzer_factory=None)
+    assert result.status == "success"
+    assert result.processing["suggestion"]["persistence"] == "unavailable"
+    assert result.run_id == "run"

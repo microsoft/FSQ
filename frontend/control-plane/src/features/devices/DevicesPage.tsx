@@ -17,12 +17,13 @@ interface DevicesPageProps {
   onLaunchIntentConsumed?: (intentId: number) => void;
   onRepairTarget?: (workspaceName:string, platform?:'macos'|'android') => void;
   onStartPendingChange?: (pending: boolean) => void;
+  onOpenReport?: (workspace: string, platform: PlatformId, runId: string) => void;
   renderShell: (toolbar: React.ReactNode, content: React.ReactNode) => React.ReactNode;
 }
 
 const platformLabels: Record<PlatformId, string> = { android: 'Android', web: 'Web', windows: 'Windows', macos: 'macOS' };
 
-export function DevicesPage({ workspaces, workspaceRegistryReady, selectedWorkspaceName, onWorkspaceChange, launchIntent, onLaunchIntentConsumed, onRepairTarget, onStartPendingChange, renderShell }: DevicesPageProps) {
+export function DevicesPage({ workspaces, workspaceRegistryReady, selectedWorkspaceName, onWorkspaceChange, launchIntent, onLaunchIntentConsumed, onRepairTarget, onStartPendingChange, onOpenReport, renderShell }: DevicesPageProps) {
   const selectedWorkspace = workspaces.find((item) => item.name === selectedWorkspaceName) ?? null;
   const platforms = useMemo<PlatformOption[]>(() => (selectedWorkspace?.platforms ?? [])
     .filter((item) => item.status === 'available' || item.platform==='macos' && item.diagnosticAvailable)
@@ -58,7 +59,7 @@ export function DevicesPage({ workspaces, workspaceRegistryReady, selectedWorksp
       {workspace.startError ? workspace.startError.message : terminal ? `Run ${workspace.snapshot?.status}: ${workspace.snapshot?.summary}` : hasRun ? `Run ${workspace.snapshot?.status ?? 'preparing'}. ${workspace.snapshot?.summary ?? ''} ${workspace.connectionLabel}.` : (setupHint ?? `${workspace.connectionLabel}.`)}
     </div>
     {!hasRun && <><header className="devices-intro"><h1>What do you want to test?</h1><p>Choose a target and describe the outcome.</p></header>{toolbar}</>}
-    {hasRun && <div className="run-context-bar"><div aria-label="Run context"><span className={'status-badge status-badge--' + (workspace.snapshot?.status ?? 'preparing')}>{workspace.snapshot?.status ?? 'preparing'}</span><strong>{workspace.snapshot?.workspaceName ?? selectedWorkspaceName}</strong><span>{workspace.snapshot?.platform ?? workspace.platform} · {workspace.selectedTarget?.label ?? workspace.targetId}</span><small>{workspace.snapshot?.mode === 'strict' ? 'Strict Replay' : 'Explore'}</small>{!terminal && <span className="run-connection" role="status">{workspace.connectionLabel}</span>}</div><div className="run-context-actions" ref={setRunActions}/></div>}
+    {hasRun && <div className="run-context-bar"><div aria-label="Run context"><span className={'status-badge status-badge--' + (workspace.snapshot?.status ?? 'preparing')}>{workspace.snapshot?.status ?? 'preparing'}</span><strong>{workspace.snapshot?.workspaceName ?? selectedWorkspaceName}</strong><span>{workspace.snapshot?.platform ?? workspace.platform} · {workspace.selectedTarget?.label ?? workspace.targetId}</span><small>{workspace.snapshot?.mode === 'strict' ? 'Strict Replay' : 'Explore'}</small>{!terminal && <span className="run-connection" role="status">{workspace.connectionLabel}</span>}</div><div className="run-context-actions" ref={setRunActions}>{terminal && workspace.snapshot?.runId && onOpenReport && <button className="button" type="button" onClick={() => onOpenReport(workspace.snapshot!.workspaceName, workspace.snapshot!.platform, workspace.snapshot!.runId!)}>Open report</button>}</div></div>}
     {pageError && <div className="page-notice" role="alert">
       <strong>{pageError.message}</strong>
       <span>{pageError.action}</span>

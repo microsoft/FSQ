@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
+import os
 import re
+import stat
+import tempfile
 import time
 import webbrowser
 from dataclasses import dataclass
@@ -13,9 +17,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from threading import Thread
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from fsq_agent import application
 from fsq_agent.application import ApplicationError, CaseSaveRequest, save_recorded_case
+from fsq_agent.application.contracts import runs as contracts
 from fsq_agent.case_dsl import FSQ_CASE_SUFFIX
 from fsq_agent.models import ConfigurationError, FsqAgentError
 
@@ -53,6 +59,145 @@ from ._workspaces import (
     update_workspace_platform_request,
 )
 
+_HISTORY_PREFIX = "/api/control-plane/history"
+_HISTORY_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+
+
+@dataclass(frozen=True)
+class _HistoryFile:
+    path: Path
+    size: int
+    sha256: str | None = None
+
+
+def _open_history_file(path: Path):
+    path = path.absolute()
+    if os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW"):
+        descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            for part in path.parts[1:-1]:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            return os.fdopen(os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor), "rb")
+        finally:
+            os.close(descriptor)
+    if any(part.is_symlink() for part in (path, *path.parents)):
+        raise ValueError("History file path changed.")
+    return path.open("rb")
+
+
+def _copy_verified_history_file(body: _HistoryFile, target) -> None:
+    if not body.sha256 or body.size < 0 or body.size > 512 * 1024 * 1024:
+        raise ValueError("History file identity is unavailable.")
+    digest = hashlib.sha256()
+    with _open_history_file(body.path) as source:
+        observed = os.fstat(source.fileno())
+        if not stat.S_ISREG(observed.st_mode) or observed.st_size != body.size:
+            raise ValueError("History file identity changed.")
+        remaining = body.size
+        while remaining:
+            content = source.read(min(65536, remaining))
+            if not content:
+                raise ValueError("History file changed while reading.")
+            digest.update(content)
+            target.write(content)
+            remaining -= len(content)
+        if source.read(1) or digest.hexdigest() != body.sha256:
+            raise ValueError("History file integrity changed.")
+    target.seek(0)
+
+
+def _history_one(query: dict[str, list[str]], name: str, *, required: bool = False) -> str | None:
+    values = query.get(name, [])
+    if len(values) > 1 or (values and not values[0].strip()) or (required and not values):
+        raise ValueError(f"A single non-empty {name} is required.")
+    return values[0] if values else None
+
+
+def _history_scope(workspace: str | None, user_root: Path | None) -> dict[str, Any]:
+    return {"workspace_name": workspace, "user_config_root": user_root}
+
+
+def _history_route(path: str) -> tuple[str, str, tuple[str, ...]]:
+    parts = tuple(unquote(part) for part in path.removeprefix(_HISTORY_PREFIX + "/").split("/"))
+    if len(parts) < 2 or parts[0] not in {"web", "android", "windows", "macos"} or any(not part or part in {".", ".."} or "/" in part or "\\" in part for part in parts):
+        raise ValueError("Invalid historical Run address.")
+    return parts[0], parts[1], parts[2:]
+
+
+def _list_history(query: dict[str, list[str]], user_root: Path | None) -> dict[str, Any]:
+    if set(query) - {"workspace", "platform", "status", "mode", "case", "since", "limit"}:
+        raise ValueError("Unsupported Run filter.")
+    request = contracts.ListRunsRequest(
+        **_history_scope(_history_one(query, "workspace", required=True), user_root),
+        platform=_history_one(query, "platform"),
+        statuses=tuple(query.get("status", [])),
+        mode=_history_one(query, "mode"),
+        case_id=_history_one(query, "case"),
+        since=_history_one(query, "since"),
+        limit=int(_history_one(query, "limit") or 20),
+    )
+    return application.list_runs(request).model_dump(mode="json")
+
+
+def _get_history(platform: str, run_id: str, query: dict[str, list[str]], user_root: Path | None) -> dict[str, Any]:
+    if set(query) - {"workspace", "baselineRunId", "relatedRunId"}:
+        raise ValueError("Unsupported report query.")
+    request = contracts.GetRunReportRequest(
+        **_history_scope(_history_one(query, "workspace", required=True), user_root),
+        platform=platform,
+        run_id=run_id,
+        baseline_run_id=_history_one(query, "baselineRunId"),
+        related_run_ids=tuple(query.get("relatedRunId", [])),
+    )
+    return application.get_run_report(request).model_dump(mode="json")
+
+
+def _export_history(platform: str, run_id: str, body: dict[str, Any], user_root: Path | None) -> dict[str, Any]:
+    if set(body) - {"workspaceName", "format", "baselineRunId", "relatedRunIds"} or not isinstance(body.get("workspaceName"), str) or not body["workspaceName"].strip() or "format" not in body:
+        raise ValueError("Choose a Workspace and one report format.")
+    request = contracts.ExportRunReportRequest(
+        **_history_scope(body["workspaceName"], user_root),
+        platform=platform,
+        run_id=run_id,
+        format=body["format"],
+        baseline_run_id=body.get("baselineRunId"),
+        related_run_ids=body.get("relatedRunIds", ()),
+    )
+    result = application.export_run_report(request).model_dump(mode="json")
+    result.pop("output_path", None)
+    base = f"{_HISTORY_PREFIX}/{quote(platform, safe='')}/{quote(run_id, safe='')}/exports/{quote(str(result['export_id']), safe='')}/files"
+    result["files"] = [
+        {
+            **{key: item[key] for key in ("file_id", "name", "mime_type", "size_bytes", "sha256") if key in item},
+            "download_url": f"{base}/{quote(item['file_id'], safe='')}?workspace={quote(body['workspaceName'], safe='')}",
+        }
+        for item in result.get("files", [])
+    ]
+    return result
+
+
+def _resolve_history_file(platform: str, run_id: str, suffix: tuple[str, ...], query: dict[str, list[str]], user_root: Path | None):
+    if set(query) != {"workspace"}:
+        raise ValueError("Only a Workspace scope is accepted.")
+    if len(suffix) == 2 and suffix[0] == "artifacts":
+        reference = {"kind": "source", "artifact_id": suffix[1]}
+    elif len(suffix) == 4 and suffix[0] == "exports" and suffix[2] == "files":
+        reference = {"kind": "export", "export_id": suffix[1], "file_id": suffix[3]}
+    else:
+        raise ValueError("Invalid report file address.")
+    request = contracts.ResolveRunArtifactRequest(**_history_scope(_history_one(query, "workspace", required=True), user_root), platform=platform, run_id=run_id, reference=reference)
+    return application.resolve_run_artifact(request)
+
+
+def _history_file_response(resolved) -> tuple[_HistoryFile, dict[str, str]]:
+    filename = getattr(resolved, "filename", resolved.path.name)
+    disposition = "inline" if resolved.mime_type in {"image/png", "image/jpeg", "image/webp"} else "attachment"
+    headers = {**_HISTORY_HEADERS, "Content-Type": resolved.mime_type, "Content-Disposition": f"{disposition}; filename*=UTF-8''{quote(filename, safe='')}"}
+    return _HistoryFile(resolved.path, resolved.size, getattr(resolved, "sha256", None)), headers
+
+
 _API_PREFIX = "/api/control-plane"
 _CASE_SOURCE_LIMIT_BYTES = 512 * 1024
 _JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
@@ -62,10 +207,6 @@ _SAVE_CASE_FORBIDDEN = re.compile(r"[<>\"|\\/:*?\[\]\x00-\x1f\x7f-\x9f]")
 
 
 class _RunNotTerminalError(RuntimeError):
-    pass
-
-
-class _CasePublicationConflictError(RuntimeError):
     pass
 
 
@@ -122,6 +263,16 @@ class ControlPlaneServer:
     def handle_get(self, path: str, query: dict[str, list[str]] | None = None, *, peer_host: str | None = "127.0.0.1") -> tuple[int, Any, dict[str, str]]:
         query = query or {}
         try:
+            if path == _HISTORY_PREFIX or path.startswith(_HISTORY_PREFIX + "/"):
+                self._require_config_access(peer_host)
+                if path == _HISTORY_PREFIX:
+                    return 200, _list_history(query, self.options.user_config_root), dict(_HISTORY_HEADERS)
+                platform, run_id, suffix = _history_route(path)
+                if not suffix:
+                    return 200, _get_history(platform, run_id, query, self.options.user_config_root), dict(_HISTORY_HEADERS)
+                resolved = _resolve_history_file(platform, run_id, suffix, query, self.options.user_config_root)
+                body, headers = _history_file_response(resolved)
+                return 200, body, headers
             if path == f"{_API_PREFIX}/config":
                 self._require_config_access(peer_host)
                 return 200, get_config(self.options.user_config_root), dict(_JSON_HEADERS)
@@ -201,7 +352,42 @@ class ControlPlaneServer:
             if suffix.startswith("/step-artifacts/"):
                 run_dir = self._terminal_run_dir(request_id)
                 step_id = unquote(suffix.removeprefix("/step-artifacts/")).strip()
-                return 200, read_step_artifacts(run_dir, step_id), dict(_JSON_HEADERS)
+                payload = read_step_artifacts(run_dir, step_id)
+                snapshot = self.state.snapshot(request_id)
+                try:
+                    report = _get_history(snapshot["platform"], snapshot["runId"], {"workspace": [snapshot["workspaceName"]]}, self.options.user_config_root)["report"]
+                    payload["comparison"] = next((item for item in report.get("comparison", {}).get("before_after", []) if item.get("step_execution_id") == step_id), None)
+                    normalized = {item.get("artifact_id"): item for item in report.get("artifacts", []) if item.get("step_execution_id") == step_id}
+                    for item in payload["artifacts"]:
+                        projected = normalized.get(item.get("artifactId"), {})
+                        if not projected or projected.get("availability") != "available" or projected.get("display_availability") == "omitted":
+                            item.pop("content", None)
+                            item.pop("contentBase64", None)
+                            item.update(availability=projected.get("availability", "unavailable"), error=projected.get("unavailable_reason") or "Validated evidence is unavailable.")
+                        elif item.get("kind") == "ui_snapshot":
+                            item.pop("content", None)
+                            if isinstance(projected.get("content"), str):
+                                item["content"] = projected["content"]
+                            else:
+                                item.update(availability="unavailable", error=projected.get("unavailable_reason") or "Validated snapshot content is unavailable.")
+                        if isinstance(projected.get("normalized_content"), str):
+                            item["normalizedContent"] = projected["normalized_content"]
+                        item["truncated"] = bool(item.get("truncated") or projected.get("truncated"))
+                        for source, target in (("redacted", "redacted"), ("transformed", "transformed"), ("display_transformed", "displayTransformed")):
+                            item[target] = bool(item.get(target) or projected.get(source))
+                        for source, target in (
+                            ("coverage", "coverage"),
+                            ("compaction", "compaction"),
+                            ("capture_occurrence", "captureOccurrence"),
+                            ("capture_reason", "captureReason"),
+                            ("attempt_index", "attemptIndex"),
+                            ("step_execution_id", "stepExecutionId"),
+                        ):
+                            if projected.get(source) is not None:
+                                item[target] = projected[source]
+                except (ApplicationError, ValueError, OSError):
+                    payload["comparison"] = {"status": "unavailable", "reason": "Persisted snapshot comparison is unavailable.", "rows": []}
+                return 200, payload, dict(_JSON_HEADERS)
             if suffix == "/replay":
                 return 200, read_replay_frames(self._terminal_run_dir(request_id)), dict(_JSON_HEADERS)
             if suffix == "/replay-video":
@@ -223,7 +409,7 @@ class ControlPlaneServer:
         except _RunNotTerminalError as exc:
             return 409, _exception_error("run_not_terminal", exc, "Wait for the run to finish."), dict(_JSON_HEADERS)
         except ApplicationError as exc:
-            return 400, _error(exc.code.value, exc.message, exc.action or "Repair configuration and recheck."), dict(_JSON_HEADERS)
+            return 400, _error(exc.code.value, exc.message, exc.action or "Repair configuration and recheck.", details=exc.details), dict(_JSON_HEADERS)
         except (ValueError, FsqAgentError) as exc:
             return 400, _exception_error("invalid_request", exc, "Correct the request and retry."), dict(_JSON_HEADERS)
         except OSError as exc:
@@ -240,6 +426,22 @@ class ControlPlaneServer:
         origin: str | None = None,
         host: str | None = None,
     ) -> tuple[int, dict[str, Any]]:
+        if path.startswith(_HISTORY_PREFIX + "/"):
+            try:
+                self._require_config_access(peer_host)
+                require_same_origin_write(origin, host)
+                platform, run_id, suffix = _history_route(path)
+                if suffix != ("exports",):
+                    return 404, _error("not_found", "Report export endpoint not found.", "Check the API path.")
+                return 201, _export_history(platform, run_id, body, self.options.user_config_root)
+            except ConfigAPIError as exc:
+                return exc.status, _error(exc.code, exc.message, exc.action)
+            except ApplicationError as exc:
+                return 400, _error(exc.code.value, exc.message, exc.action or "Inspect the Run and retry.", details=exc.details)
+            except (TypeError, ValueError):
+                return 400, _error("invalid_export", "Invalid report export request.", "Select a Workspace and one supported format.")
+            except Exception as exc:  # noqa: BLE001 - transport boundary exposes only safe errors.
+                return 500, _exception_error("export_failed", exc, "Inspect the Run and retry.", unexpected=True)
         if path == f"{_API_PREFIX}/readiness":
             try:
                 self._require_config_access(peer_host)
@@ -275,6 +477,10 @@ class ControlPlaneServer:
                 handle.cancel()
         except RequestNotFoundError:
             return 404, _error("request_not_found", "Run request not found.", "Reload Control Plane to find the active request.")
+        except FileExistsError as exc:
+            return 409, _exception_error("case.publication_conflict", exc, "Choose another Case name and retry.")
+        except ConfigurationError as exc:
+            return 400, _exception_error("case.invalid", exc, "Inspect the generated Case and recording metadata, then retry.")
         except FileNotFoundError as exc:
             return 404, _exception_error("generated_yaml_unavailable", exc, "Run Explore again or inspect the run artifacts.")
         except ValueError as exc:
@@ -283,10 +489,6 @@ class ControlPlaneServer:
             return 413, _exception_error("body_too_large", exc, "Upload a smaller replay video.")
         except _RunNotTerminalError as exc:
             return 409, _exception_error("run_not_terminal", exc, "Wait for the run to finish.")
-        except _CasePublicationConflictError as exc:
-            return 409, _exception_error("case.publication_conflict", exc, "Choose another Case name.")
-        except ConfigurationError:
-            return 400, _error("case.invalid", "Generated Case is invalid.", "Inspect the candidate Case.")
         except OSError as exc:
             return 503, _exception_error("save_yaml_failed", exc, "Check workspace file permissions and retry.")
         else:
@@ -321,8 +523,8 @@ class ControlPlaneServer:
             raise ValueError("Saved YAML path escapes the configured cases directory.") from exc
         saved = save_recorded_case(CaseSaveRequest(candidate_path=recorded_case_path, destination_directory=cases_dir, platform=snapshot["platform"], case_name=case_name))
         if saved.outcome == "conflict":
-            raise _CasePublicationConflictError("A different Case already uses this name.")
-        if saved.outcome == "failed":
+            raise FileExistsError("A different Case already uses this name.")
+        if saved.outcome == "failed" or saved.path is None:
             raise OSError("Unable to save Case.")
         return {
             "savedPath": destination.relative_to(cases_dir).as_posix(),
@@ -571,6 +773,7 @@ def _strict_case_steps(prepared) -> list[dict[str, Any]]:
         summaries.append(
             {
                 "stepId": step.step_id,
+                "sourceStepId": step.step_id,
                 "index": step_index,
                 "authoredActionName": step.metadata.get("authored_action_name") or step.action_name,
                 "actionName": step.action_name,
@@ -578,6 +781,34 @@ def _strict_case_steps(prepared) -> list[dict[str, Any]]:
             }
         )
     return summaries
+
+
+def _atomic_copy(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with (
+            source.open("rb") as source_file,
+            tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=destination.parent,
+                prefix=f".{destination.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file,
+        ):
+            temporary_path = Path(temporary_file.name)
+            while chunk := source_file.read(1024 * 1024):
+                temporary_file.write(chunk)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        temporary_path.replace(destination)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 def _save_case_name(body: dict[str, Any]) -> str:
@@ -699,11 +930,28 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"event: error\ndata: {payload}\n\n".encode())
 
     def _send(self, status: int, body: Any, headers: dict[str, str]) -> None:
+        if isinstance(body, _HistoryFile):
+            with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as stream:
+                try:
+                    _copy_verified_history_file(body, stream)
+                except (OSError, ValueError):
+                    self._send(409, _error("artifact_changed", "Artifact changed or became unavailable before delivery.", "Reload the report and retry the download."), dict(_HISTORY_HEADERS))
+                    return
+                self.send_response(status)
+                for name, value in headers.items():
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(body.size))
+                self.end_headers()
+                while chunk := stream.read(65536):
+                    self.wfile.write(chunk)
+            return
         if isinstance(body, bytes):
             encoded = body
         else:
             encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
+        if urlsplit(self.path).path.startswith(_HISTORY_PREFIX):
+            headers = {**headers, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
         for name, value in headers.items():
             self.send_header(name, value)
         self.send_header("Content-Length", str(len(encoded)))

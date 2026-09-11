@@ -1,11 +1,14 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from typing import Protocol, runtime_checkable
 
 from fsq_agent.models import (
     AIAssertionRequest,
     AIAssertionResult,
+    EvidenceArtifactRef,
     ExecutableStep,
     FailureCategory,
     HarnessActionResult,
@@ -18,11 +21,15 @@ from fsq_agent.models import (
 
 @runtime_checkable
 class AIAssertionEvaluatorProtocol(Protocol):
+    def close(self) -> None: ...
+
     def evaluate(self, request: AIAssertionRequest) -> AIAssertionResult: ...
 
 
 @runtime_checkable
 class DriverObservationInterface(Protocol):
+    def close(self) -> None: ...
+
     def screenshot(self, params: object | None = None) -> bytes: ...
 
     def ui_snapshot(self, params: object | None = None) -> dict[str, object]: ...
@@ -30,6 +37,10 @@ class DriverObservationInterface(Protocol):
 
 @runtime_checkable
 class HarnessInterface(Protocol):
+    def close(self) -> None: ...
+
+    def capture_scope(self, callback: Callable[[EvidenceArtifactRef], object]) -> AbstractContextManager: ...
+
     def get_context(self) -> HarnessContext: ...
 
     def action_space(self) -> list[HarnessFunctionSchema]: ...

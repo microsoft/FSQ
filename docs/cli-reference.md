@@ -19,12 +19,22 @@ FSQ installs `fsq` and the compatibility alias `fsq-agent`. Both invoke the same
 | `fsq case create` | Execute one AI-driven goal. | Yes |
 | `fsq case test` | Execute an existing Case exactly once. | Yes |
 | `fsq case test --suggest` | Execute once, then analyze persisted facts. | Yes |
-| `fsq runs list/show/logs` | Query Workspace Run history. | Yes |
+| `fsq runs list/show/logs` | Query Workspace Run history without execution readiness. | Yes |
+| `fsq runs export RUN_ID` | Export JSON, JUnit, standalone HTML, or an evidence bundle. | Yes |
 | `fsq ui` | Start the local Control Plane. | No |
 
 Except when creating an unregistered Workspace, Workspace commands use the exact current directory. They do not search ancestors or accept an alternate Workspace flag.
 
 Human output is for terminals. JSON produces one structured result. JSONL emits documented events and a terminal result where streaming applies. Invalid command requests use exit code 2; consume stable machine fields rather than human wording.
+
+Run export works without browser interaction or a Provider:
+
+```bash
+fsq --output json --non-interactive runs export RUN_ID --format html --output report.html
+fsq runs export RUN_ID --format bundle --baseline BASELINE_RUN_ID --related-run EXPLORE_RUN_ID
+```
+
+Choose one `--format json|junit|html|bundle`. Omitted `--output` creates a unique Run-local export directory; an explicit path names an absent output file. Existing files are not overwritten. `--baseline` requires comparable source identity; `--related-run` requires persisted lineage. `--share-profile PATH` selects bounded, local artifact/text/mask transformations on copies, without publishing. The global `--output json` controls CLI output, while the subcommand's `--output` controls the exported file. A successful export exits zero even for a failed Run; the report retains its non-passing gate. See [CI evidence](ci-evidence.md) and the [public demo source](../examples/evidence-demo/README.md).
 
 `init` never installs Driver/Runtime packages or system prerequisites. The public CLI has no `environments` command, `providers list`, or `--install-driver` option.
 

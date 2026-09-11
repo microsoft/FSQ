@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import base64
+from contextlib import nullcontext
 from typing import ClassVar
 
 from pydantic import BaseModel, ValidationError
@@ -10,6 +10,7 @@ from fsq_agent.core.evidence import ArtifactStore
 from fsq_agent.core.interfaces import AIAssertionEvaluatorProtocol, WindowsDriverInterface
 from fsq_agent.drivers._capabilities import _capability_matches, _discover_driver_capability_definitions, _schema_from_capability_definition, _with_driver_metadata
 from fsq_agent.harnesses._common_tools import CommonPlatformTools
+from fsq_agent.harnesses._resources import OwnedResources
 from fsq_agent.models import (
     CapabilityDefinition,
     ExecutableStep,
@@ -22,8 +23,6 @@ from fsq_agent.models import (
     StepPhase,
     WindowsUiSnapshotParams,
 )
-
-_BLANK_SCREENSHOT_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC")
 
 
 class WindowsHarness:
@@ -52,10 +51,17 @@ class WindowsHarness:
         self.driver = driver
         self.artifact_store = artifact_store
         self.ai_assertion_evaluator = ai_assertion_evaluator
+        self._owned_resources = OwnedResources(driver, ai_assertion_evaluator)
         self.common_tools = CommonPlatformTools(
             platform="windows",
         )
         self._configure_driver_ai_assertion_tool()
+
+    def capture_scope(self, callback):
+        return self.artifact_store.capture_scope(callback) if self.artifact_store is not None else nullcontext()
+
+    def close(self) -> None:
+        self._owned_resources.close()
 
     def get_context(self) -> HarnessContext:
         context = self.driver.context()
@@ -148,20 +154,10 @@ class WindowsHarness:
         raise RuntimeError(f"Unsupported Windows artifact kind: {kind}")
 
     def _capture_screenshot(self, phase: StepPhase) -> bytes:
-        try:
-            return self.driver.screenshot()
-        except Exception:
-            if phase not in {"prepare", "finalize"}:
-                raise
-            return _BLANK_SCREENSHOT_PNG
+        return self.driver.screenshot()
 
     def _capture_ui_snapshot(self, phase: StepPhase) -> dict[str, object]:
-        try:
-            return self.driver.ui_snapshot(WindowsUiSnapshotParams())
-        except Exception:
-            if phase not in {"prepare", "finalize"}:
-                raise
-            return {}
+        return self.driver.ui_snapshot(WindowsUiSnapshotParams())
 
     def classify_error(self, error: BaseException, phase: StepPhase, step: ExecutableStep) -> FailureCategory:
         if isinstance(error, TimeoutError):
@@ -179,6 +175,11 @@ class WindowsHarness:
             kind=data["kind"],
             path=data["path"],
             mime_type=data.get("mime_type"),
+            size_bytes=data.get("size_bytes"),
+            sha256=data.get("sha256"),
+            availability=data.get("availability", "available"),
+            unavailable_reason=data.get("unavailable_reason"),
+            capture_occurrence=data.get("capture_occurrence"),
             created_at=data["created_at"],
             metadata=dict(data.get("metadata") or {}),
         )

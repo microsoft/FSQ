@@ -14,6 +14,12 @@ class EvidenceBundler:
     def create_manifest(self, run_id: str, steps: list[StepResult]) -> Path:
         path = self.runs_dir / run_id / "evidence-manifest.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        if (path.parent / "evidence-events.jsonl").is_file():
+            return path
+        if path.is_file():
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing.get("schema_version") == "fsq.evidence/v2":
+                return path
         manifest = {
             "run_id": run_id,
             "steps": [

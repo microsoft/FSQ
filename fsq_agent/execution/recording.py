@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import yaml
 
 from fsq_agent._capability_bootstrap import build_capability_registry
-from fsq_agent.case_dsl import FSQ_CASE_SUFFIX, FsqCaseLoader, FsqCaseSerializer
+from fsq_agent.case_dsl import FSQ_CASE_SUFFIX, FsqCaseLoader, FsqCaseSerializer, FsqExecutableStepAdapter
 from fsq_agent.models import ConfigurationError, RunEvent, Task, TaskResult
 
 if TYPE_CHECKING:
@@ -42,6 +42,8 @@ class _StrictCaseRecording:
     draft: bool = False
     case_name: str | None = None
     publication_outcome: str = "not_requested"
+    publication_status: Literal["not_requested", "success", "failed"] = "not_requested"
+    publication_errors: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
@@ -59,6 +61,8 @@ class _StrictCaseRecording:
             "draft": self.draft,
             "case_name": self.case_name,
             "publication_outcome": self.publication_outcome,
+            "publication_status": self.publication_status,
+            "publication_errors": self.publication_errors,
             **self.provenance,
         }
 
@@ -78,6 +82,8 @@ class RecordingResult:
     draft: bool
     case_name: str | None = None
     publication_outcome: str = "not_requested"
+    publication_status: Literal["not_requested", "success", "failed"] = "not_requested"
+    publication_errors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "skipped_tool_calls", tuple(MappingProxyType(dict(item)) for item in self.skipped_tool_calls))
@@ -98,6 +104,8 @@ def _recording_result_from_state(recording: _StrictCaseRecording) -> RecordingRe
         draft=recording.draft,
         case_name=recording.case_name,
         publication_outcome=recording.publication_outcome,
+        publication_status=recording.publication_status,
+        publication_errors=tuple(recording.publication_errors),
     )
 
 
@@ -126,6 +134,21 @@ class RecordingService:
             publication_directory=publication_directory,
             case_name=case_name,
         )
+        if recording.recorded_case_path and recording.recorded_case_path.is_file():
+            from .runs import RunLifecycleService
+
+            digest = hashlib.sha256(recording.recorded_case_path.read_bytes()).hexdigest()
+            relation = {
+                "kind": "recording",
+                "originating_run_id": result.report.run_id,
+                "case_digest": digest,
+                "candidate_path": recording.recorded_case_path.name,
+                "validation_status": recording.validation_status,
+                "review_status": "unknown",
+            }
+            if recording.published_case_path:
+                relation["saved_case_path"] = recording.published_case_path.name
+            RunLifecycleService.append_lineage(run_dir, relation)
         return _recording_result_from_state(recording)
 
 
@@ -165,7 +188,15 @@ def _record_dynamic_run_as_strict_case(
 
     collector = _RecordingCollector()
     events = _load_events(run_dir / "events.jsonl")
-    commands = collector.collect(events)
+    if (run_dir / "evidence-events.jsonl").is_file():
+        from .runs import RunLifecycleService
+
+        commands, command_mapping = _commands_from_evidence(RunLifecycleService.read_evidence(run_dir), collector)
+    else:
+        commands = collector.collect(events)
+        command_mapping = []
+    incomplete = any(item.get("reason") == "sensitive_parameters_redacted" for item in collector.skipped_tool_calls)
+    draft = draft or incomplete
     if not commands:
         recording = _StrictCaseRecording(
             status="failed",
@@ -174,6 +205,8 @@ def _record_dynamic_run_as_strict_case(
             skipped_tool_calls=collector.skipped_tool_calls,
             warnings=collector.warnings,
             draft=draft,
+            publication_status="failed" if publication_directory is not None and incomplete else "not_requested",
+            publication_errors=["Incomplete redacted recording cannot be published."] if publication_directory is not None and incomplete else [],
         )
         _write_recording(recording)
         return recording
@@ -195,12 +228,18 @@ def _record_dynamic_run_as_strict_case(
         validation_status="not_run",
         draft=draft,
         case_name=metadata_doc["name"],
-        provenance={"source_run_id": result.report.run_id, "source_task_id": task.id, "source_status": result.status},
+        provenance={
+            "source_run_id": result.report.run_id,
+            "source_task_id": task.id,
+            "source_status": result.status,
+            "command_mapping": command_mapping,
+        },
     )
     try:
         generated_case = FsqCaseLoader().load_text(yaml.safe_dump_all([metadata_doc, commands], sort_keys=False), recorded_case_path)
         content = FsqCaseSerializer(build_capability_registry(platform=settings.harness.platform).snapshot()).serialize(generated_case)
         _atomic_bytes(recorded_case_path, content)
+        FsqExecutableStepAdapter(registry_snapshot=build_capability_registry(platform=settings.harness.platform).snapshot()).to_executable_steps(generated_case)
         recording.validation_status = "passed"
     except (ConfigurationError, OSError) as exc:
         recording.status = "failed"
@@ -208,20 +247,60 @@ def _record_dynamic_run_as_strict_case(
         recording.errors.append(str(exc) if isinstance(exc, ConfigurationError) else "Unable to persist recorded Case.")
         recording.recorded_case_path = None
     effective_publication_directory = settings.cases.dir if publication_directory is _DEFAULT_PUBLICATION else publication_directory
-    if effective_publication_directory is not None and recording.status == "recorded" and recording.validation_status == "passed" and task.planning_reference_kind == "goal":
+    _write_recording(recording)
+    if effective_publication_directory is not None and recording.status == "recorded" and recording.validation_status == "passed" and task.planning_reference_kind == "goal" and not incomplete:
         try:
-            publication_root = effective_publication_directory.resolve()
             recording.published_case_path, recording.publication_outcome = publish_recorded_case(
-                candidate_path=recorded_case_path, destination_directory=publication_root, platform=settings.harness.platform, case_name=metadata_doc["name"]
+                candidate_path=recorded_case_path,
+                destination_directory=effective_publication_directory.resolve(),
+                platform=settings.harness.platform,
+                case_name=metadata_doc["name"],
             )
-            if recording.publication_outcome in {"conflict", "failed"}:
-                recording.warnings.append("case.publication_conflict" if recording.publication_outcome == "conflict" else "case.publication_failed")
         except (ConfigurationError, OSError):
-            recording.publication_outcome = "failed"
-            recording.published_case_path = None
-            recording.warnings.append("case.publication_failed")
+            recording.published_case_path, recording.publication_outcome = None, "failed"
+        recording.publication_status = "success" if recording.published_case_path is not None else "failed"
+        if recording.published_case_path is None:
+            recording.publication_errors.append("Unable to publish recorded Case.")
+            recording.warnings.append("case.publication_conflict" if recording.publication_outcome == "conflict" else "case.publication_failed")
+    elif effective_publication_directory is not None and incomplete:
+        recording.publication_status = "failed"
+        recording.publication_errors.append("Incomplete redacted recording cannot be published.")
     _write_recording(recording)
     return recording
+
+
+def _publish_goal_recording(*, recorded_case_path: Path, published_case_path: Path, warnings: list[str]) -> Path | None:
+    temporary_path: Path | None = None
+    try:
+        published_case_path.parent.mkdir(parents=True, exist_ok=True)
+        with (
+            recorded_case_path.open("rb") as source,
+            tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=published_case_path.parent,
+                prefix=f".{published_case_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary,
+        ):
+            temporary_path = Path(temporary.name)
+            while chunk := source.read(1024 * 1024):
+                temporary.write(chunk)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        temporary_path.replace(published_case_path)
+    except OSError:
+        warnings.append("Unable to publish the recorded Goal case to the selected platform cases directory.")
+        return None
+    else:
+        temporary_path = None
+        return published_case_path
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
 
 
 class _RecordingCollector:
@@ -390,15 +469,19 @@ def _metadata_doc(
     warnings: list[str],
     draft: bool,
 ) -> dict[str, Any]:
+    from .runs import RunLifecycleService
+
+    secrets = tuple(settings.runtime_secrets.private_values().values())
     app_id = settings.harness.android.app_id if settings.harness.platform == "android" else None
     reference = task.planning_reference_text or ""
     goal = " ".join((reference if reference.strip() else task.name).split())
     identity = [settings.harness.platform, goal] if task.planning_reference_kind == "goal" else [settings.harness.platform, task.name, task.description]
     name = "case-" + hashlib.sha256(json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    description = goal if task.planning_reference_kind == "goal" else task.description
     doc: dict[str, Any] = {
         "schemaVersion": "fsq.ai-test/v1",
-        "name": name,
-        "description": goal if task.planning_reference_kind == "goal" else task.description,
+        "name": RunLifecycleService.safe_text(name, secrets),
+        "description": RunLifecycleService.safe_text(description, secrets),
         "platform": settings.harness.platform,
         "tags": ["recorded", "dynamic-llm"],
     }
@@ -408,7 +491,21 @@ def _metadata_doc(
 
 
 def _write_recording(recording: _StrictCaseRecording) -> None:
-    recording.recording_path.write_text(json.dumps(recording.to_json(), indent=2, ensure_ascii=False), encoding="utf-8")
+    path = recording.recording_path
+    root = path.parent.resolve()
+    if path.is_symlink() or not path.resolve().is_relative_to(root):
+        raise ValueError("Recording manifest must remain contained in its Run.")
+    descriptor, temporary = tempfile.mkstemp(prefix=".recording-", suffix=".tmp", dir=root)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(json.dumps(recording.to_json(), indent=2, ensure_ascii=False).encode("utf-8") + b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
+            raise ValueError("Recording manifest must remain contained in its Run.")
+        Path(temporary).replace(path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _valid_case_name(value: str) -> str:
@@ -441,19 +538,106 @@ def publish_recorded_case(*, candidate_path: Path, destination_directory: Path, 
     destination = root / f"{name}{FSQ_CASE_SUFFIX}"
     if destination.is_symlink() or destination.resolve().parent != root:
         raise ConfigurationError("Case publication must remain in its directory.")
+    candidate_bytes = candidate_path.read_bytes()
     case = FsqCaseLoader().load_case(candidate_path)
+    if candidate_path.read_bytes() != candidate_bytes:
+        raise ConfigurationError("Recording source changed during publication.")
     if case.config.platform != platform:
         raise ConfigurationError("Case platform mismatch.")
     case = case.model_copy(update={"config": case.config.model_copy(update={"name": name})})
     content = FsqCaseSerializer(build_capability_registry(platform=platform).snapshot()).serialize(case)
+    outcome = "created"
     try:
         root.mkdir(parents=True, exist_ok=True)
         if destination.exists():
-            return (destination, "unchanged") if destination.read_bytes() == content else (None, "conflict")
-        try:
-            _atomic_bytes(destination, content, create_only=True)
-        except FileExistsError:
-            return (destination, "unchanged") if destination.read_bytes() == content else (None, "conflict")
+            if destination.read_bytes() != content:
+                return None, "conflict"
+            outcome = "unchanged"
+        else:
+            try:
+                _atomic_bytes(destination, content, create_only=True)
+            except FileExistsError:
+                if destination.read_bytes() != content:
+                    return None, "conflict"
+                outcome = "unchanged"
+        _append_publication_lineage(candidate_path, candidate_bytes, destination, content)
     except OSError:
         return None, "failed"
-    return destination, "created"
+    return destination, outcome
+
+
+def _append_publication_lineage(candidate_path, candidate_bytes, destination, content):
+    from .runs import RunLifecycleService
+
+    root = candidate_path.parent.resolve()
+    recording_path = root / "recording.json"
+    if not recording_path.is_file():
+        return
+    if candidate_path.is_symlink() or recording_path.is_symlink() or candidate_path.read_bytes() != candidate_bytes:
+        raise ConfigurationError("Recording source changed during publication.")
+    recording = json.loads(recording_path.read_text(encoding="utf-8"))
+    if not recording.get("source_run_id") and not recording.get("command_mapping"):
+        return
+    mapping = recording.get("command_mapping")
+    case = FsqCaseLoader().load_text(candidate_bytes.decode("utf-8"), candidate_path)
+    if recording.get("source_run_id") != root.name or not isinstance(mapping, list):
+        raise ConfigurationError("Recording source identity is invalid.")
+    if mapping and [item.get("command_index") for item in mapping] != list(range(len(case.commands))):
+        raise ConfigurationError("Recording command mapping is invalid.")
+    digest = hashlib.sha256(content).hexdigest()
+    snapshot_dir = root / "saved-cases"
+    if snapshot_dir.is_symlink():
+        raise ConfigurationError("Saved Case snapshots must remain in the Run.")
+    snapshot_dir.mkdir(exist_ok=True)
+    snapshot = snapshot_dir / f"{digest}{FSQ_CASE_SUFFIX}"
+    if snapshot.is_symlink():
+        raise ConfigurationError("Saved Case snapshot is unsafe.")
+    try:
+        _atomic_bytes(snapshot, content, create_only=True)
+    except FileExistsError:
+        if snapshot.read_bytes() != content:
+            raise ConfigurationError("Saved Case snapshot identity conflicts.") from None
+    RunLifecycleService.append_lineage(
+        root,
+        {
+            "kind": "recording",
+            "originating_run_id": root.name,
+            "candidate_digest": hashlib.sha256(candidate_bytes).hexdigest(),
+            "candidate_path": candidate_path.name,
+            "case_digest": digest,
+            "saved_case_path": destination.name,
+            "saved_snapshot_path": snapshot.relative_to(root).as_posix(),
+            "command_mapping": mapping,
+            "validation_status": "passed",
+            "review_status": "unknown",
+        },
+    )
+
+
+def _commands_from_evidence(bundle, collector):
+    commands = []
+    mapping = []
+    for result in bundle.steps:
+        invoke = next((phase for phase in result.phase_reports if phase.phase == "invoke"), None)
+        if result.status != "passed" or invoke is None:
+            continue
+        metadata = invoke.metadata
+        replay = metadata.get("replay")
+        if not isinstance(replay, dict) or replay.get("kind") != "fsq_command" or metadata.get("step_kind") in {"observation", "diagnostic"}:
+            continue
+        params = metadata.get("safe_replay_params", {})
+        if metadata.get("replay_unavailable_reason") == "sensitive_parameters_redacted":
+            collector.skipped_tool_calls.append({"step_id": result.step_id, "reason": "sensitive_parameters_redacted"})
+            collector.warnings.append("A recorded action has redacted parameters; the Case is an incomplete draft.")
+            continue
+        if not isinstance(params, dict):
+            continue
+        alias = replay.get("alias")
+        if not isinstance(alias, str) or not alias:
+            continue
+        collector._collect_runtime_secret_names(params)
+        commands.append({alias: params})
+        mapping.append(
+            {"command_index": len(commands) - 1, "source_step_id": result.source_step_id, "step_execution_id": result.step_execution_id or result.step_id, "invocation_path": result.invocation_path}
+        )
+    return commands, mapping

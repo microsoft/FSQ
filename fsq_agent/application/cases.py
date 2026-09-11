@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import asyncio
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -21,11 +22,11 @@ from fsq_agent.application.contracts import (
 from fsq_agent.application.workspace import require_initialized_workspace
 from fsq_agent.config import Settings, load_workspace_platform_settings
 from fsq_agent.execution import DynamicExecutionRequest, DynamicExecutionService, RecordingService
-from fsq_agent.models import ConfigurationError, Task, TaskResult
+from fsq_agent.models import ConfigurationError, DynamicAgentOutcome, RunExecutionContext, Task
 
 
 class _Agent(Protocol):
-    async def run(self, task: Task, event_sink: CaseCreateEventSink | None = None, *, run_id: str) -> TaskResult: ...
+    async def run_in_context(self, task: Task, context: RunExecutionContext, event_sink: CaseCreateEventSink | None = None, *, evidence_sink, cancellation_check=None) -> DynamicAgentOutcome: ...
 
 
 SettingsLoader = Callable[[Path, str], Settings]
@@ -45,7 +46,10 @@ async def create_case(
             RecordingService.validate_case_name(request.case_name)
         except ConfigurationError as exc:
             raise ApplicationError(
-                code=ApplicationErrorCode.CASE_INVALID, category=ApplicationErrorCategory.REQUEST_VALIDATION, message="Invalid Case name.", action="Use a safe suffix-free Case name."
+                code=ApplicationErrorCode.CASE_INVALID,
+                category=ApplicationErrorCategory.REQUEST_VALIDATION,
+                message="Invalid Case name.",
+                action="Use a safe suffix-free Case name.",
             ) from exc
     if not normalized_goal:
         raise ApplicationError(
@@ -65,16 +69,28 @@ async def create_case(
             action="Start this operation through a supported FSQ adapter.",
         )
     task = _task_from_goal(normalized_goal)
-    execution = await DynamicExecutionService(agent=agent_factory(settings)).execute(
-        DynamicExecutionRequest(
-            task=task,
-            settings=settings,
-            event_sink=event_sink,
-            record=True,
-            case_name=request.case_name,
-            publication_directory=getattr(getattr(settings, "cases", None), "dir", None),
+    try:
+        execution = await DynamicExecutionService(agent=agent_factory(settings)).execute(
+            DynamicExecutionRequest(
+                task=task,
+                settings=settings,
+                event_sink=event_sink,
+                record=True,
+                case_name=request.case_name,
+                publication_directory=getattr(getattr(settings, "cases", None), "dir", None),
+            )
         )
-    )
+    except (asyncio.CancelledError, KeyboardInterrupt) as exc:
+        run_id = getattr(exc, "run_id", None)
+        if run_id is None:
+            raise
+        raise ApplicationError(
+            code=ApplicationErrorCode.RUN_CANCELLED,
+            category=ApplicationErrorCategory.INTERNAL,
+            message="Run cancelled.",
+            action="Inspect the allocated Run evidence.",
+            details={"run_id": run_id, "platform": request.platform},
+        ) from exc
     result = execution.task_result
     candidate_case_path = execution.recording.recorded_case_path if execution.recording is not None and execution.recording.status == "recorded" else None
     return CaseCreateResult(

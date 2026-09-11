@@ -97,6 +97,25 @@ class InvokeFailureHarness(SuccessfulHarness):
         return "action_error"
 
 
+def test_runner_uses_structural_public_redaction_source():
+    class Resolver:
+        def resolve(self, name):
+            return "private-value"
+
+        def redaction_values(self):
+            return ("private-value",)
+
+    class Harness(InvokeFailureHarness):
+        def invoke_action(self, step, context):
+            raise RuntimeError("failure with private-value")
+
+    runner = StepRunner(Harness(), runtime_secret_store=Resolver())
+    result = runner.run_step("run", ExecutableStep(step_id="one", action_name="tap", kind="action", params={}))
+    assert result.status == "failed"
+    assert "private-value" not in result.model_dump_json()
+    assert all("private-value" not in event.model_dump_json() for event in runner.events)
+
+
 class FileNotFoundInvokeFailureHarness(InvokeFailureHarness):
     def invoke_action(self, step: ExecutableStep, context: HarnessContext) -> HarnessActionResult:
         self.calls.append(f"invoke:{step.action_name}:{context.session_id}")
@@ -241,8 +260,8 @@ def test_step_runner_runs_successful_step_through_three_phases() -> None:
 
     assert result.step_id == "step-1"
     assert result.status == "passed"
-    assert [phase.phase for phase in result.phase_reports] == ["prepare", "invoke", "finalize"]
-    assert [phase.status for phase in result.phase_reports] == ["passed", "passed", "passed"]
+    assert [phase.phase for phase in result.phase_reports] == ["prepare", "invoke", "settle", "finalize"]
+    assert [phase.status for phase in result.phase_reports] == ["passed", "passed", "passed", "passed"]
     assert harness.calls == [
         "get_context",
         "before:tap:session-1",
@@ -255,7 +274,10 @@ def test_step_runner_runs_successful_step_through_three_phases() -> None:
         "phase_finish",
         "phase_start",
         "harness_call_start",
+        "action_result",
         "harness_call_finish",
+        "phase_finish",
+        "phase_start",
         "phase_finish",
         "phase_start",
         "phase_finish",
@@ -295,10 +317,11 @@ def test_step_runner_executes_wait_ms_through_harness_invoke_action() -> None:
         "before:wait_ms:session-1",
         "invoke:wait_ms:session-1",
         "after:wait_ms:passed",
+        "get_context",
         "capture:screenshot:after-action:wait-1:finalize",
         "capture:ui_snapshot:after-action:wait-1:finalize",
     ]
-    assert [phase.phase for phase in result.phase_reports] == ["prepare", "invoke", "finalize"]
+    assert [phase.phase for phase in result.phase_reports] == ["prepare", "invoke", "settle", "finalize"]
     metadata = result.phase_reports[1].metadata
     assert metadata["capability_name"] == "wait_ms"
     assert metadata["executor_kind"] == "common"
@@ -391,10 +414,13 @@ def test_step_runner_applies_platform_delay_after_invoke_before_finalize(monkeyp
         "invoke:tap_on:session-1",
         "sleep:0.25",
         "after:tap_on:passed",
+        "get_context",
     ]
     assert result.phase_reports[1].metadata["post_action_delay_seconds"] == 0.25
     invoke_finish_events = [event for event in runner.events if event.event_type == "phase_finish" and event.phase == "invoke"]
-    assert invoke_finish_events[0].payload == {"status": "passed", "post_action_delay_seconds": 0.25}
+    assert invoke_finish_events[0].payload["status"] == "passed"
+    assert invoke_finish_events[0].payload["post_action_delay_seconds"] == 0.25
+    assert invoke_finish_events[0].payload["phase_report"]["duration_ms"] is not None
 
 
 def test_step_runner_adds_reference_screen_size_for_tap_at_replay() -> None:
@@ -477,8 +503,8 @@ def test_step_runner_wraps_invoke_exception_and_still_finalizes() -> None:
     assert result.status == "failed"
     assert result.failure_category == "action_error"
     assert result.error_message == "RuntimeError: tap failed"
-    assert [phase.phase for phase in result.phase_reports] == ["prepare", "invoke", "finalize"]
-    assert [phase.status for phase in result.phase_reports] == ["passed", "failed", "passed"]
+    assert [phase.phase for phase in result.phase_reports] == ["prepare", "invoke", "settle", "finalize"]
+    assert [phase.status for phase in result.phase_reports] == ["passed", "failed", "passed", "passed"]
     invoke_report = result.phase_reports[1]
     assert invoke_report.failure_category == "action_error"
     assert invoke_report.error_message == "RuntimeError: tap failed"
@@ -512,7 +538,7 @@ def test_step_runner_preserves_failed_harness_action_result() -> None:
     assert result.status == "failed"
     assert result.failure_category == "target_resolution_error"
     assert result.error_message == "target not found"
-    assert [phase.status for phase in result.phase_reports] == ["passed", "failed", "passed"]
+    assert [phase.status for phase in result.phase_reports] == ["passed", "failed", "passed", "passed"]
     assert "step_error" in [event.event_type for event in runner.events]
 
 
@@ -541,7 +567,7 @@ def test_step_runner_derives_action_evidence_from_driver_step_kind() -> None:
     result = runner.run_step(run_id="run-1", step=step)
 
     prepare_report = result.phase_reports[0]
-    finalize_report = result.phase_reports[2]
+    finalize_report = result.phase_reports[3]
     assert result.status == "passed"
     assert [artifact.kind for artifact in prepare_report.artifact_refs] == ["screenshot", "ui_snapshot"]
     assert [artifact.kind for artifact in finalize_report.artifact_refs] == ["screenshot", "ui_snapshot"]
@@ -569,7 +595,7 @@ def test_step_runner_uses_normalized_ui_snapshot_for_web_driver_steps() -> None:
     result = runner.run_step(run_id="run-1", step=step)
 
     prepare_report = result.phase_reports[0]
-    finalize_report = result.phase_reports[2]
+    finalize_report = result.phase_reports[3]
     assert result.status == "passed"
     assert [artifact.kind for artifact in prepare_report.artifact_refs] == ["screenshot", "ui_snapshot"]
     assert [artifact.kind for artifact in finalize_report.artifact_refs] == ["screenshot", "ui_snapshot"]
@@ -597,7 +623,7 @@ def test_step_runner_uses_normalized_ui_snapshot_for_macos_driver_steps() -> Non
     result = runner.run_step(run_id="run-1", step=step)
 
     prepare_report = result.phase_reports[0]
-    finalize_report = result.phase_reports[2]
+    finalize_report = result.phase_reports[3]
     assert result.status == "passed"
     assert [artifact.kind for artifact in prepare_report.artifact_refs] == ["screenshot", "ui_snapshot"]
     assert [artifact.kind for artifact in finalize_report.artifact_refs] == ["screenshot", "ui_snapshot"]
@@ -621,7 +647,7 @@ def test_step_runner_derives_assertion_evidence_from_driver_step_kind() -> None:
 
     assert result.status == "passed"
     assert [artifact.kind for artifact in result.phase_reports[0].artifact_refs] == ["screenshot", "ui_snapshot"]
-    assert result.phase_reports[2].artifact_refs == []
+    assert result.phase_reports[3].artifact_refs == []
     assert "capture:screenshot:before-action:assert-1:prepare" in harness.calls
     assert not any("after-action:assert-1" in call for call in harness.calls)
 
@@ -640,7 +666,7 @@ def test_step_runner_derives_setup_evidence_from_driver_step_kind() -> None:
 
     assert result.status == "passed"
     assert result.phase_reports[0].artifact_refs == []
-    assert [artifact.kind for artifact in result.phase_reports[2].artifact_refs] == ["screenshot", "ui_snapshot"]
+    assert [artifact.kind for artifact in result.phase_reports[3].artifact_refs] == ["screenshot", "ui_snapshot"]
     assert "capture:screenshot:after-action:setup-1:finalize" in harness.calls
 
 
@@ -658,7 +684,7 @@ def test_step_runner_derives_teardown_evidence_from_driver_step_kind() -> None:
 
     assert result.status == "passed"
     assert [artifact.kind for artifact in result.phase_reports[0].artifact_refs] == ["screenshot", "ui_snapshot"]
-    assert result.phase_reports[2].artifact_refs == []
+    assert result.phase_reports[3].artifact_refs == []
     assert "capture:screenshot:before-action:teardown-1:prepare" in harness.calls
     assert not any("after-action:teardown-1" in call for call in harness.calls)
 
@@ -682,7 +708,7 @@ def test_step_runner_captures_common_actions_but_not_observation_or_diagnostic_s
     assert common_result.status == "passed"
     assert [artifact.kind for artifact in common_result.phase_reports[0].artifact_refs] == ["screenshot", "ui_snapshot"]
     assert common_result.phase_reports[1].artifact_refs == []
-    assert [artifact.kind for artifact in common_result.phase_reports[2].artifact_refs] == ["screenshot", "ui_snapshot"]
+    assert [artifact.kind for artifact in common_result.phase_reports[3].artifact_refs] == ["screenshot", "ui_snapshot"]
 
     for step in (
         ExecutableStep(step_id="observation-1", kind="observation", action_name="custom_observation"),
@@ -690,7 +716,7 @@ def test_step_runner_captures_common_actions_but_not_observation_or_diagnostic_s
     ):
         result = runner.run_step(run_id="run-1", step=step)
         assert result.status == "passed"
-        assert [phase.artifact_refs for phase in result.phase_reports] == [[], [], []]
+        assert [phase.artifact_refs for phase in result.phase_reports] == [[], [], [], []]
 
     assert "capture:screenshot:before-action:common-1:prepare" in harness.calls
     assert "capture:ui_snapshot:after-action:common-1:finalize" in harness.calls
@@ -712,7 +738,7 @@ def test_step_runner_after_capture_includes_failed_action_without_extra_failure_
 
     assert result.status == "failed"
     assert [artifact.kind for artifact in result.phase_reports[0].artifact_refs] == ["screenshot", "ui_snapshot"]
-    assert [artifact.kind for artifact in result.phase_reports[2].artifact_refs] == [
+    assert [artifact.kind for artifact in result.phase_reports[3].artifact_refs] == [
         "screenshot",
         "ui_snapshot",
     ]
@@ -732,7 +758,7 @@ def test_step_runner_reports_artifact_capture_errors_without_crashing() -> None:
 
     result = runner.run_step(run_id="run-1", step=step)
 
-    finalize_report = result.phase_reports[2]
+    finalize_report = result.phase_reports[3]
     assert result.status == "failed"
     assert finalize_report.status == "failed"
     assert finalize_report.failure_category == "artifact_error"

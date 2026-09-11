@@ -238,9 +238,13 @@ def test_web_harness_captures_screenshot_and_ui_snapshot_with_artifact_store(tmp
         phase="finalize",
     )
 
-    assert screenshot_ref.path.as_posix() == "artifacts/screenshots/step-1-invoke-after-click.png"
+    assert screenshot_ref.path.parent.as_posix() == "artifacts/screenshots"
+    assert (tmp_path / screenshot_ref.path).is_file()
+    assert screenshot_ref.sha256 is not None
     assert (tmp_path / screenshot_ref.path).read_bytes() == b"fake-png"
-    assert ui_snapshot_ref.path.as_posix() == "artifacts/ui-snapshots/step-1-finalize-after-click.json"
+    assert ui_snapshot_ref.path.parent.as_posix() == "artifacts/ui-snapshots"
+    assert (tmp_path / ui_snapshot_ref.path).is_file()
+    assert ui_snapshot_ref.sha256 is not None
     assert "WebArea" in (tmp_path / ui_snapshot_ref.path).read_text(encoding="utf-8")
     assert driver.calls == [("context", None), ("screenshot", {}), ("ui_snapshot", {})]
 

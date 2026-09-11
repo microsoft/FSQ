@@ -57,6 +57,8 @@ class ToolCallRecord(BaseModel):
     tool_name: str
     tool_origin: Literal["agent_tool", "common", "platform", "harness", "runtime", "unknown"] = "unknown"
     status: Literal["completed", "failed"]
+    transport_status: Literal["completed", "failed"] | None = None
+    execution_status: Literal["passed", "failed", "success", "skipped", "cancelled", "incomplete", "error"] | None = None
     arguments: dict[str, Any] | str | None = None
     output_preview: str | None = None
     artifact_path: str | None = None

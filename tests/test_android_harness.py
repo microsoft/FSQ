@@ -9,7 +9,27 @@ from fsq_agent.core import ArtifactStore, HarnessInterface
 from fsq_agent.core.harness._ai_assertion_tool import AIAssertionBackendToolMixin
 from fsq_agent.core.harness._android import AndroidHarness
 from fsq_agent.core.harness._uiautomator2_driver import UiAutomator2AndroidDriver
-from fsq_agent.models import AIAssertionRequest, AIAssertionResult, ExecutableStep, HarnessContext
+from fsq_agent.drivers._capabilities import _android_driver_tool
+from fsq_agent.models import (
+    AIAssertionRequest,
+    AIAssertionResult,
+    AndroidAssertNotVisibleParams,
+    AndroidAssertStateParams,
+    AndroidAssertVisibleParams,
+    AndroidAssertWithAIParams,
+    AndroidInputTextParams,
+    AndroidKillAppParams,
+    AndroidLaunchAppParams,
+    AndroidLongPressOnParams,
+    AndroidPerformActionsParams,
+    AndroidPressKeyParams,
+    AndroidSwipeParams,
+    AndroidTapAtParams,
+    AndroidTapOnParams,
+    AndroidUiTreeParams,
+    ExecutableStep,
+    HarnessContext,
+)
 
 
 class FakeAndroidDriver(AIAssertionBackendToolMixin):
@@ -32,50 +52,63 @@ class FakeAndroidDriver(AIAssertionBackendToolMixin):
         self.calls.append((method_name, recorded))
         return {method_name: True}
 
-    def launch_app(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("launchApp", description="Test Android capability launch_app")
+    def launch_app(self, params: AndroidLaunchAppParams) -> dict[str, object]:
         return self._record("launch_app", params)
 
-    def kill_app(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("killApp", description="Test Android capability kill_app")
+    def kill_app(self, params: AndroidKillAppParams) -> dict[str, object]:
         return self._record("kill_app", params)
 
-    def tap_on(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("tapOn", description="Test Android capability tap_on")
+    def tap_on(self, params: AndroidTapOnParams) -> dict[str, object]:
         return self._record("tap_on", params)
 
-    def tap_at(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("tapAt", description="Test Android capability tap_at")
+    def tap_at(self, params: AndroidTapAtParams) -> dict[str, object]:
         return self._record("tap_at", params)
 
-    def long_press_on(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("longPressOn", description="Test Android capability long_press_on")
+    def long_press_on(self, params: AndroidLongPressOnParams) -> dict[str, object]:
         return self._record("long_press_on", params)
 
-    def input_text(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("inputText", description="Test Android capability input_text")
+    def input_text(self, params: AndroidInputTextParams) -> dict[str, object]:
         return self._record("input_text", params)
 
-    def press_key(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("pressKey", description="Test Android capability press_key")
+    def press_key(self, params: AndroidPressKeyParams) -> dict[str, object]:
         return self._record("press_key", params)
 
-    def swipe(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("swipe", description="Test Android capability swipe")
+    def swipe(self, params: AndroidSwipeParams) -> dict[str, object]:
         return self._record("swipe", params)
 
-    def perform_actions(self, params: dict[str, object]) -> dict[str, object]:
+    def perform_actions(self, params: AndroidPerformActionsParams) -> dict[str, object]:
         return self._record("perform_actions", params)
 
-    def assert_visible(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("assertVisible", description="Test Android capability assert_visible")
+    def assert_visible(self, params: AndroidAssertVisibleParams) -> dict[str, object]:
         return self._record("assert_visible", params)
 
-    def assert_not_visible(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("assertNotVisible", description="Test Android capability assert_not_visible")
+    def assert_not_visible(self, params: AndroidAssertNotVisibleParams) -> dict[str, object]:
         return self._record("assert_not_visible", params)
 
-    def assert_state(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("assert", description="Test Android capability assert_state")
+    def assert_state(self, params: AndroidAssertStateParams) -> dict[str, object]:
         return self._record("assert_state", params)
 
-    def assert_with_ai(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("assertWithAI", description="Test Android capability assert_with_ai")
+    def assert_with_ai(self, params: AndroidAssertWithAIParams) -> dict[str, object]:
         return self._run_ai_assertion_tool(params)
 
     def screenshot(self, params: object | None = None) -> bytes:
         self.calls.append(("screenshot", None))
         return b"fake-png"
 
-    def ui_snapshot(self, params: dict[str, object]) -> dict[str, object]:
+    @_android_driver_tool("uiTree", description="Test Android capability ui_snapshot")
+    def ui_snapshot(self, params: AndroidUiTreeParams) -> dict[str, object]:
         if hasattr(params, "model_dump"):
             recorded = params.model_dump(mode="json", exclude_none=True)
         else:
@@ -209,7 +242,8 @@ def test_android_harness_validation_failure_does_not_call_driver_method() -> Non
 
 def test_android_harness_converts_driver_failure_result() -> None:
     class FailingDriver(FakeAndroidDriver):
-        def tap_on(self, params: dict[str, object]) -> dict[str, object]:
+        @_android_driver_tool("tapOn", description="Test failed Android tap")
+        def tap_on(self, params: AndroidTapOnParams) -> dict[str, object]:
             self.calls.append(("tap_on", params))
             return {
                 "status": "failed",
@@ -264,9 +298,13 @@ def test_android_harness_captures_screenshot_and_ui_snapshot_with_artifact_store
         phase="finalize",
     )
 
-    assert screenshot_ref.path.as_posix() == "artifacts/screenshots/step-1-invoke-after-tap.png"
+    assert screenshot_ref.path.parent.as_posix() == "artifacts/screenshots"
+    assert (tmp_path / screenshot_ref.path).is_file()
+    assert screenshot_ref.sha256 is not None
     assert (tmp_path / screenshot_ref.path).read_bytes() == b"fake-png"
-    assert ui_snapshot_ref.path.as_posix() == "artifacts/ui-snapshots/step-1-finalize-after-tap.json"
+    assert ui_snapshot_ref.path.parent.as_posix() == "artifacts/ui-snapshots"
+    assert (tmp_path / ui_snapshot_ref.path).is_file()
+    assert ui_snapshot_ref.sha256 is not None
     assert "Login" in (tmp_path / ui_snapshot_ref.path).read_text(encoding="utf-8")
     assert driver.calls == [
         ("context", None),

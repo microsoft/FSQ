@@ -3,15 +3,15 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ControlPlaneShell } from './ControlPlaneShell';
 
-it('renders the specified navigation with one Settings entry and unavailable Runs', () => {
+it('renders the specified navigation with one Settings entry and available Runs', () => {
   render(<ControlPlaneShell activePage="devices" title="Test Runner" description="Independent outlet"><div>Arbitrary page outlet</div></ControlPlaneShell>);
   const sidebar=screen.getByLabelText('Control Plane sidebar');
   expect(Array.from(sidebar.querySelectorAll('.cp-nav-item > span'), item=>item.textContent)).toEqual(['Home','Test Runner','Runs','Workspaces','Settings']);
   expect(screen.getByRole('button',{name:'Test Runner'})).toHaveAttribute('aria-current','page');
   expect(screen.getAllByRole('button',{name:'Settings'})).toHaveLength(1);
   expect(screen.queryByRole('button',{name:'Config'})).not.toBeInTheDocument();
-  expect(screen.queryByRole('button',{name:'Runs'})).not.toBeInTheDocument();
-  expect(screen.getByText('Coming soon').closest('[aria-disabled]')).toHaveAttribute('aria-disabled','true');
+  expect(screen.getByRole('button',{name:'Runs'})).toBeEnabled();
+  expect(screen.queryByText('Coming soon')).not.toBeInTheDocument();
 });
 
 it.each(['overview','devices','config','workspace'] as const)('keeps Workspace context distinct from the current %s page',async activePage=>{

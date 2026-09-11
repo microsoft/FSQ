@@ -12,7 +12,7 @@ The module does not parse CLI arguments, parse FSQ YAML, construct provider sess
 - `core.evidence`: canonical artifact and evidence services.
 - `core.interfaces`: canonical public protocols and stable construction boundaries.
 - `harnesses`: private concrete runtime gateways reached through the public Harness factory.
-- `drivers`: private concrete automation backends reached through public Driver interfaces and factories.
+- `drivers`: private backends reached through public interfaces/factories, plus the exact metadata-only composition exceptions in the Drivers SPEC.
 - `environments`: canonical `PlatformRuntimeService` and `AndroidDeviceDiscovery` reached only by Core compatibility exports.
 
 - Internal project dependencies: `models`, `capabilities`, and the narrow `environments` compatibility export dependency.
@@ -36,7 +36,8 @@ Current `__init__.py` exports via `__all__`:
 - `HarnessInterface`: Protocol describing platform capabilities required by StepRunner. Concrete Android, Web, iOS, and fake harnesses may satisfy the protocol structurally.
 - `StepRunner`: Executes one canonical `ExecutableStep` or capability invocation by looking up metadata in `CapabilityRegistry`, validating params with the declared model, applying evidence, post-action delay, and sensitivity policy, invoking the active `HarnessInterface`, normalizing backend/provider output, emitting structured safe events, and returning `RunnerStepResult`.
 - `StepSequenceRunner`: Executes ordered `ExecutableStep` records with `StepRunner`, records events and step results, stops normal execution on blocking failures, and always executes supplied teardown steps. It does not own configured sleep or pacing behavior; post-action stabilization is handled inside `StepRunner`.
-- `EvidenceRecorder`: Event/result sink that builds an `EvidenceBundle` and writes a JSON manifest for execution facts and artifact references.
+- `EvidenceRecorder`: Core Evidence-owned durable fact sink, atomic checkpoint writer, and read-only recovery boundary.
+- `EvidenceJournalSink`: Core Interfaces-owned synchronous durable acknowledgement protocol injected into runners and capture services.
 - `ArtifactStore`: Evidence artifact path policy and writer for run-local screenshots, UI trees, harness-call JSON, logs, and raw files.
 - `AIAssertionEvaluatorProtocol`: Structural protocol for provider-backed visual assertion evaluation. It accepts serializable `AIAssertionRequest` values and returns `AIAssertionResult` values without exposing provider runtime objects to `core`.
 - `DriverObservationInterface`: Structural protocol for platform drivers that can supply runner evidence. It requires screenshot bytes and a serializable normalized `ui_snapshot` payload. Android, Web, Windows, and macOS driver protocols extend this contract while exposing their platform-specific explicit observation capabilities and replay aliases.
@@ -50,8 +51,9 @@ Core root and subpackage public exports expose only interfaces/protocols, abstra
 
 Current subpackage exports:
 
-- `fsq_agent.core.registry`: `CapabilityRegistry`, registry validation, alias resolution, and registry snapshots.
-- `fsq_agent.core.runner`: `StepRunner`, executor binding protocols, and sequence runner orchestration.
+- `fsq_agent.core`: `CapabilityRegistry` with private `_capabilities.py` implementation, not a registry subpackage.
+- `fsq_agent.core.runner`: `StepRunner` and `StepSequenceRunner`.
+- `fsq_agent.core.interfaces`: public execution/evidence/observation/driver/harness protocols and stable factories with the named composition exception.
 - `fsq_agent.core.harness`: `HarnessInterface`, `AIAssertionEvaluatorProtocol`, `DriverFactory`, `HarnessFactory`, and Android/Web/Windows/macOS driver contracts. Concrete platform harnesses and concrete backend implementations are private implementation details.
 - `fsq_agent.core.evidence`: `EvidenceRecorder`, `ArtifactStore`, and evidence coordination logic.
 
@@ -59,7 +61,7 @@ Current subpackage exports:
 
 ```python
 runner = StepRunner(
-	registry=registry,
+	capability_registry=registry,
 	harness=harness,
 	runtime_secret_store=runtime_secret_store,
 	post_action_delay_seconds=settings.execution.post_action_delay_seconds,
@@ -186,7 +188,7 @@ Core must not define Pydantic models shared across modules. Shared models belong
 - Internal modules: all `_*.py` files and implementation subpackages remain private outside documented exports.
 - Domain boundaries: core owns execution orchestration and provider-neutral platform coordination. Provider construction, SDK tool creation, CLI parsing, FSQ parsing, and report generation live outside core.
 - Boundary models: all serializable contracts come from `models`; core protocols and concrete runners operate on those contracts.
-- Dependency direction: core imports `models` and `capabilities` only among project modules and must not import `application` or transport adapters. Application injects providers, artifact stores, runtime settings, and optional Harness bindings through public core contracts; default runtime construction goes through public core factories.
+- Dependency direction: capability/runner logic depends inward on Models, Capabilities, and Core protocols. Interfaces' named factory wrapper may select private Drivers/Harnesses implementations; `_default_capabilities` and compatibility `harness._driver_tools` use only the Drivers metadata exception without constructing/connecting backends. Core retains Environment compatibility exports and never imports Application or transports. Composition injects runtime/evidence collaborators through stable public contracts.
 - Rationale: execution routing coordinates multiple side-effecting components and evidence flow, so Level 3 is warranted; no persistence/domain complexity justifies Clean Architecture or DDD.
 
 ## Error Handling
@@ -197,7 +199,8 @@ Runner phases preserve failure boundaries:
 
 - prepare failures: registry lookup, context, setup, validation, or before-action observation failures
 - invoke failures: action, target, timeout, CommonTool, PlatformTool, provider-backed assertion, or backend failures
-- finalize failures: after-action observation, artifact capture, stabilization, cleanup, or event persistence failures
+- settle failures: interruption or timing failure in post-action delay
+- finalize failures: after-action observation, artifact capture, cleanup, or event persistence failures
 
 Harness action payload validation errors are configuration failures and must be returned as structured failed results before any backend side effect. Driver target misses, assertion failures, action errors, artifact errors, and backend exceptions become structured runner results. Strict mode rejects silent recovery; target misses remain failures.
 
@@ -231,3 +234,4 @@ Sensitive capabilities must return values in the standard normalized shape `outp
 - AI assertion is explicit assertion execution. It may call an injected evaluator only because the authored capability requested AI assertion; it must not be used for locator fallback, action repair, screenshot reinspection of unrelated steps, or testcase mutation.
 - Locator self-healing is not part of strict execution. Any deterministic fallback or AI-assisted repair must be represented as recovery execution so reports can compare strict truth with recovery outcome.
 - Evidence artifacts use run-relative paths. `ArtifactStore` owns directory layout and artifact writing; runners and harnesses do not construct artifact paths manually.
+- Durable journals, source/execution/capture identities, recovery, nullable measured timing, unexecuted leaves, and separate action/evidence failures follow Runner, Evidence, Interfaces, and Models contracts; Core introduces no alternate recorder or schema.

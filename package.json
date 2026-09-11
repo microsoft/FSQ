@@ -13,10 +13,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "lucide-react": "^1.29.0",
+    "lucide-react": "1.29.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "react-markdown": "^10.1.0",
+    "react-markdown": "10.1.0",
     "ts-ebml": "3.0.2"
   },
   "devDependencies": {
@@ -29,6 +29,6 @@
     "jsdom": "27.2.0",
     "typescript": "5.9.3",
     "vite": "8.1.5",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   }
 }

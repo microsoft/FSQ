@@ -69,7 +69,7 @@ function strictStepStatus(step: StrictCaseStep, stepEvents: TimelineEvent[], sna
   if (step.status) return step.status;
   if (!snapshot.terminal && snapshot.activeStep?.stepId === step.stepId) return 'running';
   if (!snapshot.terminal && stepEvents.length) return 'running';
-  return snapshot.terminal ? 'skipped' : 'pending';
+  return snapshot.terminal ? 'incomplete' : 'pending';
 }
 
 function payloadHasScreenshotArtifact(value: unknown, depth = 0): boolean {
@@ -77,7 +77,7 @@ function payloadHasScreenshotArtifact(value: unknown, depth = 0): boolean {
   if (Array.isArray(value)) return value.some((item) => payloadHasScreenshotArtifact(item, depth + 1));
   if (typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  if (record.kind === 'screenshot') return true;
+  if (record.kind === 'screenshot' || record.kind === 'ui_snapshot') return true;
   return Object.values(record).some((item) => payloadHasScreenshotArtifact(item, depth + 1));
 }
 
@@ -107,7 +107,7 @@ function StrictActionSummary({ snapshot, events, selectedStepId, onSelectStep }:
         const stepEvents = eventsByStep.get(step.stepId) ?? [];
         const status = strictStepStatus(step, stepEvents, snapshot);
         const durationMs = typeof step.durationMs === 'number' ? step.durationMs : null;
-        const message = step.message || null;
+        const message = step.message || step.skipReason || null;
         const hasScreenshotEvidence = screenshotStepIds.has(step.stepId);
         const selected = hasScreenshotEvidence && selectedStepId === step.stepId;
         const active = !snapshot.terminal && snapshot.activeStep?.stepId === step.stepId;
@@ -121,6 +121,9 @@ function StrictActionSummary({ snapshot, events, selectedStepId, onSelectStep }:
         return <li key={step.stepId} className={`strict-action-row timeline-row timeline-row--${status}${active ? ' timeline-row--active' : ''}${selectable ? ' timeline-row--selectable' : ''}${selected ? ' timeline-row--selected' : ''}`}>
           {selectable ? <button className="timeline-action-select" type="button" aria-label={`Select action ${step.authoredActionName}`} aria-pressed={selected} onClick={selectAction}>{summaryContent}</button> : summaryContent}
           {message && <span className="timeline-event-main"><ExpandableMessage message={message} messageId={`strict-action-message-${step.stepId}`} /></span>}
+          {(step.blockedByStep || step.attemptIndex || step.invocationPath?.length) && <small className="timeline-event-main">{step.blockedByStep && `Blocked by ${step.blockedByStep}. `}{step.attemptIndex && `Attempt ${step.attemptIndex}${step.maxAttempts ? ` / ${step.maxAttempts}` : ''}. `}{step.invocationPath?.join(' / ')}</small>}
+          {step.evidenceErrors && step.evidenceErrors.length > 0 && <details><summary>Evidence capture issues · aggregate {step.aggregateStatus ?? status}</summary><pre>{JSON.stringify(step.evidenceErrors, null, 2)}</pre></details>}
+          {step.attempts && step.attempts.length > 1 && <details><summary>Recorded attempts ({step.attempts.length})</summary>{step.attempts.map((attempt, index) => { const id = String(attempt.stepExecutionId ?? ''); const eligible = snapshot.terminal && screenshotStepIds.has(id); return <button className="button" key={index} disabled={!eligible} aria-pressed={eligible && selectedStepId === id} onClick={() => { if (eligible) onSelectStep(id); }}>Attempt {String(attempt.attemptIndex)} · {String(attempt.status)}</button>; })}</details>}
         </li>;
       })}
     </ol>

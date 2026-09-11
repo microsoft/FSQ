@@ -176,10 +176,29 @@ def test_non_core_package_code_does_not_import_core_private_modules() -> None:
     assert violations == []
 
 
+def test_runner_submodule_imports_only_public_core_interfaces():
+    violations = []
+    for path in Path("fsq_agent/core/runner").glob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            imports = [node.module or ""] if isinstance(node, ast.ImportFrom) else [alias.name for alias in node.names] if isinstance(node, ast.Import) else []
+            violations.extend(
+                f"{path}:{node.lineno}:{module}" for module in imports if module.startswith("fsq_agent.core") and not module.startswith(("fsq_agent.core.interfaces", "fsq_agent.core.runner"))
+            )
+    assert violations == []
+
+
 def test_fake_harness_satisfies_runtime_protocol() -> None:
+    from contextlib import nullcontext
+
     from fsq_agent.core.harness import HarnessInterface
 
     class FakeHarness:
+        def close(self) -> None:
+            return None
+
+        def capture_scope(self, callback):
+            return nullcontext()
+
         def get_context(self) -> HarnessContext:
             return HarnessContext(platform="android", session_id="session-1")
 
@@ -220,6 +239,9 @@ def test_fake_driver_satisfies_observation_protocol() -> None:
     from fsq_agent.core.harness import DriverObservationInterface
 
     class FakeDriver:
+        def close(self) -> None:
+            return None
+
         def screenshot(self, params: object | None = None) -> bytes:
             return b"png"
 

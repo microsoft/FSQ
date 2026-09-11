@@ -35,10 +35,9 @@ def test_run_queries_reject_escape_and_missing_runs(tmp_path: Path, run_id: str,
 
 
 def _mock_run_workspace(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
-    monkeypatch.setattr("fsq_agent.application.runs.require_initialized_workspace", lambda _request: type("Workspace", (), {"workspace": root})())
     monkeypatch.setattr("fsq_agent.application.runs.list_workspace_registry", lambda: [type("Entry", (), {"name": "test", "root_path": root})()])
     platform = type("Platform", (), {"platform": "web", "status": "available"})()
-    monkeypatch.setattr("fsq_agent.application.runs.inspect_registered_workspace", lambda _name: type("Status", (), {"platforms": [platform]})())
+    monkeypatch.setattr("fsq_agent.application.runs.inspect_registered_workspace", lambda _name, *args, **kwargs: type("Status", (), {"platforms": [platform]})())
 
 
 def test_configure_provider_uses_user_config_without_workspace(tmp_path: Path) -> None:

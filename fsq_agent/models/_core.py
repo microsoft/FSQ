@@ -8,8 +8,8 @@ from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
-StepPhase: TypeAlias = Literal["prepare", "invoke", "finalize"]
-RunnerStatus: TypeAlias = Literal["pending", "running", "passed", "failed", "skipped", "cancelled"]
+StepPhase: TypeAlias = Literal["prepare", "invoke", "settle", "finalize"]
+RunnerStatus: TypeAlias = Literal["pending", "running", "passed", "failed", "skipped", "cancelled", "incomplete"]
 TextSourceType: TypeAlias = Literal["literal", "runtimeSecret"]
 ExecutableStepKind: TypeAlias = Literal["action", "assertion", "observation", "diagnostic", "setup", "teardown"]
 FailureCategory: TypeAlias = Literal[
@@ -36,6 +36,8 @@ RunnerEventType: TypeAlias = Literal[
     "phase_finish",
     "step_error",
     "step_finish",
+    "action_result",
+    "artifact_failed",
 ]
 EvidenceArtifactKind: TypeAlias = Literal["screenshot", "ui_tree", "ui_snapshot", "tool_call", "log", "json", "text", "other"]
 HarnessPlatform: TypeAlias = Literal["android", "ios", "macos", "windows", "web"]
@@ -83,6 +85,10 @@ class ExecutableStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
+    source_step_id: str | None = None
+    step_execution_id: str | None = None
+    invocation_path: tuple[str, ...] = ()
+    attempt_index: int = Field(default=1, ge=1)
     source_ref: SourceRef | None = None
     kind: ExecutableStepKind
     action_name: str
@@ -99,14 +105,19 @@ class HarnessArtifactRef(BaseModel):
 
     artifact_id: str
     kind: EvidenceArtifactKind
-    path: Path
+    path: Path | None = None
     mime_type: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    sha256: str | None = None
+    availability: Literal["available", "missing", "failed", "unavailable", "omitted", "not_applicable", "truncated", "unknown"] = "available"
+    unavailable_reason: str | None = None
+    capture_occurrence: int | None = Field(default=None, ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_serializer("path", when_used="json")
-    def serialize_path(self, value: Path) -> str:
-        return value.as_posix()
+    def serialize_path(self, value: Path | None) -> str | None:
+        return value.as_posix() if value is not None else None
 
 
 class HarnessContext(BaseModel):
@@ -226,6 +237,9 @@ class AndroidTapAtParams(BaseModel):
     point: AndroidPoint = Field(description="Android screen point to tap.")
     reference_screen_size: AndroidScreenSize | None = Field(default=None, description="Original screen size for proportional replay of recorded coordinates.")
 
+    def replay_params(self, context: object) -> dict[str, object]:
+        return _android_coordinate_replay(self.model_dump(mode="json", exclude_none=True), context)
+
 
 class AndroidLongPressOnParams(_AndroidTargetParams):
     pass
@@ -258,6 +272,10 @@ class AndroidSwipeParams(BaseModel):
     reference_screen_size: AndroidScreenSize | None = Field(default=None, description="Original screen size for proportional replay of recorded swipe coordinates.")
     duration: int | None = Field(default=None, ge=1, description="Optional swipe duration in milliseconds.")
 
+    def replay_params(self, context: object) -> dict[str, object]:
+        params = self.model_dump(mode="json", exclude_none=True)
+        return _android_coordinate_replay(params, context) if self.start is not None and self.end is not None else params
+
     @model_validator(mode="after")
     def _require_direction_or_points(self) -> "AndroidSwipeParams":
         has_direction = self.direction is not None
@@ -265,6 +283,15 @@ class AndroidSwipeParams(BaseModel):
         if has_direction or has_points:
             return self
         raise ValueError("requires direction or both start and end points")
+
+
+def _android_coordinate_replay(params: dict[str, object], context: object) -> dict[str, object]:
+    screen_size = getattr(context, "screen_size", None)
+    if "reference_screen_size" not in params and isinstance(screen_size, tuple) and len(screen_size) == 2:
+        width, height = screen_size
+        if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
+            params["reference_screen_size"] = {"width": width, "height": height}
+    return params
 
 
 class AndroidUiTreeParams(BaseModel):
@@ -1065,16 +1092,22 @@ class EvidenceArtifactRef(BaseModel):
 
     artifact_id: str
     kind: EvidenceArtifactKind
-    path: Path
+    path: Path | None = None
     mime_type: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    sha256: str | None = None
+    availability: Literal["available", "missing", "failed", "unavailable", "omitted", "not_applicable", "truncated", "unknown"] = "available"
+    unavailable_reason: str | None = None
+    capture_occurrence: int | None = Field(default=None, ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     step_id: str | None = None
+    step_execution_id: str | None = None
     phase: StepPhase | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_serializer("path", when_used="json")
-    def serialize_path(self, value: Path) -> str:
-        return value.as_posix()
+    def serialize_path(self, value: Path | None) -> str | None:
+        return value.as_posix() if value is not None else None
 
 
 class StepPhaseReport(BaseModel):
@@ -1083,7 +1116,10 @@ class StepPhaseReport(BaseModel):
     step_id: str
     phase: StepPhase
     status: RunnerStatus
-    duration_ms: int = Field(default=0, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    unavailable_reason: str | None = "unmeasured"
     failure_category: FailureCategory | None = None
     error_message: str | None = None
     artifact_refs: list[EvidenceArtifactRef] = Field(default_factory=list)
@@ -1095,16 +1131,26 @@ class RunnerStepResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     step_id: str
+    source_step_id: str | None = None
+    step_execution_id: str | None = None
+    invocation_path: tuple[str, ...] = ()
     source_ref: SourceRef | None = None
     status: RunnerStatus
+    action_status: RunnerStatus | None = None
+    action_name: str | None = None
+    kind: ExecutableStepKind | None = None
     started_at: datetime | None = None
     ended_at: datetime | None = None
-    duration_ms: int = Field(default=0, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    unavailable_reason: str | None = "unmeasured"
     phase_reports: list[StepPhaseReport] = Field(default_factory=list)
     attempt_index: int = Field(default=1, ge=1)
     max_attempts: int = Field(default=1, ge=1)
     failure_category: FailureCategory | None = None
     error_message: str | None = None
+    evidence_errors: list[dict[str, Any]] = Field(default_factory=list)
+    skip_reason: str | None = None
+    blocked_by_step: str | None = None
     evidence_refs: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -1113,9 +1159,14 @@ class RunnerEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str | None = None
+    sequence: int | None = Field(default=None, ge=1)
     event_type: RunnerEventType
     run_id: str
     step_id: str | None = None
+    source_step_id: str | None = None
+    step_execution_id: str | None = None
+    invocation_path: tuple[str, ...] = ()
+    attempt_index: int = Field(default=1, ge=1)
     phase: StepPhase | None = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -1127,10 +1178,14 @@ class EvidenceBundle(BaseModel):
     bundle_id: str
     run_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    schema_version: str = "1.0"
+    schema_version: Literal["1.0", "fsq.evidence/v2"] = "fsq.evidence/v2"
+    checkpoint_sequence: int = Field(default=0, ge=0)
+    completeness: Literal["complete", "partial", "unavailable", "not_applicable"] = "partial"
+    warnings: list[str] = Field(default_factory=list)
     manifest_path: Path | None = None
     events: list[RunnerEvent] = Field(default_factory=list)
     steps: list[RunnerStepResult] = Field(default_factory=list)
+    planned_steps: list[ExecutableStep] = Field(default_factory=list)
     artifacts: list[EvidenceArtifactRef] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -1139,3 +1194,26 @@ class EvidenceManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bundle: EvidenceBundle
+
+
+class EvidenceJournalRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["fsq.evidence-event/v1"] = "fsq.evidence-event/v1"
+    sequence: int = Field(ge=1)
+    event_id: str
+    run_id: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    event: RunnerEvent | None = None
+    step_result: RunnerStepResult | None = None
+    planned_step: ExecutableStep | None = None
+
+    @model_validator(mode="after")
+    def validate_fact(self) -> "EvidenceJournalRecord":
+        if sum(item is not None for item in (self.event, self.step_result, self.planned_step)) != 1:
+            raise ValueError("Evidence journal record requires exactly one fact.")
+        if self.event is not None and self.event.run_id != self.run_id:
+            raise ValueError("Evidence journal Run identity mismatch.")
+        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() != UTC.utcoffset(self.timestamp):
+            raise ValueError("Evidence journal timestamps must be UTC.")
+        return self

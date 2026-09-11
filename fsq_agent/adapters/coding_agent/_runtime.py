@@ -6,10 +6,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
+import re
 import threading
 import time
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 
 from fsq_agent._capability_bootstrap import build_capability_registry
 from fsq_agent.adapters.coding_agent._harness_tools import HarnessToolAdapter
@@ -35,7 +38,7 @@ from fsq_agent.core import (
     HarnessInterface,
     RuntimeSecretStore,
 )
-from fsq_agent.models import AgentFinalOutput, GoalPrePlan, KnowledgeBundle, PlanningError, RunEvent, RunEventSink, SkillBundle, StepResult, Task
+from fsq_agent.models import AgentFinalOutput, ConfigurationError, GoalPrePlan, KnowledgeBundle, PlanningError, RunEvent, RunEventSink, SkillBundle, StepResult, Task
 from fsq_agent.providers import build_model_provider_session
 from fsq_agent.tools import AgentToolAdapter, ToolArtifactStore
 
@@ -186,10 +189,20 @@ class DefaultCodingAgentRuntime:
         skills: list[SkillBundle],
         run_id: str,
         event_sink: RunEventSink | None = None,
+        *,
+        context=None,
+        evidence_sink=None,
+        cancellation_check=None,
     ) -> list[StepResult]:
+        if evidence_sink is None or context is None or context.run_id != run_id:
+            raise ConfigurationError("Runtime execution requires an allocated context and evidence sink.")
+        if cancellation_check is not None:
+            cancellation_check()
         validate_runtime_settings(self.settings)
         started = time.perf_counter()
         provider_session = None
+        harness = None
+        primary_failure = False
         result = None
         usage_event_emitted = False
         try:
@@ -269,6 +282,8 @@ class DefaultCodingAgentRuntime:
                     post_action_delay_seconds=self.settings.execution.post_action_delay_seconds,
                     runtime_secret_store=self._runtime_secret_store(),
                     platform=self.settings.harness.platform,
+                    evidence_sink=evidence_sink,
+                    cancellation_check=cancellation_check,
                 )
                 self._harness_tool_names = harness_adapter.tool_names
                 self._harness_tool_schemas = harness_adapter.schemas_by_name
@@ -326,6 +341,7 @@ class DefaultCodingAgentRuntime:
                     await self._emit(event_sink, usage_event)
             # Engine and provider packages raise implementation-specific exceptions that become failed steps.
             except Exception as exc:  # noqa: BLE001
+                primary_failure = True
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 failure_metadata = _runtime_failure_metadata(exc)
                 error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
@@ -359,6 +375,7 @@ class DefaultCodingAgentRuntime:
                 ]
         # Runtime startup dependencies may fail with package-specific exceptions that become failed steps.
         except Exception as exc:  # noqa: BLE001
+            primary_failure = True
             duration_ms = int((time.perf_counter() - started) * 1000)
             failure_metadata = _runtime_failure_metadata(exc)
             error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
@@ -385,9 +402,19 @@ class DefaultCodingAgentRuntime:
                     tool_output=failure_metadata,
                 )
             ]
+        except BaseException:
+            primary_failure = True
+            if result is not None and not usage_event_emitted:
+                usage_event = self._dynamic_agent_token_usage_event(result, run_id, task.id)
+                if usage_event is not None:
+                    usage_event_emitted = True
+                    try:
+                        await self._emit(event_sink, usage_event)
+                    except BaseException as diagnostic_error:  # noqa: BLE001 - cancellation remains primary.
+                        logging.getLogger(__name__).warning("Cancellation diagnostics failed (%s)", type(diagnostic_error).__name__)
+            raise
         finally:
-            if provider_session is not None:
-                await self._close_provider_session(provider_session, failed=result is None)
+            await self._finish_cleanup(self._dispose_run(harness, provider_session), failed=primary_failure)
 
         duration_ms = int((time.perf_counter() - started) * 1000)
         if result is None:
@@ -423,38 +450,58 @@ class DefaultCodingAgentRuntime:
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[HarnessInterface] = loop.create_future()
+        lock = threading.Lock()
+        abandoned = False
+        unclaimed = None
 
         def set_result(harness: HarnessInterface) -> None:
             if not future.done():
                 future.set_result(harness)
 
-        def set_exception(exc: Exception) -> None:
+        def set_exception(exc: BaseException) -> None:
             if not future.done():
                 future.set_exception(exc)
 
         def build_harness() -> None:
+            nonlocal unclaimed
             try:
                 harness = self._build_harness(run_id)
-            # Backend construction failures must be forwarded from the worker thread to the event loop.
-            except Exception as exc:  # noqa: BLE001
+            except BaseException as exc:  # noqa: BLE001 - forward constructor failures from the worker.
                 try:
                     loop.call_soon_threadsafe(set_exception, exc)
                 except RuntimeError:
                     pass
             else:
+                with lock:
+                    if not abandoned:
+                        try:
+                            loop.call_soon_threadsafe(set_result, harness)
+                        except RuntimeError:
+                            pass
+                        else:
+                            unclaimed = harness
+                            return
                 try:
-                    loop.call_soon_threadsafe(set_result, harness)
-                except RuntimeError:
-                    pass
+                    harness.close()
+                except BaseException as cleanup_error:  # noqa: BLE001 - the caller has already timed out or cancelled.
+                    logging.getLogger(__name__).warning("Late Harness disposal failed (%s)", type(cleanup_error).__name__)
 
         threading.Thread(target=build_harness, name=f"fsq-harness-setup-{run_id}", daemon=True).start()
         try:
-            return await asyncio.wait_for(future, timeout=timeout_seconds)
-        except TimeoutError as exc:
-            if future.done() and not future.cancelled():
-                raise
-            future.cancel()
-            raise TimeoutError(f"Harness setup timed out after {timeout_seconds} seconds.") from exc
+            harness = await asyncio.wait_for(future, timeout=timeout_seconds)
+        except BaseException as exc:
+            with lock:
+                abandoned = True
+                harness, unclaimed = unclaimed, None
+            if harness is not None:
+                await self._finish_cleanup(asyncio.to_thread(harness.close), failed=True)
+            if isinstance(exc, TimeoutError) and future.cancelled():
+                raise TimeoutError(f"Harness setup timed out after {timeout_seconds} seconds.") from exc
+            raise
+        else:
+            with lock:
+                unclaimed = None
+            return harness
 
     def _harness_setup_payload(self, harness: HarnessInterface | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -753,11 +800,48 @@ class DefaultCodingAgentRuntime:
         ]
 
     async def _close_provider_session(self, session: ModelProviderSession, *, failed: bool) -> None:
-        try:
-            await session.close()
-        except BaseException:
-            if not failed:
-                raise
+        await self._finish_cleanup(session.close(), failed=failed)
+
+    async def _dispose_run(self, harness, session) -> None:
+        failure = None
+        if harness is not None:
+            try:
+                await asyncio.to_thread(harness.close)
+            except BaseException as exc:  # noqa: BLE001 - attempt Provider cleanup even after Harness failure.
+                failure = exc
+        if session is not None:
+            try:
+                await session.close()
+            except BaseException as exc:  # noqa: BLE001 - preserve the first disposal failure.
+                if failure is None:
+                    failure = exc
+                else:
+                    logging.getLogger(__name__).warning("Additional Provider disposal failed (%s)", type(exc).__name__)
+        if failure is not None:
+            raise failure
+
+    async def _finish_cleanup(self, operation, *, failed: bool) -> None:
+        async def capture_failure():
+            try:
+                await operation
+            except BaseException as exc:  # noqa: BLE001 - preserve exact exceptions across task shielding.
+                return exc
+            return None
+
+        cleanup = asyncio.create_task(capture_failure())
+        cancellation = None
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+        cleanup_error = cleanup.result()
+        if cleanup_error is not None:
+            if not failed and cancellation is None:
+                raise cleanup_error
+            logging.getLogger(__name__).warning("Runtime cleanup failed (%s)", type(cleanup_error).__name__)
+        if cancellation is not None and not failed:
+            raise cancellation
 
     async def _emit(self, event_sink: RunEventSink | None, event: RunEvent) -> None:
         if not event_sink:
@@ -841,7 +925,7 @@ class DefaultCodingAgentRuntime:
         return HarnessFactory().create_harness(
             platform=self.settings.harness.platform,
             harness_settings=self.settings.harness,
-            artifact_store=ArtifactStore(self.settings.output.runs_dir / run_id),
+            artifact_store=ArtifactStore(self.settings.output.runs_dir / run_id, secret_values=tuple(self.settings.runtime_secrets.private_values().values())),
             ai_assertion_evaluator=build_ai_assertion_evaluator(self.settings),
             runtime_secret_settings=self.settings.runtime_secrets,
             app_id=self.settings.harness.android.app_id,
@@ -985,14 +1069,47 @@ class DefaultCodingAgentRuntime:
         return value
 
     def _redact(self, value: Any) -> Any:
-        sensitive = ("token", "api_key", "apikey", "private_key", "privatekey", "secret", "password", "authorization", "cookie")
+        sensitive = {
+            "token",
+            "access_token",
+            "refresh_token",
+            "id_token",
+            "api_key",
+            "apikey",
+            "api-key",
+            "client_secret",
+            "secret",
+            "password",
+            "passwd",
+            "authorization",
+            "proxy_authorization",
+            "cookie",
+            "set_cookie",
+            "private_value",
+            "private_key",
+            "privatekey",
+        }
         secret_values = self._runtime_secret_values()
         if isinstance(value, dict):
-            return {key: "***" if any(part in str(key).lower() for part in sensitive) else self._redact(item) for key, item in value.items()}
+            return {
+                key: "***" if re.sub(r"([a-z0-9])([A-Z])", lambda match: match[1] + "_" + match[2], unquote(str(key))).casefold().replace("-", "_") in sensitive else self._redact(item)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
             return [self._redact(item) for item in value]
         if isinstance(value, str):
-            return self._replace_secret_values(value, secret_values)
+            if value.lstrip().startswith(("{", "[")):
+                try:
+                    parsed = json.loads(value)
+                except (ValueError, RecursionError):
+                    parsed = None
+                if isinstance(parsed, (dict, list)):
+                    return json.dumps(self._redact(parsed), ensure_ascii=False)
+            value = self._replace_secret_values(value, secret_values)
+            value = re.sub(r"(?im)\b(authorization|proxy[-_]authorization|cookie|set[-_]cookie)\s*[:=]\s*[^\r\n]*", r"\1=[REDACTED]", value)
+            value = re.sub(r"(?i)\b(?:Bearer|Basic)\s+[^\s,;]+", "[REDACTED_AUTH]", value)
+            value = re.sub(r"(?i)\b((?:access|refresh|id)[_-]?token|token|client[_-]?secret|password|passwd|pwd|api[_-]?key|authorization|cookie|secret)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", value)
+            return value
         return value
 
     def _offset_step_ids(self, steps: list[StepResult], offset: int) -> list[StepResult]:
@@ -1119,6 +1236,8 @@ class DefaultCodingAgentRuntime:
             "replay",
             "safe_replay_params",
             "runner_step_id",
+            "source_step_id",
+            "step_execution_id",
         }
         for key in safe_keys:
             if key in parsed:
