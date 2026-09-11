@@ -95,7 +95,7 @@ class ArtifactStore:
         ref = self._write(kind=kind, step_id=step_id, phase=phase, name=name, extension="json", data=json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8"), structured=True)
         ref.metadata["redacted"] = ref.metadata.get("redacted", False) or payload != original
         if kind in {"ui_snapshot", "ui_tree"}:
-            known = {key: payload[key] for key in ("coverage", "truncated", "compaction", "clipped", "snapshot") if isinstance(payload, dict) and key in payload}
+            known = {key: payload[key] for key in ("coverage", "truncated", "compaction", "clipped") if isinstance(payload, dict) and key in payload}
             ref.metadata.update(known or {"coverage": None, "coverage_reason": "driver_did_not_report_coverage"})
         if kind == "json" and isinstance(payload, dict) and payload.get("status") == "unavailable" and payload.get("requested_artifact_kind"):
             ref = ref.model_copy(update={"availability": "not_applicable", "unavailable_reason": str(payload.get("reason") or "session_not_started")})

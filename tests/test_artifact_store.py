@@ -29,6 +29,32 @@ def test_artifact_store_writes_json_artifact_with_relative_ref(tmp_path: Path) -
     assert ref.phase == "finalize"
 
 
+def test_ui_snapshot_body_is_not_duplicated_in_artifact_metadata(tmp_path: Path) -> None:
+    store = ArtifactStore(run_dir=tmp_path)
+    payload = {
+        "snapshot": '- document\n  - button "Add to Cart"',
+        "coverage": {"status": "complete"},
+        "truncated": False,
+        "compaction": {"version": "v1"},
+        "clipped": False,
+    }
+
+    ref = store.write_json(
+        kind="ui_snapshot",
+        step_id="step-1",
+        phase="prepare",
+        name="UI Snapshot",
+        payload=payload,
+    )
+
+    assert json.loads((tmp_path / ref.path).read_text(encoding="utf-8")) == payload
+    assert "snapshot" not in ref.metadata
+    assert ref.metadata["coverage"] == payload["coverage"]
+    assert ref.metadata["truncated"] is False
+    assert ref.metadata["compaction"] == payload["compaction"]
+    assert ref.metadata["clipped"] is False
+
+
 def test_artifact_store_writes_text_log_artifact(tmp_path: Path) -> None:
     store = ArtifactStore(run_dir=tmp_path)
 
