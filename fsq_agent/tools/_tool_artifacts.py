@@ -23,20 +23,26 @@ class ToolArtifactStore:
     def write(self, tool_name: str, content: str, metadata: dict[str, Any] | None = None) -> Path | None:
         if not self.settings.artifact_enabled or not self.settings.always_write_artifact:
             return None
-        self.call_index += 1
         self.root.mkdir(parents=True, exist_ok=True)
         safe_tool_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", tool_name).strip("-._") or "tool"
-        path = self.root / f"{self.call_index:06d}-{safe_tool_name}.json"
-        payload = {
-            "tool_name": tool_name,
-            "run_id": self.run_id,
-            "call_index": self.call_index,
-            "content_chars": len(content),
-            "metadata": metadata or {},
-            "content": content,
-        }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
+        while True:
+            self.call_index += 1
+            path = self.root / f"{self.call_index:06d}-{safe_tool_name}.json"
+            payload = {
+                "tool_name": tool_name,
+                "run_id": self.run_id,
+                "call_index": self.call_index,
+                "content_chars": len(content),
+                "metadata": metadata or {},
+                "content": content,
+            }
+            encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+            try:
+                with path.open("x", encoding="utf-8") as artifact:
+                    artifact.write(encoded)
+            except FileExistsError:
+                continue
+            return path
 
     def read_text(self, artifact_path: str) -> str:
         path = self._resolve(artifact_path)

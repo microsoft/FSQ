@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import asyncio
+import logging
 import re
 import time
 import uuid
@@ -12,8 +13,6 @@ from datetime import UTC, datetime
 
 from pydantic import ValidationError
 
-from fsq_agent.core._capabilities import CapabilityRegistry
-from fsq_agent.core._runtime_secrets import RuntimeSecretStore
 from fsq_agent.core.interfaces import CapabilityRegistryInterface, EvidenceJournalSink, HarnessInterface, RuntimeSecretResolver
 from fsq_agent.models import (
     CapabilityDefinition,
@@ -46,6 +45,7 @@ class _StepExecutionState:
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     evidence_errors: list[dict[str, object]] = field(default_factory=list)
     action_status: RunnerStatus | None = None
+    interruption: BaseException | None = None
 
 
 class StepRunner:
@@ -59,13 +59,14 @@ class StepRunner:
         evidence_sink: EvidenceJournalSink | None = None,
     ) -> None:
         self.harness = harness
-        self.capability_registry = capability_registry or CapabilityRegistry()
+        self.capability_registry = capability_registry
         self.post_action_delay_seconds = post_action_delay_seconds or PostActionDelaySettings(platform=0.0, common=0.0)
-        self.runtime_secret_store = runtime_secret_store or RuntimeSecretStore.empty()
+        self.runtime_secret_store = runtime_secret_store
         self.evidence_sink = evidence_sink
         self._identities: set[str] = set()
         self._source_occurrences: dict[str, int] = {}
-        self._secret_values: set[str] = set(runtime_secret_store.redaction_values()) if isinstance(runtime_secret_store, RuntimeSecretStore) else set()
+        redaction_values = getattr(runtime_secret_store, "redaction_values", None)
+        self._secret_values: set[str] = set(redaction_values()) if callable(redaction_values) else set()
         self._persistence_failed = False
         self._state: _StepExecutionState | None = None
         self.last_step_result: RunnerStepResult | None = None
@@ -96,18 +97,24 @@ class StepRunner:
         try:
             return self._run_harness_step(run_id, step, capability, state)
         except BaseException as exc:
+            if state.interruption is not None and exc is not state.interruption:
+                logging.getLogger(__name__).warning("Interrupted phase persistence failed (%s)", type(exc).__name__)
+                raise state.interruption from None
             if self._persistence_failed:
                 raise
             cancelled = self._is_cancelled(exc, step, "invoke")
             step = step.model_copy(update={"metadata": {**step.metadata, "interruption": {"status": "cancelled" if cancelled else "incomplete", "reason": type(exc).__name__}}})
-            self._finish_step(
-                run_id,
-                step,
-                state,
-                status="cancelled" if cancelled else "incomplete",
-                failure_category=state.failure_category or ("cancelled" if cancelled else None),
-                error_message=state.error_message or ("Execution cancelled." if cancelled else "Execution interrupted."),
-            )
+            try:
+                self._finish_step(
+                    run_id,
+                    step,
+                    state,
+                    status="cancelled" if cancelled else "incomplete",
+                    failure_category=state.failure_category or ("cancelled" if cancelled else None),
+                    error_message=state.error_message or ("Execution cancelled." if cancelled else "Execution interrupted."),
+                )
+            except BaseException as persistence_error:  # noqa: BLE001 - preserve the original interruption.
+                logging.getLogger(__name__).warning("Interrupted step checkpoint failed (%s)", type(persistence_error).__name__)
             raise
         finally:
             self._state = None
@@ -127,7 +134,7 @@ class StepRunner:
         return step.model_copy(update={"source_step_id": source, "step_execution_id": identity, "step_id": identity, "invocation_path": step.invocation_path or (source, str(occurrence))})
 
     def _resolve_capability_step(self, step: ExecutableStep) -> tuple[CapabilityDefinition | None, ExecutableStep]:
-        capability = self.capability_registry.resolve(step.action_name)
+        capability = self._resolve_capability(step.action_name)
         if capability is not None and capability.name != step.action_name:
             return capability, step.model_copy(update={"action_name": capability.name})
         return capability, step
@@ -180,10 +187,10 @@ class StepRunner:
                 "evidence_policy": step.evidence_policy.model_dump(mode="json"),
                 "proposal": {
                     "params": None
-                    if self.capability_registry.resolve(step.action_name) and self.capability_registry.resolve(step.action_name).sensitivity and step.params.get("textType") != "runtimeSecret"
+                    if self._resolve_capability(step.action_name) and self._resolve_capability(step.action_name).sensitivity and step.params.get("textType") != "runtimeSecret"
                     else self._safe_value(step.params),
                     "authored_action_name": step.metadata.get("authored_action_name"),
-                    "capability": self._capability_metadata(self.capability_registry.resolve(step.action_name), step, None),
+                    "capability": self._capability_metadata(self._resolve_capability(step.action_name), step, None),
                 },
             },
         )
@@ -238,6 +245,8 @@ class StepRunner:
                 if phase == "finalize" and len(state.evidence_errors) > errors_before:
                     category = "artifact_error"
                 message = self._safe_text(_safe_exception_message(exc))
+            if interrupted is not None:
+                state.interruption = interrupted
             if phase == "invoke":
                 state.action_status = status
                 self._emit(run_id=run_id, event_type="action_result", step=step, phase=phase, payload={"status": status, "failure_category": category, "error_message": message})
@@ -282,7 +291,7 @@ class StepRunner:
             phase=phase,
             payload={
                 "status": status,
-                "post_action_delay_seconds": self._effective_post_action_delay_seconds(self.capability_registry.resolve(step.action_name)),
+                "post_action_delay_seconds": self._effective_post_action_delay_seconds(self._resolve_capability(step.action_name)),
                 "phase_report": report.model_dump(mode="json"),
             },
         )
@@ -432,6 +441,9 @@ class StepRunner:
         except TypeError:
             return error.errors()
 
+    def _resolve_capability(self, name: str) -> CapabilityDefinition | None:
+        return self.capability_registry.resolve(name) if self.capability_registry is not None else None
+
     def _resolve_runtime_secret_text_step(self, step: ExecutableStep, capability: CapabilityDefinition | None) -> ExecutableStep:
         if capability is None:
             return step
@@ -444,6 +456,10 @@ class StepRunner:
                 "Runtime secret text input requires a string text value.",
                 context={"step_id": step.step_id, "action_name": step.action_name},
             )
+        if self.runtime_secret_store is None:
+            if not text.strip():
+                raise ConfigurationError("Runtime secret name is empty.", context={"name": text})
+            raise ConfigurationError("Runtime secret name is not allowed.", context={"name": text.strip(), "allowed": []})
         params["text"] = self.runtime_secret_store.resolve(text)
         if params["text"]:
             self._secret_values.add(params["text"])

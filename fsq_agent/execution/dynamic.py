@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from fsq_agent.config import list_workspace_registry
 from fsq_agent.core.evidence import EvidenceRecorder
 from fsq_agent.models import ConfigurationError, DynamicAgentOutcome, EvidenceBundle, ReportArtifact, RunExecutionContext, RunnerEvent, RunRuntime, RunSource, TaskResult, ToolExecutionError
 from fsq_agent.report import ReportGenerator
@@ -62,17 +64,19 @@ class DynamicExecutionService:
         settings = request.settings
         started = time.perf_counter()
         lifecycle = RunLifecycleService()
-        secret_values = tuple(settings.runtime_secrets.private_values().values())
-        safe_task = request.task.model_copy(update={key: lifecycle.safe_text(value, secret_values) for key, value in request.task.model_dump().items() if isinstance(value, str)})
+        secret_values = tuple(sorted(set(settings.runtime_secrets.private_values().values()), key=len, reverse=True))
         root = Path(settings.workspace.root_dir or Path(settings.output.runs_dir).parent.parent.parent)
-        from fsq_agent.config import list_workspace_registry
-
-        workspace_name = next((item.name for item in list_workspace_registry() if item.root_path.resolve() == root.resolve()), root.name)  # noqa: ASYNC240 - bounded local identity resolution before execution.
+        safe_task = request.task.model_copy(update={key: _redact_metadata_text(value, secret_values, root) for key, value in request.task.model_dump().items() if isinstance(value, str)})
+        safe_source_id = safe_task.id
+        for value in secret_values:
+            slug_value = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+            if slug_value:
+                safe_source_id = re.sub(re.escape(slug_value), "***", safe_source_id, flags=re.IGNORECASE)
         metadata = allocate_run(
             workspace=root,
-            workspace_name=workspace_name,
+            workspace_name=_workspace_name(root, settings.agent_runtime.user_config_root),
             platform=settings.harness.platform,
-            source_id=safe_task.id,
+            source_id=safe_source_id,
             mode="explore",
             source=RunSource(kind="goal", goal_summary=safe_task.name[:500]),
             platform_runs_dir=Path(settings.output.runs_dir),
@@ -80,8 +84,18 @@ class DynamicExecutionService:
         run_dir = Path(settings.output.runs_dir) / metadata.run_id
         processing = {}
         active_processing = None
+        checking_cancellation = False
+
+        def check_cancellation():
+            nonlocal checking_cancellation
+            if request.cancellation_check is not None:
+                checking_cancellation = True
+                request.cancellation_check()
+                checking_cancellation = False
+
         recording = None
         heartbeat = None
+        primary_failure = False
         try:
             metadata = lifecycle.snapshot_sources(
                 run_dir, metadata, sources={"goal": request.task.planning_reference_text or request.task.description}, secret_values=secret_values, configuration=lifecycle.safe_configuration(settings)
@@ -90,9 +104,9 @@ class DynamicExecutionService:
             lifecycle.heartbeat(run_dir)
             heartbeat = asyncio.create_task(self._heartbeat(run_dir))
             recorder = EvidenceRecorder(run_id=metadata.run_id, output_dir=run_dir, secret_values=secret_values)
-            outcome = await self._agent.run_in_context(safe_task, lifecycle.context(run_dir, metadata), request.event_sink, evidence_sink=recorder, cancellation_check=request.cancellation_check)
-            if request.cancellation_check is not None:
-                request.cancellation_check()
+            outcome = await self._agent.run_in_context(safe_task, lifecycle.context(run_dir, metadata), request.event_sink, evidence_sink=recorder, cancellation_check=check_cancellation)
+            _validate_outcome_identity(outcome, safe_task)
+            check_cancellation()
             try:
                 bundle = lifecycle.read_evidence(run_dir)
             except FileNotFoundError:
@@ -105,8 +119,8 @@ class DynamicExecutionService:
                 run_dir,
                 metadata,
                 bundle=bundle,
-                verification=outcome.verification,
-                summary=outcome.verification.summary,
+                verification=outcome.verification.model_copy(update={"summary": _redact_metadata_text(outcome.verification.summary, secret_values, root)}),
+                summary=_redact_metadata_text(outcome.verification.summary, secret_values, root),
                 fatal_errors=outcome.errors,
                 secret_values=secret_values,
                 duration_ms=int((time.perf_counter() - started) * 1000),
@@ -131,7 +145,7 @@ class DynamicExecutionService:
             if request.report_coordinator is not None:
                 active_processing = "report"
                 try:
-                    request.report_coordinator(result)
+                    request.report_coordinator(result.model_copy(deep=True))
                 except Exception as exc:  # noqa: BLE001 - isolate derived processing failures from frozen execution.
                     processing["report"] = {"status": "failed", "error_type": type(exc).__name__}
             active_processing = None
@@ -157,9 +171,10 @@ class DynamicExecutionService:
                     if request.recording_error_sink is not None:
                         request.recording_error_sink(exc)
             active_processing = None
-            lifecycle.finalize(run_dir, metadata, execution_result=frozen, processing=processing, runtime=RunRuntime(provider=settings.openai_agents.provider, model=settings.openai_agents.model))
+            lifecycle.finalize(run_dir, metadata, execution_result=frozen, processing=processing, runtime=RunRuntime(provider=settings.agent_runtime.provider, model=settings.agent_runtime.model))
             return DynamicExecutionResult(task_result=result, recording=recording)
         except BaseException as exc:
+            primary_failure = True
             if active_processing is not None:
                 processing[active_processing] = {"status": "cancelled" if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) else "failed", "error_type": type(exc).__name__}
             try:
@@ -172,14 +187,16 @@ class DynamicExecutionService:
 
                     frozen = RunExecutionResult.model_validate_json((run_dir / "execution-result.json").read_text())
                 else:
-                    cancelled = isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) or type(exc).__name__ in {"ExecutionCancelled", "RunCancelled", "TaskCancelledError"}
+                    cancelled = (
+                        checking_cancellation or isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) or type(exc).__name__ in {"ExecutionCancelled", "RunCancelled", "TaskCancelledError"}
+                    )
                     frozen = lifecycle.freeze(
                         run_dir, metadata, bundle=bundle, status="cancelled" if cancelled else "error", summary="Execution cancelled." if cancelled else f"Execution stopped ({type(exc).__name__})."
                     )
                 lifecycle.finalize(run_dir, metadata, execution_result=frozen, processing=processing)
-            except Exception as persistence_error:  # noqa: BLE001 - preserve the original failure.
+            except BaseException as persistence_error:  # noqa: BLE001 - preserve the original execution failure.
                 logging.getLogger(__name__).warning("Run finalization failed (%s)", type(persistence_error).__name__)
-            cancelled = isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) or type(exc).__name__ in {"ExecutionCancelled", "RunCancelled", "TaskCancelledError"}
+            cancelled = checking_cancellation or isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt)) or type(exc).__name__ in {"ExecutionCancelled", "RunCancelled", "TaskCancelledError"}
             if cancelled:
                 exc.run_id = metadata.run_id
                 exc.platform = metadata.platform
@@ -188,11 +205,42 @@ class DynamicExecutionService:
         finally:
             if heartbeat is not None:
                 heartbeat.cancel()
-                with suppress(asyncio.CancelledError):
-                    await heartbeat
+                try:
+                    with suppress(asyncio.CancelledError):
+                        await heartbeat
+                except BaseException as cleanup_error:
+                    if not primary_failure:
+                        raise ToolExecutionError(
+                            "Run heartbeat failed.", context={"run_id": metadata.run_id, "platform": metadata.platform, "exception_type": type(cleanup_error).__name__}
+                        ) from cleanup_error
+                    logging.getLogger(__name__).warning("Run heartbeat cleanup failed (%s)", type(cleanup_error).__name__)
 
     @staticmethod
     async def _heartbeat(run_dir: Path) -> None:
         while True:
             await asyncio.sleep(5)
             RunLifecycleService.heartbeat(run_dir)
+
+
+def _validate_outcome_identity(outcome: DynamicAgentOutcome, task: Task) -> None:
+    if outcome.task.id != task.id:
+        raise ValueError("Agent task identity does not match the allocated Run task.")
+
+
+def _redact_metadata_text(text: str, private_values: tuple[str, ...], workspace: Path) -> str:
+    roots = {str(workspace.resolve()), workspace.resolve().as_posix()}
+    if workspace.is_absolute():
+        roots.update((str(workspace), workspace.as_posix()))
+    roots.update(root.replace("\\", "\\\\") for root in tuple(roots))
+    for root in sorted(roots, key=len, reverse=True):
+        text = re.sub(re.escape(root), "<workspace>", text, flags=re.IGNORECASE if workspace.drive else 0)
+    for value in private_values:
+        if value:
+            text = text.replace(value, "***")
+    return text
+
+
+def _workspace_name(workspace_root: Path, user_config_root: Path | None) -> str:
+    resolved = workspace_root.resolve()
+    entry = next((item for item in list_workspace_registry(user_config_root=user_config_root) if item.root_path.resolve() == resolved), None)
+    return entry.name if entry is not None else workspace_root.name

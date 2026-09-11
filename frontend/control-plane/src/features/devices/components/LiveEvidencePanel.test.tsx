@@ -156,15 +156,15 @@ it('keeps selected Action screenshots visible while the next Action evidence loa
   await waitFor(() => expect(screen.getByRole('img', { name: 'web before screenshot for Chrome, selected Action step-2' })).toHaveAttribute('src', 'data:image/png;base64,c3RlcC0y'));
 });
 
-it('diffs selected XML UI Tree evidence after structured formatting', async () => {
+it('uses backend-formatted XML UI Tree evidence and comparison rows', async () => {
   const terminal = { ...snapshot, terminal: true, status: 'success' as const, completedAt: '2026-08-11T12:00:10Z' };
   vi.spyOn(controlPlaneClient, 'stepArtifacts').mockResolvedValue({
     available: true,
     stepId: 'step-1',
     message: null,
     artifacts: [
-      { kind: 'ui_snapshot', phase: 'before', timestamp: null, mimeType: 'application/xml', content: '<hierarchy><node text="Before" class="Text" /></hierarchy>' },
-      { kind: 'ui_snapshot', phase: 'after', timestamp: null, mimeType: 'application/xml', content: '<hierarchy><node text="After" class="Text" /></hierarchy>' },
+      { kind: 'ui_snapshot', phase: 'before', timestamp: null, mimeType: 'application/xml', content: '<hierarchy><node text="Before" class="Text" /></hierarchy>', normalizedContent: 'node text="Before" class="Text"' },
+      { kind: 'ui_snapshot', phase: 'after', timestamp: null, mimeType: 'application/xml', content: '<hierarchy><node text="After" class="Text" /></hierarchy>', normalizedContent: 'node text="After" class="Text"' },
     ],
     comparison: { status: 'changed', rows: [{ kind: 'changed', before: 'node text="Before" class="Text"', after: 'node text="After" class="Text"', before_number: 1, after_number: 1 }] },
   });
@@ -173,6 +173,33 @@ it('diffs selected XML UI Tree evidence after structured formatting', async () =
   expect(await screen.findByLabelText('Before and After UI Tree diff')).toHaveTextContent('node text="Before" class="Text"');
   expect(screen.getByLabelText('Before and After UI Tree diff')).toHaveTextContent('node text="After" class="Text"');
   expect(screen.queryByText(/<hierarchy>/)).not.toBeInTheDocument();
+});
+
+it.each([
+  '<label role="status">Purchase failed</label>',
+  '<label xml:space="preserve">  Purchase\n  failed  </label>',
+  '{"xml":"<label>Purchase failed</label>","metadata":{"source":"server"}}',
+  '<malformed>Purchase failed',
+])('retains one-sided backend snapshot text verbatim: %s', async content => {
+  vi.spyOn(controlPlaneClient, 'stepArtifacts').mockResolvedValue({ available: true, stepId: 'step-1', message: null, artifacts: [
+    {kind: 'ui_snapshot', phase: 'before', timestamp: null, mimeType: 'application/xml', content: 'raw input', normalizedContent: content},
+  ]});
+  const {container} = render(<LiveEvidencePanel tab="ui-tree" snapshot={{...snapshot, terminal:true}} selectedStepId="step-1" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} />);
+  await waitFor(() => expect(container.querySelector('pre')?.textContent).toBe(content));
+});
+
+it.each([true, false])('retains failed and repeated screenshot identities with readable capture %s', async readable => {
+  vi.spyOn(controlPlaneClient, 'stepArtifacts').mockResolvedValue({ available: true, stepId: 'step-1', message: null, artifacts: [
+    ...(readable ? [{kind: 'screenshot' as const, phase: 'before' as const, timestamp:null, mimeType:'image/png', artifactId:'before-capture', contentBase64:'cG5n'}] : []),
+    {kind:'screenshot',phase:'after',timestamp:null,mimeType:'image/png',artifactId:'after-failed',unavailableReason:'capture_timeout'},
+    {kind:'screenshot',phase:'after',timestamp:null,mimeType:'image/png',artifactId:'retry-failed',unavailableReason:'session_unavailable',captureOccurrence:2},
+  ]});
+  render(<LiveEvidencePanel tab="screen" snapshot={{...snapshot,terminal:true}} selectedStepId="step-1" platform="web" targetLabel="Chrome" onTabChange={vi.fn()} />);
+  expect(await screen.findByText('capture_timeout')).toBeVisible();
+  expect(screen.getByText('session_unavailable')).toBeVisible();
+  expect(screen.getByText(/after-failed/)).toBeVisible();
+  expect(screen.getByText(/retry-failed/)).toBeVisible();
+  expect(screen.queryAllByRole('img')).toHaveLength(readable ? 1 : 0);
 });
 
 it('uses the persisted replay video for a terminal run without Action selection', async () => {

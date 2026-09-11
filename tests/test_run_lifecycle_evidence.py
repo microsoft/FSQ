@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from fsq_agent.config import Settings
 from fsq_agent.execution import RunLifecycleService, RunSource, allocate_run, load_run_metadata
 from fsq_agent.models import EvidenceBundle, RunnerStepResult
 
@@ -65,3 +66,17 @@ def test_provenance_never_persists_or_hashes_secret_value(tmp_path: Path) -> Non
     assert "hidden-test-value" not in json.dumps(persisted.model_dump(mode="json"))
     snapshot = run_dir / persisted.provenance["sources"][0]["path"]
     assert "hidden-test-value" not in snapshot.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("effort", ["low", "high"])
+def test_provenance_captures_neutral_runtime_policy_without_credentials(tmp_path, effort):
+    run_dir, metadata = _run(tmp_path)
+    settings = Settings()
+    settings.harness.platform = "web"
+    settings.agent_runtime.reasoning_effort = effort
+    settings.agent_runtime.api_key = "not-for-provenance"
+    configuration = RunLifecycleService.safe_configuration(settings)
+    updated = RunLifecycleService.snapshot_sources(run_dir, metadata, sources={"goal": "Inspect"}, configuration=configuration)
+    policy = updated.provenance["configuration"]["agent_runtime"]
+    assert policy == {"reasoning_effort": effort, "max_turns": settings.agent_runtime.max_turns}
+    assert "not-for-provenance" not in updated.model_dump_json()

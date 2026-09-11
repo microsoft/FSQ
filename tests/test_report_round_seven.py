@@ -49,6 +49,47 @@ def _mapped_reports(tmp_path):
     return service, report, baseline
 
 
+def test_renamed_public_save_supports_strict_baseline_related_and_export(tmp_path):
+    from fsq_agent._capability_bootstrap import build_capability_registry
+    from fsq_agent.application import CaseSaveRequest, save_recorded_case
+    from fsq_agent.case_dsl import FsqCaseLoader, FsqCaseSerializer
+
+    service, current, origin = _mapped_reports(tmp_path)
+    origin_dir = origin._run_dirs["origin"]
+    candidate = origin_dir / "recorded.fsq.yaml"
+    origin_metadata = json.loads((origin_dir / "run.json").read_text())
+    origin_metadata["artifacts"]["candidate_case"] = candidate.name
+    (origin_dir / "run.json").write_text(json.dumps(origin_metadata))
+    candidate.write_text("schemaVersion: fsq.ai-test/v1\nname: original\nplatform: web\n---\n- clickOn:\n    target: Save\n")
+    candidate.write_bytes(FsqCaseSerializer(build_capability_registry(platform="web").snapshot()).serialize(FsqCaseLoader().load_text(candidate.read_text(), candidate)))
+    recording_path = origin_dir / "recording.json"
+    recording = json.loads(recording_path.read_text())
+    recording["draft"] = False
+    recording_path.write_text(json.dumps(recording))
+    before = candidate.read_bytes(), recording_path.read_bytes()
+    saved = save_recorded_case(CaseSaveRequest(candidate_path=candidate, destination_directory=tmp_path / "cases", platform="web", case_name="renamed"))
+    assert saved.outcome == "created"
+    current_dir = current._run_dirs["current"]
+    (current_dir / "case.yaml").write_bytes(saved.path.read_bytes())
+    metadata = json.loads((current_dir / "run.json").read_text())
+    metadata["source"]["digest"] = hashlib.sha256(saved.path.read_bytes()).hexdigest()
+    (current_dir / "run.json").write_text(json.dumps(metadata))
+    origin = service.project(origin_dir)
+    combined = service.project(current_dir, baseline=origin, related_runs=[origin])
+    assert combined.comparison["baseline_current"]["steps"][0]["status"] == "matched"
+    assert combined.lineage["related_runs"][0]["run"]["run_id"] == "origin"
+    exported = service.export(combined, RunReportExportOptions(format="bundle", destination=tmp_path / "renamed.zip"))
+    assert exported.path.is_file()
+    assert (candidate.read_bytes(), recording_path.read_bytes()) == before
+    relation_path = origin_dir / "lineage.jsonl"
+    relation = json.loads(relation_path.read_text().splitlines()[-1])
+    relation["command_mapping"][0]["step_execution_id"] = "other"
+    relation_path.write_text(json.dumps(relation) + "\n")
+    tampered = service.project(origin_dir)
+    with pytest.raises(ReportGenerationError):
+        service.project(current_dir, baseline=tampered)
+
+
 @pytest.mark.parametrize("tamper", [{"step_execution_id": "other"}, {"source_step_id": "origin:1"}, {"invocation_path": ["agent", "2"]}])
 def test_mapping_origin_fields_must_match_retained_case_and_execution(tmp_path, tamper):
     service, report, baseline = _mapped_reports(tmp_path)

@@ -108,9 +108,9 @@ def _event_phase(event: RunEvent) -> str:
         return "PRE-PLAN"
     if event.payload.get("report_path") or "report" in text:
         return "REPORT"
-    if "verification" in text or event.payload.get("tool_name") == "openai_agents.verifier":
+    if "verification" in text or event.payload.get("tool_name") == "agent_runtime.verifier":
         return "VERIFICATION"
-    if any(marker in text for marker in ("runtime startup", "provider setup", "harness setup", "tool setup", "sdk agent ready")):
+    if any(marker in text for marker in ("runtime startup", "provider setup", "harness setup", "tool setup", "agent runtime ready")):
         return "STARTUP"
     if event.type in {"run_started", "run_completed", "run_failed"}:
         return "RUN"

@@ -15,7 +15,7 @@ from fsq_agent.agent._pre_plan import (
 from fsq_agent.agent._prompt import PromptModelBuilder, PromptRenderer
 from fsq_agent.agent._structured_output import coerce_agent_final_output, coerce_string_list, serialize_agent_final_output
 from fsq_agent.agent._verification_task import VERIFICATION_AGENT_INSTRUCTIONS, VerificationEvidenceBuilder
-from fsq_agent.models import AgentFinalOutput, KnowledgeBundle, OpenAIAgentPromptConfig, SkillBundle, StepResult, Task
+from fsq_agent.models import AgentFinalOutput, AgentPromptConfig, KnowledgeBundle, SkillBundle, StepResult, Task
 
 
 class CodingAgentPolicy:
@@ -42,12 +42,12 @@ class CodingAgentPolicy:
     def coerce_string_list(self, value: Any) -> list[str]:
         return coerce_string_list(value)
 
-    def build_agent_prompt(self, settings: OpenAIAgentPromptConfig, knowledge: KnowledgeBundle, skills: list[SkillBundle]) -> str:
+    def build_agent_prompt(self, settings: AgentPromptConfig, knowledge: KnowledgeBundle, skills: list[SkillBundle]) -> str:
         return PromptRenderer(settings).render_agent_prompt(PromptModelBuilder(settings).build_agent_prompt(knowledge, skills))
 
     def build_task_prompt(
         self,
-        settings: OpenAIAgentPromptConfig,
+        settings: AgentPromptConfig,
         task: Task,
         runtime_policy: list[str] | None = None,
         runtime_secret_names: list[str] | None = None,

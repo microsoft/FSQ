@@ -14,6 +14,7 @@ from fsq_agent.drivers._capabilities import (
     _schema_from_capability_definition,
 )
 from fsq_agent.harnesses._common_tools import CommonPlatformTools
+from fsq_agent.harnesses._resources import OwnedResources
 from fsq_agent.models import (
     AndroidUiTreeParams,
     CapabilityDefinition,
@@ -54,6 +55,7 @@ class AndroidHarness:
         self.driver = driver
         self.artifact_store = artifact_store
         self.ai_assertion_evaluator = ai_assertion_evaluator
+        self._owned_resources = OwnedResources(driver, ai_assertion_evaluator)
         self.common_tools = CommonPlatformTools(
             platform="android",
         )
@@ -61,6 +63,9 @@ class AndroidHarness:
 
     def capture_scope(self, callback):
         return self.artifact_store.capture_scope(callback) if self.artifact_store is not None else nullcontext()
+
+    def close(self) -> None:
+        self._owned_resources.close()
 
     def get_context(self) -> HarnessContext:
         context = self.driver.context()

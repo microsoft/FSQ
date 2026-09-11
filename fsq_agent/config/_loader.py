@@ -55,7 +55,7 @@ def _bind_package_skill_resources(settings: Settings) -> None:
 
 
 PLATFORM_CONFIG_PATHS = {platform: _package_config_root() / filename for platform, filename in _PLATFORM_CONFIG_FILENAMES.items()}
-SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai")
+SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai", "openai", "google_gemini")
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -198,22 +198,22 @@ def _reject_obsolete_settings(data: dict[str, Any]) -> None:
             "Obsolete strict-core step interval configuration is no longer supported; use execution.post_action_delay_seconds instead.",
             context={"config_key": "harness.strict_core", "replacement_key": "execution.post_action_delay_seconds"},
         )
-    openai_agents = data.get("openai_agents")
-    if not isinstance(openai_agents, dict):
+    agent_runtime = data.get("agent_runtime")
+    if not isinstance(agent_runtime, dict):
         return
-    if "provider" in openai_agents:
+    if "provider" in agent_runtime:
         raise ConfigurationError(
             "Invalid configuration.",
-            context={"config_key": "openai_agents.provider", "provider_source": "user_config"},
+            context={"config_key": "agent_runtime.provider", "provider_source": "user_config"},
         )
-    prompt = openai_agents.get("prompt")
+    prompt = agent_runtime.get("prompt")
     if not isinstance(prompt, dict):
         return
     for key in ("custom_instructions", "custom_instructions_path"):
         if key in prompt:
             raise ConfigurationError(
                 "Obsolete custom instruction configuration is no longer supported; move guidance into knowledge/project.md or configured skills.",
-                context={"config_key": f"openai_agents.prompt.{key}"},
+                context={"config_key": f"agent_runtime.prompt.{key}"},
             )
 
 
@@ -276,7 +276,7 @@ def _split_windows_command_line(value: str) -> list[str]:
 
 
 def validate_provider_settings(settings: Settings) -> None:
-    _validate_openai_provider_settings(settings)
+    _validate_model_provider_settings(settings)
 
 
 def validate_runtime_settings(settings: Settings) -> None:
@@ -290,28 +290,42 @@ def validate_strict_core_settings(settings: Settings, requires_ai_assertion: boo
         validate_provider_settings(settings)
 
 
-def _validate_openai_provider_settings(settings: Settings) -> None:
-    if settings.openai_agents.provider is None:
+def _validate_model_provider_settings(settings: Settings) -> None:
+    if settings.agent_runtime.provider is None:
         raise ConfigurationError("Model Provider is not configured. Add a Provider in Control Plane Config.")
-    if settings.openai_agents.provider not in SUPPORTED_LLM_PROVIDERS:
+    if settings.agent_runtime.provider not in SUPPORTED_LLM_PROVIDERS:
         raise ConfigurationError(
-            "OpenAI Agents SDK provider is unsupported.",
-            context={"provider": settings.openai_agents.provider, "supported": list(SUPPORTED_LLM_PROVIDERS)},
+            "Model provider is unsupported.",
+            context={"provider": settings.agent_runtime.provider, "supported": list(SUPPORTED_LLM_PROVIDERS)},
         )
-    if not settings.openai_agents.model.strip():
+    if not settings.agent_runtime.model.strip():
         raise ConfigurationError(
-            "OpenAI Agents SDK model deployment name is required.",
-            context={"provider": settings.openai_agents.provider},
+            "Model deployment name is required.",
+            context={"provider": settings.agent_runtime.provider},
         )
-    if settings.openai_agents.provider == "azure_openai" and not settings.openai_agents.base_url.endswith("/openai/v1/"):
+    if settings.agent_runtime.provider == "azure_openai" and not settings.agent_runtime.base_url.endswith("/openai/v1/"):
         raise ConfigurationError(
             "Azure OpenAI base URL must use the /openai/v1/ form.",
-            context={"base_url": settings.openai_agents.base_url},
+            context={"base_url": settings.agent_runtime.base_url},
         )
-    api_key = settings.openai_agents.api_key
-    if settings.openai_agents.provider == "azure_openai" and not api_key:
+    api_key = settings.agent_runtime.api_key
+    if settings.agent_runtime.provider == "google_gemini":
+        from ._user_provider import _gemini_key
+
+        if settings.agent_runtime.base_url != "https://generativelanguage.googleapis.com/v1beta/":
+            raise ConfigurationError("Google Gemini requires the official endpoint.", context={"provider": "google_gemini", "reason": "invalid_candidate"})
+        try:
+            _gemini_key(api_key)
+        except (ValueError, TypeError):
+            raise ConfigurationError("Google Gemini endpoint or API key is invalid.", context={"provider": "google_gemini", "reason": "invalid_candidate"}) from None
+    if settings.agent_runtime.provider == "openai":
+        if settings.agent_runtime.base_url != "https://api.openai.com/v1/":
+            raise ConfigurationError("OpenAI requires the official API endpoint.", context={"provider": "openai", "reason": "invalid_candidate"})
+        if not api_key.strip() or api_key.strip().lower().startswith("replace-with"):
+            raise ConfigurationError("OpenAI API key is missing or contains a placeholder.", context={"provider": "openai", "reason": "invalid_candidate"})
+    if settings.agent_runtime.provider == "azure_openai" and not api_key:
         raise ConfigurationError("Azure OpenAI API key is not configured.")
-    if settings.openai_agents.provider == "azure_openai" and api_key and api_key.lower().startswith("replace-with"):
+    if settings.agent_runtime.provider == "azure_openai" and api_key and api_key.lower().startswith("replace-with"):
         raise ConfigurationError("Azure OpenAI API key still contains a placeholder value.")
 
 

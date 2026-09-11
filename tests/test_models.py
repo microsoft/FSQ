@@ -2,11 +2,11 @@
 # Licensed under the MIT License.
 
 import pytest
-from agents.strict_schema import ensure_strict_json_schema
 
 from fsq_agent import models
 from fsq_agent.models import (
     AgentFinalOutput,
+    AgentRuntimeSettings,
     AgentTaskInput,
     AndroidInputTextParams,
     AndroidSwipeParams,
@@ -18,7 +18,6 @@ from fsq_agent.models import (
     MacOSKillAppParams,
     MacOSLaunchAppParams,
     MacOSPressKeyParams,
-    OpenAIAgentsSettings,
     PageKnowledgeIndex,
     PageKnowledgePage,
     SkillConfig,
@@ -85,8 +84,8 @@ def test_agent_task_input_wraps_task_contract() -> None:
     assert task_input.verification_goal == "Verify that doing the thing is complete."
 
 
-def test_openai_agents_settings_defaults_to_safe_offline_mode() -> None:
-    settings = OpenAIAgentsSettings()
+def test_agent_runtime_settings_defaults_to_safe_offline_mode() -> None:
+    settings = AgentRuntimeSettings()
 
     assert settings.provider is None
     assert settings.model == ""
@@ -98,10 +97,10 @@ def test_openai_agents_settings_defaults_to_safe_offline_mode() -> None:
     assert settings.prompt.agent_template_path is None
     assert settings.prompt.task_template_path is None
     assert settings.prompt.variables == {}
-    assert settings.context_trimming.enabled is True
-    assert settings.context_trimming.max_tool_output_chars == 30000
     assert settings.local_tool_output.always_write_artifact is True
+    assert settings.local_tool_output.recent_inline_output_count == 3
     assert settings.local_tool_output.full_output_max_chars == 30000
+    assert settings.local_tool_output.total_inline_output_max_chars == 60000
 
 
 def test_harness_settings_default_to_android_uiautomator2() -> None:
@@ -174,7 +173,6 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
     assert "session creation" in macos_launch_schema["properties"]["arguments"]["description"]
     assert "configured bundle id" in macos_launch_schema["properties"]["bundle_id"]["description"]
     assert "environment" not in macos_launch_schema["properties"]
-    assert ensure_strict_json_schema(macos_launch_schema)
     assert "retain" in macos_kill_schema["properties"]["close_session"]["description"]
     assert "Enter" in macos_press_key_schema["properties"]["key"]["description"]
     assert "COMMAND" in macos_press_key_schema["properties"]["modifiers"]["description"]
@@ -186,6 +184,18 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
 def test_local_tool_output_rejects_artifact_subdir_escape() -> None:
     with pytest.raises(ValueError, match="artifact_subdir"):
         LocalToolOutputSettings(artifact_subdir="../outside")
+
+
+@pytest.mark.parametrize("field", ["full_output_max_chars", "total_inline_output_max_chars"])
+def test_local_tool_output_rejects_nonpositive_character_budgets(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        LocalToolOutputSettings(**{field: 0})
+
+
+def test_local_tool_output_allows_no_recent_inline_outputs() -> None:
+    settings = LocalToolOutputSettings(recent_inline_output_count=0)
+
+    assert settings.recent_inline_output_count == 0
 
 
 def test_page_knowledge_page_uses_semantic_identifiers_and_reference_locators() -> None:

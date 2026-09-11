@@ -12,7 +12,7 @@ import httpx
 
 from fsq_agent.config import Settings, UserProviderConfig, activate_github_copilot_provider
 from fsq_agent.models import ConfigurationError
-from fsq_agent.providers._azure_openai import ProviderClientConfig
+from fsq_agent.providers._client_config import ProviderClientConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -89,18 +89,18 @@ class GitHubCopilotModel:
 
 
 def build_github_copilot_client_config(settings: Settings) -> ProviderClientConfig:
-    cached_provider_token = _load_provider_token(settings.openai_agents.provider_token)
+    cached_provider_token = _load_provider_token(settings.agent_runtime.provider_token)
     if cached_provider_token:
         return _client_config_from_cached_provider_token(settings, cached_provider_token)
     return refresh_github_copilot_client_config(settings)
 
 
 def refresh_github_copilot_client_config(settings: Settings) -> ProviderClientConfig:
-    github_payload = settings.openai_agents.github_token
+    github_payload = settings.agent_runtime.github_token
     github_token = _load_github_token(github_payload)
     if github_token is None:
         raise ConfigurationError("GitHub Copilot authentication is not configured. Authenticate in Control Plane Config.")
-    user_config_root = settings.openai_agents.user_config_root
+    user_config_root = settings.agent_runtime.user_config_root
     if user_config_root is None:
         raise ConfigurationError("GitHub Copilot user configuration root is unavailable.")
     plan = _get_copilot_plan(github_token)
@@ -111,12 +111,12 @@ def refresh_github_copilot_client_config(settings: Settings) -> ProviderClientCo
         "plan": plan,
     }
     activate_github_copilot_provider(
-        model=settings.openai_agents.model,
+        model=settings.agent_runtime.model,
         github_token=github_payload or {},
         provider_token=provider_payload,
         user_config_root=user_config_root,
     )
-    settings.openai_agents.provider_token = provider_payload
+    settings.agent_runtime.provider_token = provider_payload
     return _client_config_from_cached_provider_token(
         settings,
         CachedCopilotProviderToken(token=copilot_token.token, expires_at=copilot_token.expires_at, plan=plan),
@@ -127,7 +127,7 @@ def _client_config_from_cached_provider_token(
     settings: Settings,
     provider_token: CachedCopilotProviderToken,
 ) -> ProviderClientConfig:
-    model = settings.openai_agents.model.strip()
+    model = settings.agent_runtime.model.strip()
     if not model:
         raise ConfigurationError("GitHub Copilot model name is required.")
     return ProviderClientConfig(
@@ -325,7 +325,7 @@ def _parse_github_copilot_model(candidate: object) -> GitHubCopilotModel | None:
     if not isinstance(model_id, str) or not model_id.strip():
         return None
     model_id = model_id.strip()
-    version = re.match(r"^gpt-(\d+)(?:\D|$)", model_id, flags=re.IGNORECASE)
+    version = re.match(r"^gpt-(\d+)(?:\.(\d+))?(?=-|$)", model_id, flags=re.IGNORECASE)
     if version is None or int(version.group(1)) < 5:
         return None
     name_value = candidate.get("name")
@@ -345,6 +345,9 @@ def _parse_github_copilot_model(candidate: object) -> GitHubCopilotModel | None:
     }
     tokens = set(re.findall(r"[a-z0-9]+", f"{model_id} {name}".casefold()))
     if tokens & specialist_tokens:
+        return None
+    # GPT reasoning/model docs inform these floors; Copilot endpoint support remains separate live evidence.
+    if "chat" in tokens or ("pro" in tokens and (int(version[1]), int(version[2] or 0)) < (5, 2)):
         return None
     if candidate.get("model_picker_enabled") is False:
         return None

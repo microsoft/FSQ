@@ -1,37 +1,25 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from dataclasses import dataclass, field
-from typing import Any
-
 from fsq_agent.config import Settings
 from fsq_agent.models import ConfigurationError
-
-
-@dataclass(frozen=True)
-class ProviderClientConfig:
-    provider: str
-    model: str
-    api_key: str
-    base_url: str
-    default_headers: dict[str, str] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
+from fsq_agent.providers._client_config import ProviderClientConfig
 
 
 def build_azure_openai_client_config(settings: Settings) -> ProviderClientConfig:
-    openai_settings = settings.openai_agents
-    api_key = openai_settings.api_key
+    runtime_settings = settings.agent_runtime
+    api_key = runtime_settings.api_key
     if not api_key:
         raise ConfigurationError("Azure OpenAI API key is not configured.")
     if api_key.lower().startswith("replace-with"):
         raise ConfigurationError("Azure OpenAI API key still contains a placeholder value.")
-    base_url = openai_settings.base_url.strip()
+    base_url = runtime_settings.base_url.strip()
     if not base_url.endswith("/openai/v1/"):
         raise ConfigurationError(
             "Azure OpenAI base URL must use the /openai/v1/ form.",
             context={"base_url": base_url},
         )
-    model = openai_settings.model.strip()
+    model = runtime_settings.model.strip()
     if not model:
         raise ConfigurationError("Azure OpenAI model deployment name is required.")
     return ProviderClientConfig(
@@ -40,4 +28,5 @@ def build_azure_openai_client_config(settings: Settings) -> ProviderClientConfig
         api_key=api_key,
         base_url=base_url,
         metadata={"endpoint_family": "azure_openai"},
+        model_name_is_deployment=True,
     )

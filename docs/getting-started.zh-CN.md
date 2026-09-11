@@ -8,7 +8,7 @@
 - 已安装受支持的 Chromium 系浏览器。示例使用稳定版 Chrome。
 - 一个可用作本地 FSQ Workspace 的空目录。
 
-AI 探索和 suggestion 分析还需要 GitHub Copilot 或 Azure OpenAI。确定性 Case 重放不需要规划 LLM，除非已编写的 Case 包含 AI assertion。
+AI 探索和 suggestion 分析还需要 OpenAI、Google Gemini、GitHub Copilot 或 Azure OpenAI。确定性 Case 重放不需要规划 LLM，除非已编写的 Case 包含 AI assertion。
 
 ## 安装
 
@@ -51,7 +51,24 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
-也可以运行 `fsq providers configure azure_openai`。Provider 配置是用户级配置，保存在 `~/.fsq` 下，并与本地 Control Plane 共享。
+也可以运行 `fsq providers configure openai` 连接 OpenAI 官方 API，或运行 `fsq providers configure azure_openai` 连接 Azure 部署。配置保存在用户级 `~/.fsq` 下，由 CLI 和 Control Plane 共享。OpenAI 会隐藏 API Key 输入，并提供可选模型；即使只有一个模型也需要显式选择。
+
+浏览器配置流程：运行 `fsq ui`，打开 **Settings**。
+
+1. 点击 **Add configuration** 或 **Change provider**，选择 **OpenAI** 或 **Google Gemini**。
+2. 输入 API Key，点击 **Load models**，选择模型，再点击 **Save changes**。
+3. 点击 **Test connection**，使用已保存配置发送最小请求。
+4. 回到 **Home** 查看 Provider 摘要，再到 **Test Runner** 选择 Workspace、平台和目标，显式启动 Explore。
+
+OpenAI 固定使用 `https://api.openai.com/v1/` 和 Responses API，不支持自定义端点。模型列表仅展示 GPT 主版本 5 或更高的通用模型，排除 mini、nano、Codex、embedding、audio、realtime、image、search、transcription、TTS 等变体。空列表不能保存；修改 Key 后必须重新加载并选择模型。Azure 则需要资源端点、**deployment name（部署名，不一定是 OpenAI model id）** 和 API Key。
+
+Gemini 的 API Key 从 [Google AI Studio](https://aistudio.google.com/apikey) 获取。可使用上述页面流程，或运行 `fsq providers configure google_gemini`，在隐藏提示中输入 Key 后显式选模型。列表读完所有有界分页，只提供支持内容生成的稳定 Gemini 3 或更高版本通用 Flash/Pro；排除 Preview、Latest、Experimental、Lite、图像/音频/Embedding 等专用变体。分页不完整会报错，不会提供部分候选列表。固定 Developer API 使用原生 Interactions、`store=false` 和本地会话历史，不支持 Vertex AI、ADC/服务账号或自定义端点。
+
+Gemini 元数据保存在 version 3 用户配置中，明文 Key 位于 `~/.fsq/auth/google-gemini.json`。预规划、主执行、最终验证、AI 视觉断言、Case 建议和连接测试均使用同一已保存 Provider。**Test connection** 只验证最小推理请求，不保证所有工具/Schema 或 Case 都可执行。显式启动 Explore 后按正常流程检查证据并保存 Case；Strict Replay 只在 Case 需要 AI 断言时使用 Gemini。
+
+保存只复核模型可见性，不发送推理请求；status/readiness 也不等于连接测试。API Key 以明文保存在本地，Settings 默认掩码显示，但受 loopback 限制的 Config API 会完整返回。只有一个活动 Provider，替换成功后清理其他 Provider 凭据；不从环境变量或其他 Provider 回退。
+
+保存响应丢失时，页面会提示结果未知并重新读取配置。可以用 **Reload configuration** 重试恢复。关闭页面不等于取消服务端保存，读到当前配置也不能证明旧请求已经完成。FSQ 不会自动重提或回滚；恢复后应核对当前 Provider 和剩余草稿再继续。
 
 ## 探索与检查
 

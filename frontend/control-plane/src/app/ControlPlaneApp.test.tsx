@@ -14,7 +14,7 @@ vi.mock('../features/devices/DevicesPage', () => ({
     renderShell(null, <div>Devices content<button onClick={()=>onStartPendingChange?.(true)}>Simulate pending start</button><button onClick={()=>onStartPendingChange?.(false)}>Finish pending start</button><button onClick={()=>selectedWorkspaceName&&onRepairTarget?.(selectedWorkspaceName)}>Repair selected target</button><span>Registry {workspaceRegistryReady ? 'ready' : 'pending'}</span><span>Devices Workspace {selectedWorkspaceName ?? 'unselected'}</span><span>{launchIntent ? `${launchIntent.mode}:${launchIntent.workspaceName}:${launchIntent.platform ?? ''}:${launchIntent.casePath ?? ''}` : 'No launch intent'}</span>{launchIntent && <button type="button" onClick={() => onLaunchIntentConsumed?.(launchIntent.id)}>Consume launch intent</button>}</div>),
 }));
 vi.mock('../features/config/ConfigPage', () => ({
-  ConfigPage: ({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) => <div>Config content<button type="button" onClick={() => onDirtyChange?.(true)}>Make draft dirty</button></div>,
+  ConfigPage: ({ onDirtyChange, onSavePendingChange, onSaveUncertainChange }: { onDirtyChange?: (dirty: boolean) => void; onSavePendingChange?: (pending: boolean) => void; onSaveUncertainChange?: (uncertain: boolean) => void }) => <div>Config content<button type="button" onClick={() => onDirtyChange?.(true)}>Make draft dirty</button><button onClick={() => onSavePendingChange?.(true)}>Start provider save</button><button onClick={() => { onSavePendingChange?.(false); onSaveUncertainChange?.(true); }}>Lose provider save response</button></div>,
 }));
 vi.mock('../features/overview/OverviewPage', () => ({
   OverviewPage: ({ workspaces, selectedWorkspace, provider, onNavigate, onSelectWorkspace, onClearWorkspace, onOpenWorkspace, onConfigureWorkspace, onRetryWorkspaces, onRetryProvider, onCreateWorkspace }: { workspaces: { name: string; status: string }[]; selectedWorkspace: { name: string; status: string } | null; provider: { status: string; provider?: string; modelName?: string }; onNavigate: (page: 'devices') => void; onSelectWorkspace: (name: string) => void; onClearWorkspace: () => void; onOpenWorkspace: (name: string) => void; onConfigureWorkspace: (name: string) => void; onRetryWorkspaces: () => void; onRetryProvider: () => void; onCreateWorkspace: () => void }) => <div>Overview content<button id="overview-create-workspace" onClick={onCreateWorkspace}>Overview create</button><button id="overview-step-create-workspace" onClick={onCreateWorkspace}>Overview step create</button><span>{selectedWorkspace ? `Overview ${selectedWorkspace.name}` : 'Overview unselected'}</span><span data-testid="overview-provider-projection">{JSON.stringify(provider)}</span><button type="button" onClick={() => onNavigate('devices')}>Start dynamic</button><button type="button" onClick={onRetryWorkspaces}>Overview retry</button><button type="button" onClick={onRetryProvider}>Provider retry</button>{selectedWorkspace && <><button type="button" onClick={onClearWorkspace}>Overview clear</button><button type="button" onClick={() => onConfigureWorkspace(selectedWorkspace.name)}>Overview configure</button></>}{workspaces[0]?.status !== 'unavailable' && <><button type="button" onClick={() => onSelectWorkspace(workspaces[0].name)}>Overview select</button><button type="button" onClick={() => onOpenWorkspace(workspaces[0].name)}>Overview open</button></>}</div>,
@@ -126,6 +126,37 @@ it('clears only the current Overview Workspace selection', async () => {
   expect(screen.getByText('Overview unselected')).toBeVisible();
   expect(screen.getByRole('button', { name: 'Overview select' })).toBeVisible();
   expect(screen.queryByText('Workspace web-app')).not.toBeInTheDocument();
+});
+
+it('projects OpenAI into Home without passing its key', async () => {
+  vi.mocked(controlPlaneClient.config).mockResolvedValue({ configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'must-not-enter-home' } });
+  render(<ControlPlaneApp />);
+  const projection = await screen.findByTestId('overview-provider-projection');
+  expect(JSON.parse(projection.textContent ?? '{}')).toEqual({ status: 'configured', provider: 'OpenAI', modelName: 'gpt-5' });
+});
+
+it('projects Gemini into Home without passing its key', async () => {
+  vi.mocked(controlPlaneClient.config).mockResolvedValue({ configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'must-not-enter-home' } });
+  render(<ControlPlaneApp />);
+  const projection = await screen.findByTestId('overview-provider-projection');
+  expect(JSON.parse(projection.textContent ?? '{}')).toEqual({ status: 'configured', provider: 'Google Gemini', modelName: 'gemini-3.8-flash' });
+});
+
+it('blocks navigation while saving a Provider and warns when its result is unknown', async () => {
+  const user = userEvent.setup();
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  render(<ControlPlaneApp />);
+  await user.click(screen.getByRole('button', { name: 'Settings' }));
+  await user.click(screen.getByRole('button', { name: 'Start provider save' }));
+  for (const name of ['Home', 'Test Runner', 'Create workspace']) expect(screen.getByRole('button', { name })).toBeDisabled();
+  await user.click(screen.getByRole('button', { name: 'Home' }));
+  expect(screen.getByText('Config content')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Lose provider save response' }));
+  await user.click(screen.getByRole('button', { name: 'Home' }));
+  expect(screen.getByText('Config content')).toBeVisible();
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining('does not cancel'));
+  await user.click(screen.getByRole('button', { name: 'Home' }));
+  expect(screen.getByText('Overview content')).toBeVisible();
 });
 
 it('projects Azure configuration into a secret-free Overview summary', async () => {

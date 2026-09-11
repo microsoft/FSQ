@@ -364,6 +364,8 @@ class RunReportService:
                 item for item in frozen.get("steps", internal.get("steps", [])) if isinstance(item, dict) and ("phase_reports" in item or item.get("step_execution_id") or item.get("action_name"))
             ]
         artifacts = list(bundle.get("artifacts", []))
+        if bundle.get("schema_version") == "1.0":
+            artifacts.extend((bundle.get("metadata") or {}).get("legacy_artifacts", []))
         tool_calls = []
         by_id = {str(item.get("step_execution_id") or item.get("step_id")): item for item in raw_steps}
         duplicate_ids = len(by_id) != len(raw_steps)
@@ -586,6 +588,18 @@ class RunReportService:
         lineage_value = metadata.get("lineage", {})
         lineage = dict(lineage_value) if isinstance(lineage_value, dict) else {"relations": list(lineage_value or [])}
         lineage.setdefault("relations", []).extend(self._events(root, warnings, fingerprints, name="lineage.jsonl"))
+        saved_sources = [
+            {
+                "artifact_id": "saved-case-" + str(relation.get("case_digest")),
+                "kind": "text",
+                "path": relation["saved_snapshot_path"],
+                "sha256": relation.get("case_digest"),
+                "metadata": {"source_kind": "case"},
+            }
+            for relation in lineage["relations"]
+            if isinstance(relation, dict) and relation.get("kind") == "recording" and relation.get("saved_snapshot_path")
+        ]
+        projected_artifacts.extend(self._artifacts(root, run_id, saved_sources, warnings, fingerprints))
         report = PublicRunReport(
             run={
                 "run_id": run_id,
@@ -877,15 +891,20 @@ class RunReportService:
                     else:
                         digest = digest_file(path)
                         _bind_fingerprint(fingerprints, relative, digest)
-                        artifact["size_bytes"] = path.stat().st_size
-                        if artifact["sha256"] and artifact["sha256"] != digest:
+                        actual_size = path.stat().st_size
+                        if artifact["size_bytes"] is not None and artifact["size_bytes"] != actual_size:
+                            artifact.update(availability="unavailable", unavailable_reason="size_mismatch")
+                        elif artifact["sha256"] and artifact["sha256"] != digest:
                             artifact.update(availability="unavailable", unavailable_reason="hash_mismatch")
                         else:
+                            artifact["size_bytes"] = actual_size
                             artifact["sha256"] = digest
                             if artifact["kind"] == "screenshot":
                                 try:
                                     _validate_raster(path, artifact["size_bytes"])
                                     artifact["display_availability"] = "available"
+                                except SyntaxError:
+                                    artifact.update(display_availability="omitted", unavailable_reason="raster_invalid")
                                 except (OSError, ValueError, Image.DecompressionBombError):
                                     artifact.update(display_availability="omitted", unavailable_reason="raster_resource_limit")
                             if artifact["kind"] in {"ui_snapshot", "ui_tree", "text"}:
@@ -952,14 +971,15 @@ class RunReportService:
                 if not found:
                     missing.append({"run_id": step["run_id"], "step_execution_id": step["step_execution_id"], **expected})
         errors = [error for step in steps for error in step.get("evidence_errors", [])]
-        incomplete = bundle.get("completeness") in {"partial", "unavailable"} or any(item.get("unavailable_reason") == "identity_conflict" for item in artifacts)
-        status = "partial" if missing or errors or incomplete else recorded.get("status") or ("complete" if bundle else "unavailable")
+        unknown_legacy = bundle.get("schema_version") != "fsq.evidence/v2" and (bundle.get("metadata") or {}).get("legacy_coverage_unknown", False)
+        incomplete = (not unknown_legacy and bundle.get("completeness") in {"partial", "unavailable"}) or any(item.get("unavailable_reason") == "identity_conflict" for item in artifacts)
+        status = "partial" if missing or errors or incomplete else recorded.get("status") or ("complete" if bundle and not unknown_legacy else "unavailable")
         return {
             "status": status,
             "required_missing": missing,
             "errors": [*recorded.get("errors", []), *errors],
             "artifact_count": len(artifacts),
-            "availability": "known" if bundle or recorded else "unknown",
+            "availability": "known" if recorded or (bundle and not unknown_legacy) else "unknown",
             "warnings": list(warnings),
         }
 
@@ -1067,12 +1087,14 @@ class RunReportService:
             report._related.append(other)
 
     def _validate_related(self, report, other):
-        from fsq_agent.report._comparison import verified_source_digest
+        from fsq_agent.report._comparison import _recording_mapping, verified_source_digest
 
         if report.run.get("platform") != other.run.get("platform"):
             raise report_error("lineage_invalid", "Related Run platform mismatch.")
         linked = False
         for child, parent in ((report, other), (other, report)):
+            if any(relation.get("candidate_digest") for relation in parent.lineage.get("relations", [])):
+                linked = linked or bool(_recording_mapping(child, parent))
             for relation in [child.lineage, *child.lineage.get("relations", [])]:
                 digest = relation.get("case_digest") or relation.get("case_sha256")
                 child_digest = verified_source_digest(child)

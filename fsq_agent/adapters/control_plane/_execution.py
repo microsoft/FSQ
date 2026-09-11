@@ -13,6 +13,7 @@ from typing import Any, Never
 from fsq_agent._capability_bootstrap import steps_require_provider
 from fsq_agent.adapters.coding_agent import create_coding_agent_runtime
 from fsq_agent.agent import FsqAgent
+from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.case_dsl import FsqCaseLoader, FsqExecutableStepAdapter
 from fsq_agent.config import Settings, validate_runtime_settings, validate_strict_core_settings, workspace_revision
 from fsq_agent.core import ArtifactStore, EvidenceRecorder, HarnessFactory, RuntimeSecretStore
@@ -31,7 +32,6 @@ from fsq_agent.execution import (
     transition_run,
 )
 from fsq_agent.models import EvidenceBundle, ExecutableStep, FsqCase, RunnerEvent, RunnerStepResult, Task
-from fsq_agent.providers import build_ai_assertion_evaluator
 
 from ._cases import build_strict_registry_context, resolve_case
 from ._evidence import EvidenceProjection, configured_secret_values, safe_exception_message
@@ -195,17 +195,14 @@ def _execution_thread(prepared: PreparedRun, state: ControlPlaneState, handle: E
     if prepared.mode == "strict":
         _run_strict(prepared, state)
         return
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    task = loop.create_task(_run_explore(prepared, state))
-    handle.attach(loop, task)
-    try:
-        loop.run_until_complete(task)
-    except asyncio.CancelledError:
-        state.finish(prepared.request_id, status="cancelled", summary="Run cancelled.")
-    finally:
-        asyncio.set_event_loop(None)
-        loop.close()
+    with asyncio.Runner() as runner:
+        loop = runner.get_loop()
+        task = loop.create_task(_run_explore(prepared, state))
+        handle.attach(loop, task)
+        try:
+            loop.run_until_complete(task)
+        except asyncio.CancelledError:
+            state.finish(prepared.request_id, status="cancelled", summary="Run cancelled.")
 
 
 async def _run_explore(prepared: PreparedRun, state: ControlPlaneState) -> None:

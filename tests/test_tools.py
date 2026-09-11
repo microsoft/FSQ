@@ -7,22 +7,15 @@ from pathlib import Path
 
 import pytest
 
+from fsq_agent.agent_engine import ToolCall, ToolInputFailure
 from fsq_agent.models import (
     AgentToolCall,
     LocalToolOutputSettings,
     RunEvent,
+    RuntimeSecretSettings,
     ToolExecutionError,
 )
 from fsq_agent.tools import AgentToolAdapter, AgentToolExecutor, AgentToolRegistry, DefaultAgentToolProvider, FileOps
-
-
-class _FakeFunctionTool:
-    def __init__(self, **kwargs):
-        self.name = kwargs["name"]
-        self.description = kwargs["description"]
-        self.params_json_schema = kwargs["params_json_schema"]
-        self.strict_json_schema = kwargs.get("strict_json_schema", True)
-        self.on_invoke_tool = kwargs["on_invoke_tool"]
 
 
 def _provider(tmp_path: Path, **kwargs) -> DefaultAgentToolProvider:
@@ -74,18 +67,40 @@ def test_agent_tool_registry_lists_only_dynamic_tools(tmp_path: Path) -> None:
     assert "shell" not in names
 
 
+def test_common_tool_compatibility_aliases_are_not_public() -> None:
+    from fsq_agent import models, tools
+
+    for name in ("CommonToolProvider", "CommonToolRegistry", "CommonToolExecutor", "DefaultCommonToolProvider", "AgentsCommonToolAdapter"):
+        assert name not in tools.__all__
+        assert not hasattr(tools, name)
+    for name in ("CommonToolCall", "CommonToolResult"):
+        assert name not in models.__all__
+        assert not hasattr(models, name)
+
+
 def test_agent_tool_adapter_passes_tool_strictness(tmp_path: Path) -> None:
     provider = _provider(tmp_path)
     adapter = AgentToolAdapter(_registry(provider))
 
-    tools = adapter.build_tools(_FakeFunctionTool)
+    tools = adapter.build_tools()
 
-    assert {tool.name: tool.strict_json_schema for tool in tools} == {
+    assert {tool.name: tool.strict for tool in tools} == {
         "read_file": True,
         "write_file": True,
         "search_artifact": True,
         "read_artifact_slice": True,
     }
+
+
+async def test_invalid_agent_tool_input_uses_existing_failure_result(tmp_path: Path) -> None:
+    adapter = AgentToolAdapter(_registry(_provider(tmp_path)))
+    tool = next(binding for binding in adapter.build_tools() if binding.name == "write_file")
+    response = json.loads(await tool.on_invalid_input(ToolInputFailure(name=tool.name, call_id="invalid-write", message="Tool arguments must be a JSON object.")))
+    assert response["tool_name"] == "write_file"
+    assert response["status"] == "failed"
+    assert response["result"]["status"] == "failed"
+    assert response["result"]["error"] == "Tool arguments must be a JSON object."
+    assert await asyncio.to_thread(lambda: list(tmp_path.iterdir())) == []
 
 
 @pytest.mark.asyncio
@@ -101,9 +116,9 @@ async def test_agent_tool_adapter_emits_agent_tool_origin_without_replay(tmp_pat
     (tmp_path / "file.txt").write_text("hello", encoding="utf-8")
     events: list[RunEvent] = []
     adapter = AgentToolAdapter(_registry(_provider(tmp_path)))
-    read_tool = next(tool for tool in adapter.build_tools(_FakeFunctionTool, run_id="run-1", task_id="task-1", event_sink=events.append) if tool.name == "read_file")
+    read_tool = next(tool for tool in adapter.build_tools(run_id="run-1", task_id="task-1", event_sink=events.append) if tool.name == "read_file")
 
-    output = await read_tool.on_invoke_tool(None, json.dumps({"path": "file.txt"}))
+    output = await read_tool.invoke(ToolCall(name="read_file", arguments={"path": "file.txt"}, call_id="call_read"))
 
     payload = json.loads(output)
     assert payload["result"]["output"]["output"] == "hello"
@@ -124,9 +139,9 @@ async def test_agent_tool_writes_full_output_artifact_and_returns_inline(tmp_pat
     adapter = AgentToolAdapter(_registry(provider), local_tool_output_settings=LocalToolOutputSettings(full_output_max_chars=1000))
     read_target = tmp_path / "file.txt"
     read_target.write_text("hello", encoding="utf-8")
-    read_tool = next(tool for tool in adapter.build_tools(_FakeFunctionTool, run_id="run-1", task_id="task-1") if tool.name == "read_file")
+    read_tool = next(tool for tool in adapter.build_tools(run_id="run-1", task_id="task-1") if tool.name == "read_file")
 
-    output = await read_tool.on_invoke_tool(None, json.dumps({"path": "file.txt"}))
+    output = await read_tool.invoke(ToolCall(name="read_file", arguments={"path": "file.txt"}, call_id="call_read"))
 
     payload = json.loads(output)
     artifact_path = Path(payload["artifact"]["path"])
@@ -149,31 +164,57 @@ async def test_agent_tool_large_output_uses_artifact_search_and_slice(tmp_path: 
     provider = _provider(tmp_path, local_tool_output_settings=settings, runs_dir=runs_dir, run_id="run-1")
     adapter = AgentToolAdapter(_registry(provider), local_tool_output_settings=settings)
     (tmp_path / "large.txt").write_text("alpha beta gamma " * 100, encoding="utf-8")
-    tools = adapter.build_tools(_FakeFunctionTool, run_id="run-1", task_id="task-1")
+    tools = adapter.build_tools(run_id="run-1", task_id="task-1")
     read_tool = next(tool for tool in tools if tool.name == "read_file")
     search_tool = next(tool for tool in tools if tool.name == "search_artifact")
     slice_tool = next(tool for tool in tools if tool.name == "read_artifact_slice")
 
-    output = await read_tool.on_invoke_tool(None, json.dumps({"path": "large.txt"}))
+    output = await read_tool.invoke(ToolCall(name="read_file", arguments={"path": "large.txt"}, call_id="call_read"))
     payload = json.loads(output)
 
     assert payload["model_output"] == "artifact_reference"
     assert "result" not in payload
-    search_output = await search_tool.on_invoke_tool(
-        None,
-        json.dumps({"artifact_path": payload["artifact"]["path"], "query": "gamma", "max_matches": 1, "context_chars": 20}),
+    search_output = await search_tool.invoke(
+        ToolCall(name="search_artifact", arguments={"artifact_path": payload["artifact"]["path"], "query": "gamma", "max_matches": 1, "context_chars": 20}, call_id="call_search")
     )
     search_payload = json.loads(search_output)
     assert search_payload["result"]["output"]["matches"][0]["offset"] >= 0
 
-    slice_output = await slice_tool.on_invoke_tool(
-        None,
-        json.dumps(
-            {
+    slice_output = await slice_tool.invoke(
+        ToolCall(
+            name="read_artifact_slice",
+            call_id="call_slice",
+            arguments={
                 "artifact_path": payload["artifact"]["path"],
                 "offset": search_payload["result"]["output"]["matches"][0]["offset"],
                 "length": 30,
-            }
+            },
         ),
     )
     assert "gamma" in json.loads(slice_output)["result"]["output"]["content"]
+
+
+@pytest.mark.parametrize("content_length", [20, 40000])
+@pytest.mark.parametrize("private_value", ["canary-92837", 'canary-"92837"\\secret\nvalue'])
+async def test_file_helpers_redact_configured_values_before_output_artifacting(tmp_path: Path, content_length: int, private_value: str) -> None:
+    runtime_secrets = RuntimeSecretSettings()
+    runtime_secrets.set_values({"TEST_ACCOUNT_PASSWORD": private_value})
+    settings = LocalToolOutputSettings(full_output_max_chars=1000)
+    provider = _provider(tmp_path, runtime_secret_settings=runtime_secrets, local_tool_output_settings=settings, runs_dir=tmp_path / "runs", run_id="run-1")
+    adapter = AgentToolAdapter(_registry(provider), local_tool_output_settings=settings)
+    content = f"Visible {private_value} " + "x" * content_length + " TAIL"
+    source = tmp_path / "input.txt"
+    source.write_text(content, encoding="utf-8")
+    read_tool = next(tool for tool in adapter.build_tools(run_id="run-1") if tool.name == "read_file")
+
+    output = await read_tool.invoke(ToolCall(name="read_file", arguments={"path": "input.txt"}, call_id="secret-read"))
+
+    assert "canary-" not in output
+    payload = json.loads(output)
+    expected = content.replace(private_value, "***")
+    if payload["model_output"] == "full":
+        assert payload["result"]["output"]["output"] == expected
+    artifact_text = await asyncio.to_thread(Path(payload["artifact"]["path"]).read_text, encoding="utf-8")
+    assert "canary-" not in artifact_text
+    assert json.loads(json.loads(artifact_text)["content"])["output"] == expected
+    assert source.read_text(encoding="utf-8") == content

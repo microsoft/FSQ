@@ -499,21 +499,32 @@ def test_failed_start_accounts_for_later_nested_and_main_leaves(tmp_path: Path, 
     assert len([step for step in bundle.planned_steps if not step.metadata.get("structural")]) == 3
 
 
-def test_cancellation_keeps_partial_leaf_and_runs_completion_hook(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("checkpoint_fails", [False, True])
+def test_cancellation_keeps_partial_leaf_and_runs_completion_hook(tmp_path: Path, monkeypatch, caplog, checkpoint_fails: bool) -> None:
     import asyncio
 
     case_path = tmp_path / "cancelled.fsq.yaml"
     case_path.write_text("schemaVersion: fsq.ai-test/v1\nname: Cancelled\nplatform: android\nonCaseComplete:\n- runShell: cleanup\n---\n- tapOn:\n    target: Child\n- launchApp: {}\n")
     cleanup = []
     monkeypatch.setattr("fsq_agent.execution.lifecycle._run_shell_command", lambda command: (cleanup.append(command), subprocess.CompletedProcess(command, 0))[1])
+    primary = asyncio.CancelledError("primary cancellation")
+    if checkpoint_fails:
+        original_record = EvidenceRecorder.record_step_result
+
+        def record(recorder, result):
+            if result.status == "incomplete":
+                raise OSError("private checkpoint error")
+            return original_record(recorder, result)
+
+        monkeypatch.setattr(EvidenceRecorder, "record_step_result", record)
 
     class CancellingHarness(LifecycleHarness):
         def invoke_action(self, step, context):
-            raise asyncio.CancelledError
+            raise primary
 
     registry = build_capability_registry(platform="android")
     run = tmp_path / "run"
-    with pytest.raises(asyncio.CancelledError):
+    with pytest.raises(asyncio.CancelledError) as raised:
         run_strict_lifecycle_case(
             case_path=case_path,
             case=FsqCaseLoader().load_case(case_path),
@@ -525,8 +536,13 @@ def test_cancellation_keeps_partial_leaf_and_runs_completion_hook(tmp_path: Path
             registry_snapshot=registry.snapshot(),
             resolve_steps=lambda steps, _: steps,
         )
+    assert raised.value is primary
     bundle = EvidenceRecorder.recover_bundle(run)
     assert cleanup == ["cleanup"]
+    if checkpoint_fails:
+        assert "Interrupted scope persistence failed (OSError)" in caplog.text
+        assert "private checkpoint error" not in caplog.text
+        return
     leaf_statuses = {step.action_name: step.status for step in bundle.steps}
     assert leaf_statuses == {"tap_on": "cancelled", "launch_app": "incomplete", "runShell": "passed"}
 

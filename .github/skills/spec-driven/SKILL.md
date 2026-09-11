@@ -48,9 +48,9 @@ explicit /spec-driven <confirmed-design-document-path | direct-project-change-re
   -> if none: record existing-SPEC and defect evidence
   -> implement against confirmed SPEC.md
   -> run verification
-  -> run consolidated spec-implementation-audit
+  -> run the first complete spec-implementation-audit
   -> batch-fix complete finding set
-  -> incrementally re-audit affected findings and boundaries
+  -> from round 2, audit only the previous round's finding repairs
   -> final report
 ```
 
@@ -223,22 +223,25 @@ After required project SPEC confirmation or a recorded no-SPEC-delta decision:
 
 ## Project Audit Lifecycle
 
-After project implementation verification, `spec-driven` starts a complete project audit. Every audit pass must independently establish the full applicable-item inventory from the current SPEC inputs and complete current diff, then inspect every item before returning. Finding the first blocker must not end the pass, and implementation repair must not begin while the audit is still in progress.
+After project implementation verification, `spec-driven` starts a complete project audit with `audit_mode=full`. This first pass independently establishes the full applicable-item inventory from the current SPEC inputs and complete current diff, then inspects every item before returning. Finding the first blocker must not end the pass, and implementation repair must not begin while the audit is still in progress.
+
+From round 2 onward, use `audit_mode=repair-only`: audit only the repairs for the previous round's findings. Carry unresolved findings forward, retain unaffected passing verdicts with unchanged evidence, and do not rebuild the complete inventory or search for unrelated new issues. The audit skill owns the detailed scope and verdict rules.
 
 ### Audit Artifact And Identity Gate
 
-For a worktree audit, create the complete tracked diff as a file directly through Git, such as `git diff HEAD --no-ext-diff --binary --output=<artifact>`. Never use terminal-captured stdout or a tool's overflow wrapper as the audit artifact.
+For the first worktree audit, create the complete tracked diff as a file directly through Git, such as `git diff HEAD --no-ext-diff --binary --output=<artifact>`. For a repair-only pass, create the complete repair delta through Git between the previous audited snapshot and the current snapshot, including new or deleted repair files. Never use terminal-captured stdout or a tool's overflow wrapper as the audit artifact.
 
 Before starting the reviewer:
 
 1. Record the artifact's absolute path, SHA-256, byte size, and `diff --git` entry count.
-2. Record Git's complete changed-path inventory and verify its count and paths agree with the artifact.
+2. Record Git's complete changed-path inventory for the declared audit scope and verify its count and paths agree with the artifact.
 3. Verify that no in-scope untracked project file is omitted. Include each such file as a separate complete artifact with its path and SHA-256, or stop as `audit-blocked`.
 4. Give the reviewer the artifact identities and require it to validate them before auditing. A missing, truncated, wrapped, mismatched, or unreadable artifact is `audit-blocked`; do not substitute a live diff or an implementation summary.
+5. For repair-only passes, include the previous independent report and snapshot, map the repair delta to its finding IDs, and verify that code and SPEC evidence outside the repair scope is unchanged. Do not require the reviewer to re-audit unchanged content.
 
-Treat the verified artifact identities as the audit snapshot. Do not intentionally edit in-scope project files while the audit is running. After a passing audit and immediately before claiming completion, regenerate the worktree artifacts with the same commands and compare their SHA-256 values and path inventory with the audited snapshot. Any mismatch makes the prior pass stale and requires verification plus a new complete audit. For an audited commit range, record the exact immutable base and head object ids instead of a worktree artifact hash.
+Treat the verified artifact identities as the audit snapshot. Do not intentionally edit in-scope project files while the audit is running. After a passing audit and immediately before claiming completion, regenerate the worktree artifacts with the same commands and compare their SHA-256 values and path inventory with the audited snapshot and inherited evidence. A mismatch blocks completion: re-verify and re-audit changed repairs, or ask for a scope decision if the changes are unrelated. Do not automatically restart a full audit. For an audited commit range, record the exact immutable base and head object ids instead of a worktree artifact hash.
 
-Each audit result must contain precise SPEC references, concrete diff evidence, verdicts, repair ownership, one complete coverage table, and the full finding set. The only allowed early return is `audit-blocked` when required authority inputs, tools, or artifacts are unavailable. `audit-blocked` is not a passing verdict and does not consume a repair round.
+Each audit result must declare its mode and contain precise SPEC references, concrete diff evidence, verdicts, repair ownership, complete coverage for that mode's scope, and the full finding status for that scope. A repair-only report accounts for every previous-round finding, including unresolved findings carried from earlier rounds. The only allowed early return is `audit-blocked` when required authority inputs, tools, or artifacts are unavailable. `audit-blocked` is not a passing verdict and does not consume a repair round.
 
 After the complete result returns:
 
@@ -246,16 +249,16 @@ After the complete result returns:
 2. Resolve authority/human decisions and verification-environment blockers before starting an implementation repair batch when they can change or prevent that repair.
 3. Repair all in-scope implementation-fixable blocking findings in one batch. Do not trigger another audit after only a partial repair.
 4. Complete the affected verification for the entire repair batch.
-5. Start a new complete audit against the current SPEC inputs and complete current diff. Do not reuse prior item verdicts or limit the audit to repaired paths.
-6. Repeat complete audit, complete repair, and verification rounds until one complete audit has no blocking findings.
+5. Start an independent repair-only audit of the previous findings using their repair delta and relevant SPEC evidence. Do not reopen unrelated passing items or expand the pass into a new full audit.
+6. Repeat repair-only audit, complete repair, and verification rounds until no unresolved blocking findings remain, subject to the repair limit below.
 
-The implementation agent may explain its repair but may not declare audit findings resolved. Only the next complete independent audit determines whether the current implementation passes. Do not provide persuasive implementation summaries to the reviewer.
+The implementation agent may explain its repair but may not declare audit findings resolved. Only the independent reviewer determines whether each repair satisfies the previous finding. Supply the previous independent report as the follow-up scope, not a persuasive implementation summary.
 
-Run at most two automatic repair rounds. If the complete audit after the second repair round still has blocking findings, or one complete repair and re-audit round makes no substantive progress, pause automatic repair and present the complete current finding set, current evidence, attempted repair rounds, reviewer rationale, and concrete human decision options. The findings remain blocking until an allowed decision and any required project SPEC confirmation are complete.
+Run at most two automatic repair rounds; switching to repair-only mode does not reset this count. If the audit after the second repair round still has blocking findings, or one complete repair and re-audit round makes no substantive progress, pause automatic repair and present the complete current finding status, current evidence, attempted repair rounds, reviewer rationale, and concrete human decision options. The findings remain blocking until an allowed decision and any required project SPEC confirmation are complete.
 
 ## Consolidated Project Implementation Audit
 
-For a project change, `spec-implementation-audit` owns the applicable-item inventory, verdict semantics, evidence, and complete-pass coverage. SPEC/code synchronization is a category in that audit, not a separate scan. Include these checks when applicable:
+For a project change, `spec-implementation-audit` owns the applicable-item inventory, verdict semantics, evidence, and coverage for each audit mode. SPEC/code synchronization is a category in that audit, not a separate scan. Include these checks in the full first pass; in repair-only passes apply only those needed to resolve the previous findings:
 
 - [ ] Root `SPEC.md` module table matches actual modules.
 - [ ] Root `SPEC.md` architecture diagram matches actual project dependencies.
@@ -282,19 +285,21 @@ root SPEC.md + relevant module SPEC.md files + actual diff
 
 Tests, lint, and summaries are supporting evidence only. They do not replace diff-based SPEC audit.
 
-If project SPEC itself needs correction, stop project implementation, update and confirm the applicable SPEC, reconcile the implementation and verification with it, and start a new complete project audit.
+If project SPEC itself needs correction, stop project implementation, update and confirm the applicable SPEC, reconcile the implementation and verification with it, and re-audit the relevant finding in repair-only mode. If the decision introduces changes outside that finding's repair scope, obtain an explicit scope decision rather than automatically restarting a full audit.
 
 ## Completion Gate
 
 Do not claim completion while any blocking finding remains. Completion also requires:
 
-- a complete latest audit pass over the current SPEC inputs and complete current diff;
-- a matching post-audit artifact identity check proving the current worktree or immutable commit range is exactly the audited snapshot;
-- a complete applicable-item inventory;
-- concrete diff evidence and a current verdict for every item;
-- no implementation-fixable blocking finding in the latest independent audit;
+- a complete first audit plus complete repair-only coverage of each previous round's findings;
+- a matching post-audit artifact identity check linking the current worktree or immutable commit range to that audit chain;
+- the first pass's complete applicable-item inventory, with unaffected passing evidence unchanged;
+- concrete diff evidence and an initial or repair verdict for every item;
+- no unresolved implementation-fixable blocking finding in the carried-forward finding set;
 - required verification run or unavailable verification reported as blocking;
 - any accepted `needs-human-decision` recorded explicitly.
+
+These gates do not require a new full audit after repairs. Unrelated changes cannot inherit coverage and require a scope decision.
 
 ## Required Final Report
 
@@ -304,5 +309,5 @@ End with:
 - Project specs updated and confirmed, or the no-SPEC-delta decision with precise SPEC and defect evidence.
 - Files implemented.
 - Verification commands run and results.
-- Audited SPEC inputs, diff artifact identities or exact commit range, post-audit identity result, and latest complete-audit status.
+- Audited SPEC inputs, full and repair-only audit identities or exact commit ranges, post-audit identity result, and cumulative finding status. Distinguish the full first pass from later repair-only passes.
 - Complete current finding status, repair rounds performed, and any accepted human decisions.

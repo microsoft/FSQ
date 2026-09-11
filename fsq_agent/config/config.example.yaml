@@ -5,8 +5,9 @@
 # file is not a runtime preset and is ignored by default config discovery.
 # Copy pieces from here into a local config.yaml when experimenting manually.
 
-openai_agents:
+agent_runtime:
   max_turns: 100
+  reasoning_effort: mid
   tracing_enabled: true
 
 harness:

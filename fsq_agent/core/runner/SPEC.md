@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own platform-neutral capability execution for one canonical step and ordered step sequences. Runner applies capability metadata, parameter validation, runtime-secret resolution, evidence policy, measured timing, sensitivity, result normalization, and teardown ordering. It emits durable execution facts through public sink interfaces without owning filesystem formats, Run lifecycle, transports, or concrete platforms.
+Own platform-neutral capability execution for one canonical step and ordered sequences. Runner applies capability metadata, validation, runtime secrets, evidence policy, measured timing, sensitivity, result normalization, and teardown ordering. It emits durable facts through public sinks without owning filesystem formats, Run lifecycle, transports, or concrete platforms.
 
 ## Dependencies
 
@@ -14,8 +14,8 @@ Runner must not import adapters, Application, Agent SDK types, concrete harnesse
 
 ## Public Interface
 
-- `StepRunner`: executes one canonical capability invocation through public interfaces and publishes step start, phase boundaries, action result, artifact outcome, and final step result to the supplied evidence journal sink as they occur. Its existing `run_step`, `events`, and `last_capability_execution_result` surfaces remain supported; buffered events are a compatibility projection, not the durable evidence authority.
-- `StepSequenceRunner`: executes ordered normal steps, stops on blocking failure, records explicit outcomes for unexecuted planned leaves, and preserves supplied teardown eligibility. Its existing `run_steps` call remains supported.
+- `StepRunner`: executes one capability invocation and publishes step start, phase boundaries, action result, artifact outcomes, and final result to the supplied evidence sink as they occur. `run_step`, `events`, and `last_capability_execution_result` remain supported; buffered events are a compatibility projection, not durable authority.
+- `StepSequenceRunner`: executes ordered normal steps, stops on blocking failure, records explicit unexecuted-leaf outcomes, and preserves supplied teardown eligibility. `run_steps` remains supported.
 
 Both symbols are exported from `core.runner` and re-exported from `core` with identical object identity.
 
@@ -37,19 +37,15 @@ Both symbols are exported from `core.runner` and re-exported from `core` with id
 
 ## Error Handling
 
-Runner normalizes prepare, invoke, settle, finalize, and capture failures into safe phase and step facts, preserves cancellation, and never exposes runtime-secret values. Registry, parameter, or unresolved-secret failures occur before the external invocation they protect. A durable step-start acknowledgement precedes external invocation; failure to persist required execution facts is an infrastructure failure and blocks dependent work. The last successfully persisted state remains usable when subsequent persistence fails.
+Runner normalizes prepare/invoke/settle/finalize/capture failures into safe facts, preserves cancellation, and never exposes secrets. Registry, parameter, unresolved-secret, and durable step-start failures occur before the protected external invocation. Required evidence persistence failures block dependent work while retaining acknowledged facts.
 
-Action failure is the primary execution failure. Capture or persistence errors remain separate evidence errors and never overwrite the original action category, message, or assertion verdict. Required evidence failure continues to prevent a successful step under the existing fail-closed policy; when evidence failure is the only failure, the compatibility failure category is `artifact_error`. Independent screenshot and UI snapshot capture outcomes remain visible even when one capture fails.
-
-Cancellation, an earlier normal-step failure, and teardown failure have distinct records. Teardown and completion work retain their execution-policy eligibility; failure in one teardown does not erase the original failure or already persisted evidence. A process interruption without an acknowledged result is unknown, not a manufactured passed, failed, or skipped result.
+Action failure remains the primary failure. Capture/persistence errors are separate evidence errors and cannot overwrite action category, message, or assertion verdict. Required missing evidence remains fail-closed; evidence-only failure uses compatibility `artifact_error`. Screenshot and UI snapshot outcomes remain independently visible. Teardown eligibility survives earlier failure or cancellation according to execution policy; interrupted unacknowledged results remain unknown rather than fabricated outcomes.
 
 ## Current Invariants
 
 - Capability metadata, not action-name branches, controls routing, replay metadata, timing, sensitivity, and evidence policy.
 - Automatic evidence depends on step kind and normalized observation interfaces.
-- Every invocation carries a stable `source_step_id` and a Run-unique `step_execution_id` allocated from its invocation occurrence and attempt. New result `step_id` values alias `step_execution_id`; repeated nested Cases and repeated actions never reuse execution identity. Runner does not infer identity from a display label or artifact filename.
-- Strict planned logical leaf invocations retain explicit executed, skipped, or unresolved outcomes and safe reasons, including the blocking execution identity when known. Each attempt belongs to its source-plus-invocation-path leaf and has a separate `step_execution_id`. Hook containers, dynamic key-action plans, and SDK summaries are not counted as executed capabilities. Attempt counts remain separate from logical leaf outcome totals.
-- Step and phase boundaries carry measured UTC timestamps; elapsed durations use a monotonic clock. Exclusive `prepare`, `invoke`, `settle`, and `finalize` durations do not overlap. Capture durations may be displayed as nested components but are not added to their containing phase a second time. Missing measurements use null with a reason; zero means a measured zero.
-- Positive post-action delay is represented by the measured `settle` phase after invocation and before final evidence, while retaining configured-delay metadata. It creates no synthetic wait command, evidence step, or replay result.
-- Runner adds no automatic retries; when an execution policy requests another attempt, its execution identity and outcome remain separate.
+- Every attempt carries stable `source_step_id`, occurrence-aware invocation path, and Run-unique `step_execution_id`; compatibility result `step_id` aliases execution identity. Planned logical leaves retain executed/skipped/unresolved outcomes and reasons, including known blockers. Attempts are counted separately from logical leaves; hooks, plans, and runtime summaries do not inflate capability counts.
+- Step/phase boundaries use measured UTC timestamps and monotonic durations. Exclusive prepare/invoke/settle/finalize times do not overlap; nested capture times are not counted twice. Unknown measurements are null with a reason, not zero.
+- Positive post-action delay is the measured settle phase after invocation and before final evidence, preserving configured-delay metadata without synthetic wait commands or replay results. Runner adds no automatic retries; externally requested attempts retain separate identities and outcomes.
 - Teardown steps remain eligible after normal-step failure.

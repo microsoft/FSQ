@@ -59,7 +59,7 @@ def resolve_runtime_paths(settings: Settings, base_dir: Path | None = None) -> N
     if knowledge.pre_plan.dir is not None:
         knowledge.pre_plan.dir = _resolve_path(knowledge.pre_plan.dir, knowledge.root_dir)
 
-    prompt = settings.openai_agents.prompt
+    prompt = settings.agent_runtime.prompt
     if prompt.agent_template_path is not None:
         prompt.agent_template_path = _resolve_path(prompt.agent_template_path, config_base)
     if prompt.task_template_path is not None:
@@ -79,7 +79,7 @@ def resolve_workspace_runtime_paths(settings: Settings, workspace_root: Path, pr
     if knowledge.pre_plan.dir is not None:
         knowledge.pre_plan.dir = _resolve_path(knowledge.pre_plan.dir, knowledge.root_dir)
 
-    prompt = settings.openai_agents.prompt
+    prompt = settings.agent_runtime.prompt
     if prompt.agent_template_path is not None:
         prompt.agent_template_path = _resolve_path(prompt.agent_template_path, preset_base)
     if prompt.task_template_path is not None:

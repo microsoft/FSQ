@@ -97,6 +97,25 @@ class InvokeFailureHarness(SuccessfulHarness):
         return "action_error"
 
 
+def test_runner_uses_structural_public_redaction_source():
+    class Resolver:
+        def resolve(self, name):
+            return "private-value"
+
+        def redaction_values(self):
+            return ("private-value",)
+
+    class Harness(InvokeFailureHarness):
+        def invoke_action(self, step, context):
+            raise RuntimeError("failure with private-value")
+
+    runner = StepRunner(Harness(), runtime_secret_store=Resolver())
+    result = runner.run_step("run", ExecutableStep(step_id="one", action_name="tap", kind="action", params={}))
+    assert result.status == "failed"
+    assert "private-value" not in result.model_dump_json()
+    assert all("private-value" not in event.model_dump_json() for event in runner.events)
+
+
 class FileNotFoundInvokeFailureHarness(InvokeFailureHarness):
     def invoke_action(self, step: ExecutableStep, context: HarnessContext) -> HarnessActionResult:
         self.calls.append(f"invoke:{step.action_name}:{context.session_id}")

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from fsq_agent.adapters.coding_agent._openai_runtime import OpenAIAgentsRuntime
+from fsq_agent.adapters.coding_agent._runtime import DefaultCodingAgentRuntime
 from fsq_agent.tools import AgentToolAdapter, AgentToolRegistry, DefaultAgentToolProvider, FileOps
 
 if TYPE_CHECKING:
@@ -22,14 +22,14 @@ def create_coding_agent_runtime(settings: Settings, *, harness_factory: Any | No
     provider = DefaultAgentToolProvider(
         file_ops,
         runtime_secret_settings=settings.runtime_secrets,
-        local_tool_output_settings=settings.openai_agents.local_tool_output,
+        local_tool_output_settings=settings.agent_runtime.local_tool_output,
         runs_dir=settings.output.runs_dir,
     )
     adapter = AgentToolAdapter(
         AgentToolRegistry.from_providers([provider]),
-        local_tool_output_settings=settings.openai_agents.local_tool_output,
+        local_tool_output_settings=settings.agent_runtime.local_tool_output,
     )
-    return OpenAIAgentsRuntime(settings, adapter, harness_factory=harness_factory)
+    return DefaultCodingAgentRuntime(settings, adapter, harness_factory=harness_factory)
 
 
-__all__ = ["OpenAIAgentsRuntime", "create_coding_agent_runtime"]
+__all__ = ["DefaultCodingAgentRuntime", "create_coding_agent_runtime"]

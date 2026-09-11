@@ -1,21 +1,36 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from __future__ import annotations
+
 import asyncio
 import inspect
 import json
+import logging
 import os
 import re
 import threading
 import time
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import unquote
 
 from fsq_agent._capability_bootstrap import build_capability_registry
 from fsq_agent.adapters.coding_agent._harness_tools import HarnessToolAdapter
 from fsq_agent.agent import CodingAgentPolicy
+from fsq_agent.agent_engine import (
+    AgentEngine,
+    AgentEvent,
+    AgentRequest,
+    AgentResult,
+    EngineError,
+    Model,
+    OutputContract,
+    ToolBinding,
+    ToolCall,
+    ToolOutputEntry,
+    create_agent_engine_for_model,
+)
+from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.config import Settings, validate_runtime_settings
 from fsq_agent.core import (
     ArtifactStore,
@@ -24,8 +39,16 @@ from fsq_agent.core import (
     RuntimeSecretStore,
 )
 from fsq_agent.models import AgentFinalOutput, ConfigurationError, GoalPrePlan, KnowledgeBundle, PlanningError, RunEvent, RunEventSink, SkillBundle, StepResult, Task
-from fsq_agent.providers import build_ai_assertion_evaluator, build_model_provider_session
+from fsq_agent.providers import build_model_provider_session
 from fsq_agent.tools import AgentToolAdapter, ToolArtifactStore
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from pydantic import BaseModel
+
+    from fsq_agent.providers import ModelProviderSession
 
 _RUNTIME_TOOL_NAMES = {
     "read_knowledge_index",
@@ -33,112 +56,77 @@ _RUNTIME_TOOL_NAMES = {
 }
 
 
-def _sdk_failure_metadata(exc: BaseException) -> dict[str, str]:
-    message = str(exc)
-    normalized = message.lower()
-    if "response.incomplete" in normalized and "content_filter" in normalized:
+def _runtime_failure_metadata(exc: BaseException) -> dict[str, str]:
+    if isinstance(exc, EngineError) and exc.category == "incomplete" and exc.reason == "content_filter":
         return {
             "failure_category": "provider_content_filter",
             "failure_reason": "content_filter",
-            "failure_summary": "OpenAI Agents SDK run ended with an incomplete provider response due to content filtering.",
+            "failure_summary": "Agent runtime execution ended with an incomplete provider response due to content filtering.",
         }
-    if "response.incomplete" in normalized or "status=incomplete" in normalized:
+    if isinstance(exc, EngineError) and exc.category == "incomplete":
         return {
             "failure_category": "provider_response_incomplete",
             "failure_reason": "incomplete",
-            "failure_summary": "OpenAI Agents SDK run ended with an incomplete provider response.",
+            "failure_summary": "Agent runtime execution ended with an incomplete provider response.",
         }
     return {
-        "failure_category": "sdk_error",
-        "failure_reason": "sdk_error",
-        "failure_summary": "OpenAI Agents SDK run failed before producing structured verification output.",
+        "failure_category": "agent_runtime_error",
+        "failure_reason": "agent_runtime_error",
+        "failure_summary": "Agent runtime execution failed before producing structured verification output.",
     }
 
 
-class _RecentToolOutputInputFilter:
+class _ToolOutputBudgetFilter:
     def __init__(
         self,
-        sdk_filter: Any | None,
-        recent_tool_outputs: int,
+        recent_inline_outputs: int,
         max_output_chars: int,
-        preview_chars: int,
-        trimmable_tools: set[str] | None,
+        max_total_inline_chars: int,
         artifact_store: ToolArtifactStore | None,
     ) -> None:
-        self.sdk_filter = sdk_filter
-        self.recent_tool_outputs = recent_tool_outputs
+        self.recent_inline_outputs = recent_inline_outputs
         self.max_output_chars = max_output_chars
-        self.preview_chars = preview_chars
-        self.trimmable_tools = trimmable_tools
+        self.max_total_inline_chars = max_total_inline_chars
         self.artifact_store = artifact_store
         self.artifact_paths_by_call_id: dict[str, str] = {}
 
-    def __call__(self, data: Any) -> Any:
-        from agents.run_config import ModelInputData
+    def __call__(self, entries: tuple[ToolOutputEntry, ...]) -> dict[int, str]:
+        if not entries:
+            return {}
+        remaining_inline_chars = self.max_total_inline_chars
+        inline_entry_ids: set[int] = set()
+        recent_entries = entries[-self.recent_inline_outputs :] if self.recent_inline_outputs else ()
+        for entry in reversed(recent_entries):
+            output_chars = len(entry.output)
+            if output_chars <= self.max_output_chars and output_chars <= remaining_inline_chars:
+                inline_entry_ids.add(entry.entry_id)
+                remaining_inline_chars -= output_chars
 
-        model_data = self.sdk_filter(data) if self.sdk_filter else data.model_data
-        items = model_data.input
-        if not items or self.recent_tool_outputs < 0:
-            return model_data
+        replacements: dict[int, str] = {}
+        for entry in entries:
+            if entry.entry_id in inline_entry_ids:
+                continue
+            display_name = entry.tool_name or "tool"
+            artifact_path = self._artifact_path_for(entry)
+            if artifact_path:
+                replacements[entry.entry_id] = f"[Historical {display_name} output stored as artifact. Artifact path: {artifact_path}. Content chars: {len(entry.output)}.]"
+            else:
+                replacements[entry.entry_id] = f"[Historical {display_name} output omitted because artifact storage is unavailable. Content chars: {len(entry.output)}.]"
+        return replacements
 
-        call_id_to_names = self._call_id_to_names(items)
-        output_indices = [index for index, item in enumerate(items) if isinstance(item, dict) and item.get("type") == "function_call_output"]
-        protected = set(output_indices[-self.recent_tool_outputs :]) if self.recent_tool_outputs else set()
-        new_items: list[Any] = []
-        for index, item in enumerate(items):
-            if not isinstance(item, dict) or item.get("type") != "function_call_output":
-                new_items.append(item)
-                continue
-            tool_names = call_id_to_names.get(str(item.get("call_id") or item.get("id") or ""), set())
-            output = item.get("output", "")
-            output_text = output if isinstance(output, str) else str(output)
-            is_sensitive = self._is_sensitive_tool_output(output_text)
-            artifact_path = self._artifact_path_for(item, tool_names, output_text)
-            if index in protected and len(output_text) <= self.max_output_chars:
-                new_items.append(item)
-                continue
-            if is_sensitive:
-                trimmed_item = dict(item)
-                display_name = next(iter(tool_names), "tool")
-                trimmed_item["output"] = f"[Sensitive historical {display_name} output omitted.]"
-                new_items.append(trimmed_item)
-                continue
-            if self.trimmable_tools and not tool_names.intersection(self.trimmable_tools):
-                new_items.append(item)
-                continue
-            if len(output_text) <= self.max_output_chars:
-                new_items.append(item)
-                continue
-            trimmed_item = dict(item)
-            display_name = next(iter(tool_names), "tool")
-            preview = output_text[: self.preview_chars]
-            artifact_line = f" Artifact path: {artifact_path}." if artifact_path else ""
-            trimmed_item["output"] = f"[Trimmed historical {display_name} output: {len(output_text)} chars, preview follows].{artifact_line}\n{preview}..."
-            new_items.append(trimmed_item)
-        return ModelInputData(input=new_items, instructions=model_data.instructions)
-
-    def _call_id_to_names(self, items: list[Any]) -> dict[str, set[str]]:
-        mapping: dict[str, set[str]] = {}
-        for item in items:
-            if not isinstance(item, dict) or item.get("type") != "function_call":
-                continue
-            call_id = str(item.get("call_id") or item.get("id") or "")
-            if not call_id:
-                continue
-            names = {str(value) for value in (item.get("name"), item.get("tool_name")) if value}
-            mapping[call_id] = names
-        return mapping
-
-    def _artifact_path_for(self, item: dict[str, Any], tool_names: set[str], output_text: str) -> str | None:
-        if self._is_sensitive_tool_output(output_text):
-            return None
-        if not self.artifact_store:
-            return None
-        call_id = str(item.get("call_id") or item.get("id") or "")
+    def _artifact_path_for(self, entry: ToolOutputEntry) -> str | None:
+        call_id = entry.call_id or ""
         if call_id in self.artifact_paths_by_call_id:
             return self.artifact_paths_by_call_id[call_id]
-        tool_name = next(iter(tool_names), "sdk_tool")
-        path = self.artifact_store.write(tool_name, output_text, {"source": "model_input_filter", "call_id": call_id})
+        existing_path = self._existing_artifact_path(entry.output)
+        if existing_path:
+            if call_id:
+                self.artifact_paths_by_call_id[call_id] = existing_path
+            return existing_path
+        if not self.artifact_store:
+            return None
+        tool_name = entry.tool_name or "runtime_tool"
+        path = self.artifact_store.write(tool_name, entry.output, {"source": "model_input_filter", "call_id": call_id})
         if not path:
             return None
         artifact_path = str(path)
@@ -146,35 +134,35 @@ class _RecentToolOutputInputFilter:
             self.artifact_paths_by_call_id[call_id] = artifact_path
         return artifact_path
 
-    def _is_sensitive_tool_output(self, output_text: str) -> bool:
+    def _existing_artifact_path(self, output_text: str) -> str | None:
         try:
             payload = json.loads(output_text)
         except json.JSONDecodeError:
-            return False
-        return self._has_sensitive_marker(payload)
-
-    def _has_sensitive_marker(self, value: Any) -> bool:
-        if isinstance(value, dict):
-            if value.get("sensitive") is True:
-                return True
-            return any(self._has_sensitive_marker(item) for item in value.values())
-        if isinstance(value, list):
-            return any(self._has_sensitive_marker(item) for item in value)
-        return False
+            return None
+        if not isinstance(payload, dict):
+            return None
+        artifact = payload.get("artifact")
+        if not isinstance(artifact, dict):
+            return None
+        path = artifact.get("path")
+        return path if isinstance(path, str) and path else None
 
 
-class OpenAIAgentsRuntime:
+class DefaultCodingAgentRuntime:
     def __init__(
         self,
         settings: Settings,
         tool_factory: AgentToolAdapter,
         harness_factory: Callable[[str], HarnessInterface] | None = None,
         policy: CodingAgentPolicy | None = None,
+        *,
+        engine: AgentEngine | None = None,
     ) -> None:
         self.settings = settings
         self.policy = policy or CodingAgentPolicy()
         self.tool_factory = tool_factory
         self.harness_factory = harness_factory
+        self._engine = engine
         self._agent_tool_names = self._discover_agent_tool_names(tool_factory)
         self._harness_tool_names: set[str] = set()
         self._harness_tool_schemas: dict[str, Any] = {}
@@ -212,15 +200,9 @@ class OpenAIAgentsRuntime:
             cancellation_check()
         validate_runtime_settings(self.settings)
         started = time.perf_counter()
-        try:
-            from agents import Agent, FunctionTool, OpenAIProvider, RunConfig, Runner, set_tracing_disabled
-            from agents.extensions import ToolOutputTrimmer
-            from agents.model_settings import ModelSettings
-            from openai import AsyncOpenAI
-        except ImportError as exc:
-            raise ConfigurationError("openai-agents and openai packages are required when SDK runtime is enabled.") from exc
-
         provider_session = None
+        harness = None
+        primary_failure = False
         result = None
         usage_event_emitted = False
         try:
@@ -231,11 +213,10 @@ class OpenAIAgentsRuntime:
                     task_id=task.id,
                     type="planning_update",
                     title="Runtime startup started",
-                    message="Preparing provider, harness, tools, and SDK agent for main execution.",
+                    message="Preparing provider, harness, tools, and agent runtime for main execution.",
                     payload={"platform": self.settings.harness.platform},
                 ),
             )
-            set_tracing_disabled(self._sdk_tracing_disabled())
             await self._emit(
                 event_sink,
                 RunEvent(
@@ -244,11 +225,11 @@ class OpenAIAgentsRuntime:
                     type="planning_update",
                     title="Provider setup started",
                     message="Creating the configured model provider session.",
-                    payload={"provider": self.settings.openai_agents.provider, "model": self.settings.openai_agents.model},
+                    payload={"provider": self.settings.agent_runtime.provider, "model": self.settings.agent_runtime.model},
                 ),
             )
             provider_session = build_model_provider_session(self.settings)
-            provider = provider_session.create_agents_provider(openai_provider_type=OpenAIProvider, async_openai_type=AsyncOpenAI)
+            model = provider_session.get_model()
             await self._emit(
                 event_sink,
                 RunEvent(
@@ -257,7 +238,7 @@ class OpenAIAgentsRuntime:
                     type="planning_update",
                     title="Provider setup completed",
                     message="Model provider session is ready for the main execution agent.",
-                    payload={"provider": self.settings.openai_agents.provider, "model": self.settings.openai_agents.model},
+                    payload={"provider": self.settings.agent_runtime.provider, "model": self.settings.agent_runtime.model},
                 ),
             )
             try:
@@ -291,7 +272,7 @@ class OpenAIAgentsRuntime:
                         task_id=task.id,
                         type="planning_update",
                         title="Tool setup started",
-                        message="Building AgentTools and platform tools for the SDK agent.",
+                        message="Building AgentTools and platform tools for the agent runtime.",
                     ),
                 )
                 harness_adapter = HarnessToolAdapter(
@@ -307,13 +288,12 @@ class OpenAIAgentsRuntime:
                 self._harness_tool_names = harness_adapter.tool_names
                 self._harness_tool_schemas = harness_adapter.schemas_by_name
                 agent_tools = self.tool_factory.build_tools(
-                    FunctionTool,
                     run_id=run_id,
                     task_id=task.id,
                     event_sink=None,
                     runner_invoker=harness_adapter.run_step_with_capability_result,
                 )
-                harness_tools = harness_adapter.build_tools(FunctionTool)
+                harness_tools = harness_adapter.build_tools()
                 await self._emit(
                     event_sink,
                     RunEvent(
@@ -321,17 +301,17 @@ class OpenAIAgentsRuntime:
                         task_id=task.id,
                         type="planning_update",
                         title="Tool setup completed",
-                        message="SDK tools are ready for main execution.",
+                        message="AgentTools and platform tools are ready for main execution.",
                         payload={"agent_tool_count": len(agent_tools), "platform_tool_count": len(harness_tools)},
                     ),
                 )
-                agent = Agent(
+                request = self._build_request(
                     name=self.settings.agent.name,
-                    model=self.settings.openai_agents.model,
-                    model_settings=ModelSettings(reasoning={"effort": "medium"}, verbosity="medium"),
                     instructions=self._build_instructions(knowledge, skills),
+                    model_input=self._build_task_input(task),
                     tools=[*agent_tools, *harness_tools],
                     output_type=AgentFinalOutput,
+                    run_id=run_id,
                 )
                 await self._emit(
                     event_sink,
@@ -339,7 +319,7 @@ class OpenAIAgentsRuntime:
                         run_id=run_id,
                         task_id=task.id,
                         type="planning_update",
-                        title="SDK agent ready",
+                        title="Agent runtime ready",
                         message="Main execution agent is ready to start streamed planning.",
                         payload={"tool_count": len(agent_tools) + len(harness_tools)},
                     ),
@@ -354,24 +334,16 @@ class OpenAIAgentsRuntime:
                         message="The agent is deriving success criteria and preparing the first actions.",
                     ),
                 )
-                result = Runner.run_streamed(
-                    agent,
-                    input=self._build_task_input(task),
-                    max_turns=self.settings.openai_agents.max_turns,
-                    run_config=self._build_run_config(RunConfig, ToolOutputTrimmer, provider, run_id),
-                )
-                async for event in result.stream_events():
-                    run_event = self._map_stream_event(event, run_id, task.id)
-                    if run_event:
-                        await self._emit(event_sink, run_event)
+                result = await self._run_agent(model, request, run_id, task.id, event_sink)
                 usage_event = self._dynamic_agent_token_usage_event(result, run_id, task.id)
                 if usage_event is not None:
                     usage_event_emitted = True
                     await self._emit(event_sink, usage_event)
-            # SDK and provider packages raise implementation-specific exceptions that become failed steps.
+            # Engine and provider packages raise implementation-specific exceptions that become failed steps.
             except Exception as exc:  # noqa: BLE001
+                primary_failure = True
                 duration_ms = int((time.perf_counter() - started) * 1000)
-                failure_metadata = _sdk_failure_metadata(exc)
+                failure_metadata = _runtime_failure_metadata(exc)
                 error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
                 if result is not None and not usage_event_emitted:
                     usage_event = self._dynamic_agent_token_usage_event(result, run_id, task.id)
@@ -384,7 +356,7 @@ class OpenAIAgentsRuntime:
                         run_id=run_id,
                         task_id=task.id,
                         type="run_failed",
-                        title="SDK run failed",
+                        title="Agent run failed",
                         message=error_message,
                         duration_ms=duration_ms,
                         payload=failure_metadata,
@@ -397,14 +369,15 @@ class OpenAIAgentsRuntime:
                         actual_outcome=failure_metadata["failure_summary"],
                         duration_ms=duration_ms,
                         error=error_message,
-                        tool_name="openai_agents.runner",
+                        tool_name="agent_runtime.runner",
                         tool_output=failure_metadata,
                     )
                 ]
         # Runtime startup dependencies may fail with package-specific exceptions that become failed steps.
         except Exception as exc:  # noqa: BLE001
+            primary_failure = True
             duration_ms = int((time.perf_counter() - started) * 1000)
-            failure_metadata = _sdk_failure_metadata(exc)
+            failure_metadata = _runtime_failure_metadata(exc)
             error_message = self._replace_secret_values(str(exc), self._runtime_secret_values())
             await self._emit(
                 event_sink,
@@ -412,7 +385,7 @@ class OpenAIAgentsRuntime:
                     run_id=run_id,
                     task_id=task.id,
                     type="run_failed",
-                    title="SDK run failed",
+                    title="Agent run failed",
                     message=error_message,
                     duration_ms=duration_ms,
                     payload=failure_metadata,
@@ -425,23 +398,23 @@ class OpenAIAgentsRuntime:
                     actual_outcome=failure_metadata["failure_summary"],
                     duration_ms=duration_ms,
                     error=error_message,
-                    tool_name="openai_agents.runner",
+                    tool_name="agent_runtime.runner",
                     tool_output=failure_metadata,
                 )
             ]
-        except (asyncio.CancelledError, KeyboardInterrupt):
+        except BaseException:
+            primary_failure = True
             if result is not None and not usage_event_emitted:
                 usage_event = self._dynamic_agent_token_usage_event(result, run_id, task.id)
                 if usage_event is not None:
                     usage_event_emitted = True
                     try:
                         await self._emit(event_sink, usage_event)
-                    except Exception:  # noqa: BLE001, S110 - cancellation remains primary if diagnostics cannot persist.
-                        pass
+                    except BaseException as diagnostic_error:  # noqa: BLE001 - cancellation remains primary.
+                        logging.getLogger(__name__).warning("Cancellation diagnostics failed (%s)", type(diagnostic_error).__name__)
             raise
         finally:
-            if provider_session is not None:
-                await provider_session.close()
+            await self._finish_cleanup(self._dispose_run(harness, provider_session), failed=primary_failure)
 
         duration_ms = int((time.perf_counter() - started) * 1000)
         if result is None:
@@ -449,16 +422,16 @@ class OpenAIAgentsRuntime:
                 StepResult(
                     step_id=1,
                     status="failed",
-                    actual_outcome="OpenAI Agents SDK run ended before producing a streamed result.",
+                    actual_outcome="Agent runtime execution ended before producing a streamed result.",
                     duration_ms=duration_ms,
-                    error="OpenAI Agents SDK run ended before producing a streamed result.",
-                    tool_name="openai_agents.runner",
+                    error="Agent runtime execution ended before producing a streamed result.",
+                    tool_name="agent_runtime.runner",
                 )
             ]
         final_output = self.policy.coerce_agent_final_output(result.final_output) or str(result.final_output)
         final_output = self._redact_runtime_secrets(final_output)
         serialized_final_output = self.policy.serialize_agent_final_output(final_output)
-        pre_plan_steps = self._build_pre_plan_step_results(final_output, duration_ms)
+        pre_plan_steps = self._build_pre_plan_step_results(final_output)
         structured_steps = pre_plan_steps
         return [
             *structured_steps,
@@ -467,7 +440,7 @@ class OpenAIAgentsRuntime:
                 status="success",
                 actual_outcome=serialized_final_output,
                 duration_ms=duration_ms,
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
                 tool_output=final_output.model_dump(mode="json") if isinstance(final_output, AgentFinalOutput) else serialized_final_output,
             ),
         ]
@@ -477,38 +450,58 @@ class OpenAIAgentsRuntime:
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[HarnessInterface] = loop.create_future()
+        lock = threading.Lock()
+        abandoned = False
+        unclaimed = None
 
         def set_result(harness: HarnessInterface) -> None:
             if not future.done():
                 future.set_result(harness)
 
-        def set_exception(exc: Exception) -> None:
+        def set_exception(exc: BaseException) -> None:
             if not future.done():
                 future.set_exception(exc)
 
         def build_harness() -> None:
+            nonlocal unclaimed
             try:
                 harness = self._build_harness(run_id)
-            # Backend construction failures must be forwarded from the worker thread to the event loop.
-            except Exception as exc:  # noqa: BLE001
+            except BaseException as exc:  # noqa: BLE001 - forward constructor failures from the worker.
                 try:
                     loop.call_soon_threadsafe(set_exception, exc)
                 except RuntimeError:
                     pass
             else:
+                with lock:
+                    if not abandoned:
+                        try:
+                            loop.call_soon_threadsafe(set_result, harness)
+                        except RuntimeError:
+                            pass
+                        else:
+                            unclaimed = harness
+                            return
                 try:
-                    loop.call_soon_threadsafe(set_result, harness)
-                except RuntimeError:
-                    pass
+                    harness.close()
+                except BaseException as cleanup_error:  # noqa: BLE001 - the caller has already timed out or cancelled.
+                    logging.getLogger(__name__).warning("Late Harness disposal failed (%s)", type(cleanup_error).__name__)
 
         threading.Thread(target=build_harness, name=f"fsq-harness-setup-{run_id}", daemon=True).start()
         try:
-            return await asyncio.wait_for(future, timeout=timeout_seconds)
-        except TimeoutError as exc:
-            if future.done() and not future.cancelled():
-                raise
-            future.cancel()
-            raise TimeoutError(f"Harness setup timed out after {timeout_seconds} seconds.") from exc
+            harness = await asyncio.wait_for(future, timeout=timeout_seconds)
+        except BaseException as exc:
+            with lock:
+                abandoned = True
+                harness, unclaimed = unclaimed, None
+            if harness is not None:
+                await self._finish_cleanup(asyncio.to_thread(harness.close), failed=True)
+            if isinstance(exc, TimeoutError) and future.cancelled():
+                raise TimeoutError(f"Harness setup timed out after {timeout_seconds} seconds.") from exc
+            raise
+        else:
+            with lock:
+                unclaimed = None
+            return harness
 
     def _harness_setup_payload(self, harness: HarnessInterface | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -578,14 +571,6 @@ class OpenAIAgentsRuntime:
         validate_runtime_settings(self.settings)
         task_id = "pre-plan"
         started = time.perf_counter()
-        try:
-            from agents import Agent, FunctionTool, OpenAIProvider, RunConfig, Runner, set_tracing_disabled
-            from agents.extensions import ToolOutputTrimmer
-            from agents.model_settings import ModelSettings
-            from openai import AsyncOpenAI
-        except ImportError as exc:
-            raise ConfigurationError("openai-agents and openai packages are required when SDK runtime is enabled.") from exc
-
         await self._emit(
             event_sink,
             RunEvent(
@@ -596,21 +581,16 @@ class OpenAIAgentsRuntime:
                 message="Generating key actions from the planning reference and page knowledge.",
             ),
         )
-        set_tracing_disabled(self._sdk_tracing_disabled())
         provider_session = build_model_provider_session(self.settings)
-        provider = provider_session.create_agents_provider(openai_provider_type=OpenAIProvider, async_openai_type=AsyncOpenAI)
+        result = None
         try:
-            agent = Agent(
+            model = provider_session.get_model()
+            request = self._build_request(
                 name=f"{self.settings.agent.name} pre-planner",
-                model=self.settings.openai_agents.model,
-                model_settings=ModelSettings(reasoning={"effort": "medium"}, verbosity="medium"),
                 instructions=self.policy.pre_plan_instructions,
-                tools=self._build_pre_plan_tools(FunctionTool),
+                tools=self._build_pre_plan_tools(),
                 output_type=GoalPrePlan,
-            )
-            result = Runner.run_streamed(
-                agent,
-                input=self.policy.build_pre_plan_input(
+                model_input=self.policy.build_pre_plan_input(
                     reference_text,
                     knowledge,
                     skills,
@@ -619,13 +599,9 @@ class OpenAIAgentsRuntime:
                     runtime_secret_names=list(self._runtime_secret_store().available_names()),
                     runtime_secret_warnings=list(self._runtime_secret_store().warnings()),
                 ),
-                max_turns=self.settings.openai_agents.max_turns,
-                run_config=self._build_run_config(RunConfig, ToolOutputTrimmer, provider, run_id),
+                run_id=run_id,
             )
-            async for event in result.stream_events():
-                run_event = self._map_stream_event(event, run_id, task_id)
-                if run_event:
-                    await self._emit(event_sink, run_event)
+            result = await self._run_agent(model, request, run_id, task_id, event_sink)
         except Exception as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             await self._emit(
@@ -641,7 +617,7 @@ class OpenAIAgentsRuntime:
             )
             raise PlanningError("Goal pre-plan failed before producing structured output.", context={"error": str(exc)}) from exc
         finally:
-            await provider_session.close()
+            await self._close_provider_session(provider_session, failed=result is None)
 
         pre_plan = result.final_output
         if isinstance(pre_plan, GoalPrePlan):
@@ -653,24 +629,24 @@ class OpenAIAgentsRuntime:
         except Exception as exc:
             raise PlanningError("Goal pre-plan output did not match the expected schema.") from exc
 
-    def _build_pre_plan_tools(self, function_tool_cls: Any) -> list[Any]:
+    def _build_pre_plan_tools(self) -> list[ToolBinding]:
         return [
-            function_tool_cls(
+            ToolBinding(
                 name="read_knowledge_index",
                 description=(
                     "Read available pre-plan knowledge entries, including project.md and the page index when present. "
                     "Use this to reload project guidance or resolve page ids before loading page details."
                 ),
-                params_json_schema=self.policy.read_knowledge_index_schema.model_json_schema(),
-                on_invoke_tool=self._read_knowledge_index_tool,
+                parameters_schema=self.policy.read_knowledge_index_schema.model_json_schema(),
+                invoke=self._read_knowledge_index_tool,
             ),
-            function_tool_cls(
+            ToolBinding(
                 name="read_knowledge_page",
                 description=(
                     "Read one optional page knowledge node from the pre-plan knowledge directory by page_id or relative file path. Use this only for pages needed to continue the goal action chain."
                 ),
-                params_json_schema=self.policy.read_knowledge_page_schema.model_json_schema(),
-                on_invoke_tool=self._read_knowledge_page_tool,
+                parameters_schema=self.policy.read_knowledge_page_schema.model_json_schema(),
+                invoke=self._read_knowledge_page_tool,
             ),
         ]
 
@@ -699,51 +675,59 @@ class OpenAIAgentsRuntime:
             ("index.md", self._pre_plan_knowledge_dir() / "index.md"),
         ]
 
-    async def _read_knowledge_index_tool(self, _ctx: Any, args: str) -> str:
-        self.policy.read_knowledge_index_schema.model_validate_json(args or "{}")
+    async def _read_knowledge_index_tool(self, call: ToolCall) -> str:
+        try:
+            self.policy.read_knowledge_index_schema.model_validate(call.arguments)
+        except ValueError:
+            return json.dumps({"ok": False, "error": "Invalid knowledge index arguments."}, ensure_ascii=False)
         entries: list[dict[str, str]] = []
         for entry_path, path in self._pre_plan_entry_paths():
-            if not path.exists():
-                continue
             try:
+                if not path.exists():
+                    continue
                 entries.append({"path": entry_path, "content": path.read_text(encoding="utf-8")})
-            except OSError as exc:
-                return json.dumps({"ok": False, "error": str(exc), "path": entry_path}, ensure_ascii=False)
+            except (OSError, ValueError):
+                return json.dumps({"ok": False, "error": "Knowledge entry could not be read.", "path": entry_path}, ensure_ascii=False)
         content = "\n\n".join(f"--- {entry['path']} ---\n{entry['content']}" for entry in entries)
         path = entries[0]["path"] if entries else None
         return json.dumps({"ok": True, "path": path, "content": content, "entries": entries}, ensure_ascii=False)
 
-    async def _read_knowledge_page_tool(self, _ctx: Any, args: str) -> str:
-        parsed = self.policy.read_knowledge_page_schema.model_validate_json(args or "{}")
-        relative_path = None
-        if parsed.file:
-            relative_path = self.policy.safe_page_relative_path(parsed.file)
-        elif parsed.page_id:
-            knowledge_dir = self._pre_plan_knowledge_dir()
-            index_path = knowledge_dir / "index.md"
-            index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
-            indexed_file = self.policy.page_file_from_index(index_text, parsed.page_id)
-            relative_path = self.policy.safe_page_relative_path(indexed_file or f"{parsed.page_id}.md")
-        knowledge_dir = self._pre_plan_knowledge_dir()
-        if relative_path is None:
-            return json.dumps(
-                {"ok": False, "error": "A safe page_id or relative page file is required.", "page_id": parsed.page_id, "file": parsed.file},
-                ensure_ascii=False,
-            )
-        path = (knowledge_dir / relative_path).resolve()
+    async def _read_knowledge_page_tool(self, call: ToolCall) -> str:
         try:
-            path.relative_to(knowledge_dir.resolve())
+            parsed = self.policy.read_knowledge_page_schema.model_validate(call.arguments)
         except ValueError:
-            return json.dumps({"ok": False, "error": "Resolved page path escaped the knowledge directory."}, ensure_ascii=False)
-        if not path.exists() or not path.is_file():
+            return json.dumps({"ok": False, "error": "Invalid knowledge page arguments."}, ensure_ascii=False)
+        relative_path = None
+        knowledge_dir = self._pre_plan_knowledge_dir()
+        try:
+            if parsed.file:
+                relative_path = self.policy.safe_page_relative_path(parsed.file)
+            elif parsed.page_id:
+                index_path = knowledge_dir / "index.md"
+                index_text = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
+                indexed_file = self.policy.page_file_from_index(index_text, parsed.page_id)
+                relative_path = self.policy.safe_page_relative_path(indexed_file or f"{parsed.page_id}.md")
+            if relative_path is None:
+                return json.dumps(
+                    {"ok": False, "error": "A safe page_id or relative page file is required.", "page_id": parsed.page_id, "file": parsed.file},
+                    ensure_ascii=False,
+                )
+            path = (knowledge_dir / relative_path).resolve()
+            try:
+                path.relative_to(knowledge_dir.resolve())
+            except ValueError:
+                return json.dumps({"ok": False, "error": "Resolved page path escaped the knowledge directory."}, ensure_ascii=False)
+            if not path.exists() or not path.is_file():
+                return json.dumps(
+                    {"ok": False, "error": "Knowledge page not found.", "page_id": parsed.page_id, "path": str(relative_path).replace("\\", "/")},
+                    ensure_ascii=False,
+                )
+            content = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
             return json.dumps(
-                {"ok": False, "error": "Knowledge page not found.", "page_id": parsed.page_id, "path": str(relative_path).replace("\\", "/")},
+                {"ok": False, "error": "Knowledge page could not be read.", "path": str(relative_path).replace("\\", "/") if relative_path is not None else "index.md"},
                 ensure_ascii=False,
             )
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            return json.dumps({"ok": False, "error": str(exc), "path": str(relative_path).replace("\\", "/")}, ensure_ascii=False)
         return json.dumps(
             {"ok": True, "page_id": parsed.page_id, "path": str(relative_path).replace("\\", "/"), "content": content},
             ensure_ascii=False,
@@ -759,14 +743,6 @@ class OpenAIAgentsRuntime:
     ) -> list[StepResult]:
         validate_runtime_settings(self.settings)
         started = time.perf_counter()
-        try:
-            from agents import Agent, OpenAIProvider, RunConfig, Runner, set_tracing_disabled
-            from agents.extensions import ToolOutputTrimmer
-            from agents.model_settings import ModelSettings
-            from openai import AsyncOpenAI
-        except ImportError as exc:
-            raise ConfigurationError("openai-agents and openai packages are required when SDK runtime is enabled.") from exc
-
         await self._emit(
             event_sink,
             RunEvent(
@@ -779,29 +755,20 @@ class OpenAIAgentsRuntime:
         )
         evidence_input = self.policy.build_verification_input(task, execution_results, events_path)
         evidence_input = self._replace_secret_values(evidence_input, self._runtime_secret_values())
-        set_tracing_disabled(self._sdk_tracing_disabled())
         provider_session = build_model_provider_session(self.settings)
-        provider = provider_session.create_agents_provider(openai_provider_type=OpenAIProvider, async_openai_type=AsyncOpenAI)
+        result = None
         try:
-            agent = Agent(
+            model = provider_session.get_model()
+            request = self._build_request(
                 name=f"{self.settings.agent.name} verifier",
-                model=self.settings.openai_agents.model,
-                model_settings=ModelSettings(reasoning={"effort": "medium"}, verbosity="medium"),
                 instructions=self.policy.verification_instructions,
                 tools=[],
                 output_type=AgentFinalOutput,
+                model_input=evidence_input,
+                run_id=run_id,
             )
-            result = Runner.run_streamed(
-                agent,
-                input=evidence_input,
-                max_turns=self.settings.openai_agents.max_turns,
-                run_config=self._build_run_config(RunConfig, ToolOutputTrimmer, provider, run_id),
-            )
-            async for event in result.stream_events():
-                run_event = self._map_stream_event(event, run_id, task.id)
-                if run_event:
-                    await self._emit(event_sink, run_event)
-        # Verifier SDK/provider failures must become reportable verification step failures.
+            result = await self._run_agent(model, request, run_id, task.id, event_sink)
+        # Verifier engine/provider failures must become reportable verification step failures.
         except Exception as exc:  # noqa: BLE001
             duration_ms = int((time.perf_counter() - started) * 1000)
             return [
@@ -811,11 +778,11 @@ class OpenAIAgentsRuntime:
                     actual_outcome="Evidence-based verifier agent failed before producing structured output.",
                     duration_ms=duration_ms,
                     error=self._replace_secret_values(str(exc), self._runtime_secret_values()),
-                    tool_name="openai_agents.verifier",
+                    tool_name="agent_runtime.verifier",
                 )
             ]
         finally:
-            await provider_session.close()
+            await self._close_provider_session(provider_session, failed=result is None)
 
         duration_ms = int((time.perf_counter() - started) * 1000)
         final_output = self.policy.coerce_agent_final_output(result.final_output) or str(result.final_output)
@@ -827,10 +794,54 @@ class OpenAIAgentsRuntime:
                 status="success",
                 actual_outcome=serialized_final_output,
                 duration_ms=duration_ms,
-                tool_name="openai_agents.verifier",
+                tool_name="agent_runtime.verifier",
                 tool_output=final_output.model_dump(mode="json") if isinstance(final_output, AgentFinalOutput) else serialized_final_output,
             )
         ]
+
+    async def _close_provider_session(self, session: ModelProviderSession, *, failed: bool) -> None:
+        await self._finish_cleanup(session.close(), failed=failed)
+
+    async def _dispose_run(self, harness, session) -> None:
+        failure = None
+        if harness is not None:
+            try:
+                await asyncio.to_thread(harness.close)
+            except BaseException as exc:  # noqa: BLE001 - attempt Provider cleanup even after Harness failure.
+                failure = exc
+        if session is not None:
+            try:
+                await session.close()
+            except BaseException as exc:  # noqa: BLE001 - preserve the first disposal failure.
+                if failure is None:
+                    failure = exc
+                else:
+                    logging.getLogger(__name__).warning("Additional Provider disposal failed (%s)", type(exc).__name__)
+        if failure is not None:
+            raise failure
+
+    async def _finish_cleanup(self, operation, *, failed: bool) -> None:
+        async def capture_failure():
+            try:
+                await operation
+            except BaseException as exc:  # noqa: BLE001 - preserve exact exceptions across task shielding.
+                return exc
+            return None
+
+        cleanup = asyncio.create_task(capture_failure())
+        cancellation = None
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError as exc:
+                cancellation = cancellation or exc
+        cleanup_error = cleanup.result()
+        if cleanup_error is not None:
+            if not failed and cancellation is None:
+                raise cleanup_error
+            logging.getLogger(__name__).warning("Runtime cleanup failed (%s)", type(cleanup_error).__name__)
+        if cancellation is not None and not failed:
+            raise cancellation
 
     async def _emit(self, event_sink: RunEventSink | None, event: RunEvent) -> None:
         if not event_sink:
@@ -840,21 +851,18 @@ class OpenAIAgentsRuntime:
             await result
 
     def _dynamic_agent_token_usage_event(self, result: Any, run_id: str, task_id: str) -> RunEvent | None:
-        context_wrapper = getattr(result, "context_wrapper", None)
-        usage = getattr(context_wrapper, "usage", None)
+        usage = getattr(result, "usage", None)
         if usage is None:
             return None
-        input_details = getattr(usage, "input_tokens_details", None)
-        output_details = getattr(usage, "output_tokens_details", None)
         payload = {
-            "provider": self.settings.openai_agents.provider,
-            "model": self.settings.openai_agents.model,
+            "provider": self.settings.agent_runtime.provider,
+            "model": self.settings.agent_runtime.model,
             "requests": getattr(usage, "requests", None),
             "input_tokens": getattr(usage, "input_tokens", None),
             "output_tokens": getattr(usage, "output_tokens", None),
             "total_tokens": getattr(usage, "total_tokens", None),
-            "cached_input_tokens": getattr(input_details, "cached_tokens", None),
-            "reasoning_tokens": getattr(output_details, "reasoning_tokens", None),
+            "cached_input_tokens": getattr(usage, "cached_input_tokens", None),
+            "reasoning_tokens": getattr(usage, "reasoning_tokens", None),
         }
         reported = {key: value for key, value in payload.items() if value is not None}
         if not any(key in reported for key in ("requests", "input_tokens", "output_tokens", "total_tokens")):
@@ -864,42 +872,52 @@ class OpenAIAgentsRuntime:
             task_id=task_id,
             type="dynamic_agent_token_usage",
             title="Dynamic Agent token usage",
-            message="OpenAI Agents SDK usage for the Dynamic Agent main execution.",
+            message="Provider usage for the Dynamic Agent main execution.",
             payload=reported,
         )
 
-    def _sdk_tracing_disabled(self) -> bool:
-        if not self.settings.openai_agents.tracing_enabled:
+    def _tracing_disabled(self) -> bool:
+        if not self.settings.agent_runtime.tracing_enabled:
             return True
         export_api_key = os.getenv("OPENAI_API_KEY")
         return not bool(export_api_key and export_api_key.strip())
 
-    def _build_run_config(self, run_config_cls: Any, tool_output_trimmer_cls: Any, provider: Any, run_id: str = "") -> Any:
-        trimming = self.settings.openai_agents.context_trimming
-        local_output = self.settings.openai_agents.local_tool_output
-        input_filter = None
-        if trimming.enabled:
-            trimmable_tools = set(trimming.trimmable_tools) if trimming.trimmable_tools else None
-            artifact_store = ToolArtifactStore(self.settings.output.runs_dir, run_id, local_output) if run_id and local_output.artifact_enabled else None
-            sdk_filter = tool_output_trimmer_cls(
-                recent_turns=trimming.recent_turns,
-                max_output_chars=trimming.max_tool_output_chars,
-                preview_chars=trimming.preview_chars,
-                trimmable_tools=frozenset(trimmable_tools) if trimmable_tools else None,
-            )
-            input_filter = _RecentToolOutputInputFilter(
-                sdk_filter,
-                local_output.recent_full_output_count,
-                trimming.max_tool_output_chars,
-                trimming.preview_chars,
-                trimmable_tools,
-                artifact_store,
-            )
-        return run_config_cls(
-            model_provider=provider,
-            call_model_input_filter=input_filter,
-            tracing_disabled=self._sdk_tracing_disabled(),
+    def _build_request(self, *, name: str, instructions: str, model_input: str, tools: list[ToolBinding], output_type: type[BaseModel], run_id: str = "") -> AgentRequest:
+        local_output = self.settings.agent_runtime.local_tool_output
+        artifact_store = ToolArtifactStore(self.settings.output.runs_dir, run_id, local_output) if run_id and local_output.artifact_enabled else None
+        input_filter = _ToolOutputBudgetFilter(
+            local_output.recent_inline_output_count,
+            local_output.full_output_max_chars,
+            local_output.total_inline_output_max_chars,
+            artifact_store,
         )
+        return AgentRequest(
+            name=name,
+            instructions=instructions,
+            input=model_input,
+            tools=tuple(tools),
+            output=OutputContract(name=output_type.__name__, schema=output_type.model_json_schema(), parse=output_type.model_validate_json),
+            max_turns=self.settings.agent_runtime.max_turns,
+            reasoning_effort=self.settings.agent_runtime.reasoning_effort,
+            stream=True,
+            tool_output_filter=input_filter,
+            tracing_enabled=not self._tracing_disabled(),
+        )
+
+    async def _run_agent(self, model: Model, request: AgentRequest, run_id: str, task_id: str, event_sink: RunEventSink | None) -> AgentResult:
+        engine = self._engine if self._engine is not None else create_agent_engine_for_model(model)
+
+        async def on_event(event: AgentEvent) -> None:
+            run_event = self._map_stream_event(event, run_id, task_id)
+            if run_event is not None:
+                await self._emit(event_sink, run_event)
+
+        try:
+            return await engine.run(model, request, on_event=on_event)
+        finally:
+            for key in list(self._stream_tool_calls):
+                if key[:2] == (run_id, task_id):
+                    del self._stream_tool_calls[key]
 
     def _build_harness(self, run_id: str) -> HarnessInterface:
         if self.harness_factory is not None:
@@ -913,21 +931,13 @@ class OpenAIAgentsRuntime:
             app_id=self.settings.harness.android.app_id,
         )
 
-    def _map_stream_event(self, event: Any, run_id: str, task_id: str) -> RunEvent | None:
-        event_type = getattr(event, "type", "")
-        if event_type == "agent_updated_stream_event":
-            new_agent = getattr(event, "new_agent", None)
-            agent_name = getattr(new_agent, "name", "agent")
-            return RunEvent(run_id=run_id, task_id=task_id, type="agent_started", title="Agent updated", message=str(agent_name))
-        if event_type != "run_item_stream_event":
-            return None
-
-        name = getattr(event, "name", "")
-        item = getattr(event, "item", None)
-        if name == "tool_called":
-            tool_name = self._tool_name(item)
-            tool_call_id = self._tool_call_id(item)
-            tool_arguments = self._tool_arguments(item)
+    def _map_stream_event(self, event: AgentEvent, run_id: str, task_id: str) -> RunEvent | None:
+        if event.kind == "agent_started":
+            return RunEvent(run_id=run_id, task_id=task_id, type="agent_started", title="Agent updated", message=event.agent_name or "agent")
+        if event.kind == "tool_called":
+            tool_name = event.tool_name
+            tool_call_id = event.call_id
+            tool_arguments = self._redact(event.arguments)
             if tool_call_id:
                 self._stream_tool_calls[(run_id, task_id, tool_call_id)] = {
                     "tool_name": tool_name,
@@ -950,111 +960,44 @@ class OpenAIAgentsRuntime:
                 task_id=task_id,
                 type="tool_call_started",
                 title="Tool call started",
-                message=self._tool_call_message(item),
+                message=f"Calling {tool_name or 'tool'}.",
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 tool_arguments=tool_arguments,
                 payload=payload,
             )
-        if name == "tool_output":
-            output = getattr(item, "output", None)
+        if event.kind == "tool_output":
+            output = event.output
             payload = self._tool_output_payload(output)
-            tool_call_id = self._tool_call_id(item)
+            tool_call_id = event.call_id
             remembered = self._stream_tool_calls.pop((run_id, task_id, tool_call_id or ""), {})
-            tool_name = payload.get("tool_name") or remembered.get("tool_name") or self._tool_name(item)
+            tool_name = payload.get("tool_name") or remembered.get("tool_name") or event.tool_name
             duration_ms = payload.get("duration_ms")
             return RunEvent(
                 run_id=run_id,
                 task_id=task_id,
                 type="tool_call_completed",
                 title="Tool call completed",
-                message=self._tool_output_message(item),
+                message="Tool returned output.",
                 tool_name=str(tool_name) if tool_name else None,
                 tool_call_id=tool_call_id,
                 duration_ms=duration_ms if isinstance(duration_ms, int) and duration_ms >= 0 else None,
                 tool_output_preview=self._preview(output),
                 payload=payload,
             )
-        if name == "reasoning_item_created":
-            summary = self._reasoning_summary(item)
+        if event.kind == "reasoning_summary":
+            summary = self._preview(event.text) if event.text else None
             if not summary:
                 return None
             return RunEvent(run_id=run_id, task_id=task_id, type="reasoning_summary", title="Reasoning summary", message=summary)
-        if name == "message_output_created":
-            message = self._message_output_text(item)
+        if event.kind == "message":
             return RunEvent(
                 run_id=run_id,
                 task_id=task_id,
                 type="planning_update",
                 title="Agent message",
-                message=self._preview(message if message is not None else getattr(item, "raw_item", item)),
+                message=self._preview(event.text),
             )
-        return None
-
-    def _tool_name(self, item: Any) -> str | None:
-        value = getattr(item, "tool_name", None)
-        if value:
-            return str(value)
-        raw_item = getattr(item, "raw_item", None)
-        if isinstance(raw_item, dict):
-            return raw_item.get("name")
-        return str(getattr(raw_item, "name", "")) or None
-
-    def _tool_call_id(self, item: Any) -> str | None:
-        value = getattr(item, "call_id", None)
-        if value:
-            return str(value)
-        raw_item = getattr(item, "raw_item", None)
-        if isinstance(raw_item, dict):
-            return str(raw_item.get("call_id") or raw_item.get("id") or "") or None
-        return str(getattr(raw_item, "call_id", None) or getattr(raw_item, "id", "")) or None
-
-    def _tool_arguments(self, item: Any) -> dict[str, Any] | str | None:
-        raw_item = getattr(item, "raw_item", None)
-        if isinstance(raw_item, dict):
-            return self._redact(raw_item.get("arguments") or raw_item.get("input") or raw_item)
-        arguments = getattr(raw_item, "arguments", None) or getattr(raw_item, "input", None)
-        return self._redact(arguments) if arguments is not None else None
-
-    def _tool_call_message(self, item: Any) -> str:
-        tool_name = self._tool_name(item) or "tool"
-        return f"Calling {tool_name}."
-
-    def _tool_output_message(self, item: Any) -> str:
-        return "Tool returned output."
-
-    def _reasoning_summary(self, item: Any) -> str | None:
-        raw_item = getattr(item, "raw_item", None)
-        summary = getattr(raw_item, "summary", None)
-        if isinstance(summary, list) and summary:
-            return self._preview(summary)
-        if isinstance(summary, str) and summary:
-            return self._preview(summary)
-        return None
-
-    def _message_output_text(self, item: Any) -> str | None:
-        raw_item = getattr(item, "raw_item", None)
-        candidates = [raw_item, item]
-        for candidate in candidates:
-            if isinstance(candidate, dict):
-                text = candidate.get("text")
-                if isinstance(text, str):
-                    return text
-                content = candidate.get("content")
-                if isinstance(content, list):
-                    text_parts = [part.get("text") for part in content if isinstance(part, dict) and isinstance(part.get("text"), str)]
-                    if text_parts:
-                        return "\n".join(text_parts)
-                continue
-            text = getattr(candidate, "text", None)
-            if isinstance(text, str):
-                return text
-            content = getattr(candidate, "content", None)
-            if isinstance(content, list):
-                parts = [getattr(part, "text", None) for part in content]
-                text_parts = [part for part in parts if isinstance(part, str)]
-                if text_parts:
-                    return "\n".join(text_parts)
         return None
 
     def _preview(self, value: Any, limit: int = 1000) -> str:
@@ -1143,6 +1086,8 @@ class OpenAIAgentsRuntime:
             "cookie",
             "set_cookie",
             "private_value",
+            "private_key",
+            "privatekey",
         }
         secret_values = self._runtime_secret_values()
         if isinstance(value, dict):
@@ -1172,7 +1117,7 @@ class OpenAIAgentsRuntime:
             return steps
         return [step.model_copy(update={"step_id": step.step_id + offset}) for step in steps]
 
-    def _build_pre_plan_step_results(self, final_output: AgentFinalOutput | str, duration_ms: int) -> list[StepResult]:
+    def _build_pre_plan_step_results(self, final_output: AgentFinalOutput | str) -> list[StepResult]:
         payload = self.policy.coerce_agent_final_output(final_output)
         if not payload:
             return []
@@ -1180,7 +1125,7 @@ class OpenAIAgentsRuntime:
         plan_updates = payload.plan_updates
         steps: list[StepResult] = []
         for index, item in enumerate(pre_plan, start=1):
-            steps.append(self._build_pre_plan_step(index, item.model_dump(mode="json"), plan_updates, duration_ms))
+            steps.append(self._build_pre_plan_step(index, item.model_dump(mode="json"), plan_updates))
         return steps
 
     def _build_pre_plan_step(
@@ -1188,7 +1133,6 @@ class OpenAIAgentsRuntime:
         fallback_step_id: int,
         item: dict[str, Any],
         plan_updates: list[str],
-        duration_ms: int,
     ) -> StepResult:
         raw_step_id = item.get("step_id", fallback_step_id)
         step_id = raw_step_id if isinstance(raw_step_id, int) and raw_step_id >= 1 else fallback_step_id
@@ -1205,17 +1149,16 @@ class OpenAIAgentsRuntime:
             step_id=step_id,
             status=status,
             actual_outcome="\n".join(lines),
-            duration_ms=duration_ms,
             tool_name="pre_plan",
             tool_output=item,
         )
 
     def _build_instructions(self, knowledge: KnowledgeBundle, skills: list[SkillBundle]) -> str:
-        prompt = self.settings.openai_agents.prompt
+        prompt = self.settings.agent_runtime.prompt
         return self.policy.build_agent_prompt(prompt, knowledge, skills)
 
     def _build_task_input(self, task: Task, runtime_policy: list[str] | None = None) -> str:
-        prompt = self.settings.openai_agents.prompt
+        prompt = self.settings.agent_runtime.prompt
         store = self._runtime_secret_store()
         return self.policy.build_task_prompt(
             prompt,
@@ -1251,7 +1194,7 @@ class OpenAIAgentsRuntime:
             return None
         try:
             payload = json.loads(text)
-        # Arbitrary malformed SDK tool output is treated as having no artifact reference.
+        # Arbitrary malformed tool output is treated as having no artifact reference.
         except json.JSONDecodeError:
             return None
         if not isinstance(payload, dict):
@@ -1338,6 +1281,6 @@ class OpenAIAgentsRuntime:
             return None
         try:
             return json.loads(text)
-        # Arbitrary malformed SDK tool output is treated as an absent JSON payload.
+        # Arbitrary malformed tool output is treated as an absent JSON payload.
         except json.JSONDecodeError:
             return None

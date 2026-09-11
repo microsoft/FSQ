@@ -4,16 +4,17 @@
 import inspect
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from fsq_agent.agent._events import RunEventEmitter
-from fsq_agent.agent._runtime import CodingAgentRuntime, CodingAgentRuntimeFactory, RunCoordinator
+from fsq_agent.agent._runtime import CodingAgentRuntime, CodingAgentRuntimeFactory
 from fsq_agent.agent._verifier import Verifier
 from fsq_agent.config import Settings
 from fsq_agent.core.interfaces import EvidenceJournalSink
 from fsq_agent.knowledge import PrivateKnowledgeLoader
-from fsq_agent.models import ConfigurationError, DynamicAgentOutcome, KnowledgeBundle, PlanningError, RunEvent, RunEventSink, RunExecutionContext, Task, TaskResult
+from fsq_agent.models import DynamicAgentOutcome, KnowledgeBundle, PlanningError, RunEvent, RunEventSink, RunExecutionContext, Task
 from fsq_agent.observation import ExecutionLogger
 from fsq_agent.providers import refresh_model_provider_session
 from fsq_agent.skills import SkillLoader
@@ -29,7 +30,6 @@ class FsqAgent:
         skill_loader: SkillLoader,
         runtime: CodingAgentRuntime,
         event_logger: ExecutionLogger | None = None,
-        run_coordinator: RunCoordinator | None = None,
     ) -> None:
         self.settings = settings
         self.verifier = verifier
@@ -38,7 +38,6 @@ class FsqAgent:
         self.skill_loader = skill_loader
         self.runtime = runtime
         self.event_logger = event_logger
-        self.run_coordinator = run_coordinator
 
     @classmethod
     def from_settings(
@@ -46,7 +45,6 @@ class FsqAgent:
         settings: Settings,
         runtime_factory: CodingAgentRuntimeFactory,
         harness_factory: Callable[[str], Any] | None = None,
-        run_coordinator: RunCoordinator | None = None,
     ) -> "FsqAgent":
         knowledge = settings.agent_context.knowledge
         knowledge_root = knowledge.root_dir
@@ -63,17 +61,11 @@ class FsqAgent:
             skill_loader,
             runtime_factory(settings, harness_factory=harness_factory),
             event_logger,
-            run_coordinator,
         )
 
     @staticmethod
     def _runtime_secret_values(settings: Settings) -> tuple[str, ...]:
         return tuple(sorted(set(settings.runtime_secrets.private_values().values()), key=len, reverse=True))
-
-    async def run(self, task: Task, event_sink: RunEventSink | None = None) -> TaskResult:
-        if self.run_coordinator is None:
-            raise ConfigurationError("Complete Run execution requires an injected RunCoordinator.")
-        return await self.run_coordinator(task, event_sink)
 
     async def run_in_context(
         self,
@@ -84,11 +76,13 @@ class FsqAgent:
         evidence_sink: EvidenceJournalSink | None = None,
         cancellation_check: Callable[[], None] | None = None,
     ) -> DynamicAgentOutcome:
-        started = time.perf_counter()
         run_id = context.run_id
+        if not run_id.strip() or run_id in {".", ".."} or any(character in run_id for character in "/\\:\x00") or Path(run_id).name != run_id:
+            raise ValueError("Run ID must be a nonempty single path component.")
+        started = time.perf_counter()
         emitter = RunEventEmitter(self.event_logger, event_sink, secret_values=self._runtime_secret_values(self.settings))
-        await emitter.emit(RunEvent(run_id=run_id, task_id=task.id, type="run_started", title="Run started", message=task.name))
         try:
+            await emitter.emit(RunEvent(run_id=run_id, task_id=task.id, type="run_started", title="Run started", message=task.name))
             knowledge = self.knowledge_loader.load_for_task(task)
             skills = self.skill_loader.load(self.settings.skills)
             await emitter.emit(
@@ -121,16 +115,16 @@ class FsqAgent:
                 verification=verification,
                 duration_ms=int((time.perf_counter() - started) * 1000),
                 errors=[
-                    {"category": "runtime_error", "message": step.error or "Runtime failed."} for step in results if step.status == "failed" and step.tool_name in {"openai_agents.runner", "runtime"}
+                    {"category": "agent_runtime_error", "message": step.error or "Runtime failed."}
+                    for step in results
+                    if step.status == "failed" and step.tool_name in {"agent_runtime.runner", "runtime"}
                 ],
             )
         except BaseException as exc:
-            try:
+            with suppress(BaseException):
                 await emitter.emit(
                     RunEvent(run_id=run_id, task_id=task.id, type="run_failed", title="Execution interrupted", message=type(exc).__name__, payload={"exception_type": type(exc).__name__})
                 )
-            except Exception:  # noqa: BLE001, S110 - preserve execution failure if progress persistence fails.
-                pass
             raise
 
     def _load_pre_plan_knowledge(self) -> KnowledgeBundle:
@@ -240,11 +234,3 @@ class FsqAgent:
 
     def _usable_text(self, value: str | None) -> bool:
         return bool(value and value.strip())
-
-
-def _workspace_name(workspace_root: Path) -> str:
-    from fsq_agent.config import list_workspace_registry
-
-    resolved = workspace_root.resolve()
-    entry = next((item for item in list_workspace_registry() if item.root_path.resolve() == resolved), None)
-    return entry.name if entry is not None else workspace_root.name

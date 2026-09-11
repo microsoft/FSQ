@@ -247,6 +247,7 @@ def _record_dynamic_run_as_strict_case(
         recording.errors.append(str(exc) if isinstance(exc, ConfigurationError) else "Unable to persist recorded Case.")
         recording.recorded_case_path = None
     effective_publication_directory = settings.cases.dir if publication_directory is _DEFAULT_PUBLICATION else publication_directory
+    _write_recording(recording)
     if effective_publication_directory is not None and recording.status == "recorded" and recording.validation_status == "passed" and task.planning_reference_kind == "goal" and not incomplete:
         try:
             recording.published_case_path, recording.publication_outcome = publish_recorded_case(
@@ -537,22 +538,80 @@ def publish_recorded_case(*, candidate_path: Path, destination_directory: Path, 
     destination = root / f"{name}{FSQ_CASE_SUFFIX}"
     if destination.is_symlink() or destination.resolve().parent != root:
         raise ConfigurationError("Case publication must remain in its directory.")
+    candidate_bytes = candidate_path.read_bytes()
     case = FsqCaseLoader().load_case(candidate_path)
+    if candidate_path.read_bytes() != candidate_bytes:
+        raise ConfigurationError("Recording source changed during publication.")
     if case.config.platform != platform:
         raise ConfigurationError("Case platform mismatch.")
     case = case.model_copy(update={"config": case.config.model_copy(update={"name": name})})
     content = FsqCaseSerializer(build_capability_registry(platform=platform).snapshot()).serialize(case)
+    outcome = "created"
     try:
         root.mkdir(parents=True, exist_ok=True)
         if destination.exists():
-            return (destination, "unchanged") if destination.read_bytes() == content else (None, "conflict")
-        try:
-            _atomic_bytes(destination, content, create_only=True)
-        except FileExistsError:
-            return (destination, "unchanged") if destination.read_bytes() == content else (None, "conflict")
+            if destination.read_bytes() != content:
+                return None, "conflict"
+            outcome = "unchanged"
+        else:
+            try:
+                _atomic_bytes(destination, content, create_only=True)
+            except FileExistsError:
+                if destination.read_bytes() != content:
+                    return None, "conflict"
+                outcome = "unchanged"
+        _append_publication_lineage(candidate_path, candidate_bytes, destination, content)
     except OSError:
         return None, "failed"
-    return destination, "created"
+    return destination, outcome
+
+
+def _append_publication_lineage(candidate_path, candidate_bytes, destination, content):
+    from .runs import RunLifecycleService
+
+    root = candidate_path.parent.resolve()
+    recording_path = root / "recording.json"
+    if not recording_path.is_file():
+        return
+    if candidate_path.is_symlink() or recording_path.is_symlink() or candidate_path.read_bytes() != candidate_bytes:
+        raise ConfigurationError("Recording source changed during publication.")
+    recording = json.loads(recording_path.read_text(encoding="utf-8"))
+    if not recording.get("source_run_id") and not recording.get("command_mapping"):
+        return
+    mapping = recording.get("command_mapping")
+    case = FsqCaseLoader().load_text(candidate_bytes.decode("utf-8"), candidate_path)
+    if recording.get("source_run_id") != root.name or not isinstance(mapping, list):
+        raise ConfigurationError("Recording source identity is invalid.")
+    if mapping and [item.get("command_index") for item in mapping] != list(range(len(case.commands))):
+        raise ConfigurationError("Recording command mapping is invalid.")
+    digest = hashlib.sha256(content).hexdigest()
+    snapshot_dir = root / "saved-cases"
+    if snapshot_dir.is_symlink():
+        raise ConfigurationError("Saved Case snapshots must remain in the Run.")
+    snapshot_dir.mkdir(exist_ok=True)
+    snapshot = snapshot_dir / f"{digest}{FSQ_CASE_SUFFIX}"
+    if snapshot.is_symlink():
+        raise ConfigurationError("Saved Case snapshot is unsafe.")
+    try:
+        _atomic_bytes(snapshot, content, create_only=True)
+    except FileExistsError:
+        if snapshot.read_bytes() != content:
+            raise ConfigurationError("Saved Case snapshot identity conflicts.") from None
+    RunLifecycleService.append_lineage(
+        root,
+        {
+            "kind": "recording",
+            "originating_run_id": root.name,
+            "candidate_digest": hashlib.sha256(candidate_bytes).hexdigest(),
+            "candidate_path": candidate_path.name,
+            "case_digest": digest,
+            "saved_case_path": destination.name,
+            "saved_snapshot_path": snapshot.relative_to(root).as_posix(),
+            "command_mapping": mapping,
+            "validation_status": "passed",
+            "review_status": "unknown",
+        },
+    )
 
 
 def _commands_from_evidence(bundle, collector):

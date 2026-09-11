@@ -8,8 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from fsq_agent.agent import check_dynamic_agent_readiness
+from fsq_agent.ai_services import CaseSuggestionAnalyzer, check_case_suggestion_readiness
+from fsq_agent.config import Settings
 from fsq_agent.environments import PlatformRuntimeService
-from fsq_agent.providers import check_case_suggestion_readiness, check_provider_readiness
+from fsq_agent.providers import check_provider_readiness
 
 
 class _Session:
@@ -19,7 +21,7 @@ class _Session:
     def close_sync(self) -> None:
         self.closed = True
 
-    def invoke_responses_sync(self, **_kwargs):
+    def complete_sync(self, request):
         raise AssertionError("Doctor readiness must not send model inference")
 
 
@@ -33,14 +35,25 @@ def test_provider_readiness_constructs_and_closes_without_inference(monkeypatch)
     assert session.closed is True
 
 
-def test_suggestion_readiness_constructs_analyzer_and_closes_without_inference(monkeypatch) -> None:
+@pytest.mark.parametrize("effort", ["low", "high"])
+def test_suggestion_readiness_constructs_analyzer_and_closes_without_inference(monkeypatch, effort) -> None:
     session = _Session()
-    monkeypatch.setattr("fsq_agent.providers._factory.ModelProviderFactory.build_session", lambda _self: session)
+    settings = Settings()
+    settings.agent_runtime.reasoning_effort = effort
+    efforts = []
 
-    ready, _, _ = check_case_suggestion_readiness(object())
+    def create_analyzer(provider_session, *, reasoning_effort="mid"):
+        efforts.append(reasoning_effort)
+        return CaseSuggestionAnalyzer(provider_session, reasoning_effort=reasoning_effort)
+
+    monkeypatch.setattr("fsq_agent.ai_services._factory.build_model_provider_session", lambda _settings: session)
+    monkeypatch.setattr("fsq_agent.ai_services._factory.CaseSuggestionAnalyzer", create_analyzer)
+
+    ready, _, _ = check_case_suggestion_readiness(settings)
 
     assert ready is True
     assert session.closed is True
+    assert efforts == [effort]
 
 
 def test_web_target_checks_are_static_and_do_not_construct_driver(tmp_path: Path, monkeypatch) -> None:
@@ -494,7 +507,7 @@ def test_dynamic_agent_readiness_builds_static_inputs_without_runtime_session(tm
     prompt.agent_template_path.write_text("{{ private_knowledge }} {{ skills }}", encoding="utf-8")
     settings = SimpleNamespace(
         harness=SimpleNamespace(platform="web"),
-        openai_agents=SimpleNamespace(prompt=prompt, local_tool_output=None),
+        agent_runtime=SimpleNamespace(prompt=prompt, local_tool_output=None),
         agent_context=SimpleNamespace(knowledge=SimpleNamespace(root_dir=tmp_path, skills=SimpleNamespace(dir=tmp_path), pre_plan=SimpleNamespace(dir=None))),
         cases=SimpleNamespace(dir=tmp_path),
         output=SimpleNamespace(root_dir=tmp_path, runs_dir=tmp_path),

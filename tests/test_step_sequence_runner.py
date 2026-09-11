@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,28 @@ def test_step_sequence_runner_runs_steps_in_order_and_records_evidence(tmp_path:
         "after:step-2:passed",
         "get_context",
     ]
+
+
+def test_interrupted_sequence_persistence_cannot_replace_cancellation(tmp_path: Path, monkeypatch, caplog) -> None:
+    harness = SequenceHarness()
+    recorder = EvidenceRecorder(run_id="run-1", output_dir=tmp_path)
+    runner = _runner(harness, recorder)
+    primary = asyncio.CancelledError("primary cancellation")
+
+    def cancel():
+        raise primary
+
+    def fail_unexecuted(*args, **kwargs):
+        raise OSError("private disk failure")
+
+    runner.cancellation_check = cancel
+    monkeypatch.setattr(runner, "_unexecuted", fail_unexecuted)
+    with pytest.raises(asyncio.CancelledError) as failure:
+        runner.run_steps("run-1", [_step("first", "tapOn"), _step("second", "tapOn")], [_step("teardown", "killApp")])
+    assert failure.value is primary
+    assert "invoke:teardown" in harness.calls
+    assert caplog.text.count("Interrupted step persistence failed (OSError)") == 2
+    assert "private disk failure" not in caplog.text
 
 
 def test_step_sequence_runner_stops_after_first_failed_step(tmp_path: Path) -> None:

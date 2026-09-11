@@ -234,6 +234,157 @@ def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch
     assert playwright.stopped is True
 
 
+@pytest.mark.parametrize("failure_stage", ["launch", "context", "page"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_partial_browser_startup_releases_acquired_resources_on_owner_worker(monkeypatch, failure_stage, cleanup_fails, cancelled):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+
+    primary = asyncio.CancelledError("startup cancelled") if cancelled else RuntimeError("startup failed")
+    acquired, disposed, workers = [], [], []
+    attempts = {}
+
+    def dispose(name):
+        workers.append(threading.get_ident())
+        attempts[name] = attempts.get(name, 0) + 1
+        if cleanup_fails and attempts[name] == 1:
+            raise OSError("secondary disposal failure")
+        disposed.append(name)
+
+    def new_page():
+        workers.append(threading.get_ident())
+        raise primary
+
+    context = SimpleNamespace(new_page=new_page, close=lambda: dispose("context"))
+
+    def new_context(**kwargs):
+        workers.append(threading.get_ident())
+        if failure_stage == "context":
+            raise primary
+        acquired.append("context")
+        return context
+
+    browser = SimpleNamespace(new_context=new_context, close=lambda: dispose("browser"))
+
+    def launch(**kwargs):
+        workers.append(threading.get_ident())
+        if failure_stage == "launch":
+            raise primary
+        acquired.append("browser")
+        return browser
+
+    playwright = SimpleNamespace(chromium=SimpleNamespace(launch=launch), stop=lambda: dispose("playwright"))
+
+    def start():
+        workers.append(threading.get_ident())
+        acquired.append("playwright")
+        return playwright
+
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: SimpleNamespace(start=start)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    driver = PlaywrightWebDriver(executable_path="C:/synthetic/chrome.exe")
+    executor = None
+    try:
+        with pytest.raises(type(primary)) as failure:
+            driver.start_browser(WebStartBrowserParams())
+        assert failure.value is primary
+        assert set(attempts) == set(acquired)
+        if not cleanup_fails:
+            assert disposed == list(reversed(acquired))
+            assert driver._executor is None
+        else:
+            executor = driver._executor
+            assert executor is not None
+    finally:
+        driver.close()
+    assert disposed == list(reversed(acquired))
+    assert driver._executor is None
+    assert driver.page is driver._context is driver._browser is driver._playwright is None
+    assert len(set(workers)) == 1
+    assert workers[0] != threading.get_ident()
+    if executor is not None:
+        assert all(not thread.is_alive() for thread in executor._threads)
+    driver.close()
+    assert len(disposed) == len(acquired)
+
+
+@pytest.mark.parametrize("retry_cleanup_fails", [False, True])
+def test_repeated_start_preserves_pending_resources_before_replacement(monkeypatch, retry_cleanup_fails):
+    import threading
+    from types import SimpleNamespace
+
+    startup_error = RuntimeError("first page creation failed")
+    cleanup_error = OSError("first generation cleanup failed")
+    acquired, disposed, workers = [], [], []
+    resources = {}
+    generation = 0
+    cleanup_allowed = False
+
+    def dispose(owner, kind):
+        workers.append(threading.get_ident())
+        if owner == 1 and not cleanup_allowed:
+            raise cleanup_error
+        disposed.append((owner, kind))
+
+    def start():
+        nonlocal generation
+        workers.append(threading.get_ident())
+        generation += 1
+        owner = generation
+        if owner > 1:
+            assert set(disposed) == {(1, "context"), (1, "browser"), (1, "playwright")}
+
+        def new_page():
+            if owner == 1:
+                raise startup_error
+            return _FakePage()
+
+        context = SimpleNamespace(new_page=new_page, close=lambda: dispose(owner, "context"))
+        browser = SimpleNamespace(new_context=lambda **kwargs: context, close=lambda: dispose(owner, "browser"))
+        playwright = SimpleNamespace(chromium=SimpleNamespace(launch=lambda **kwargs: browser), stop=lambda: dispose(owner, "playwright"))
+        resources[owner] = (context, browser, playwright)
+        acquired.append(owner)
+        return playwright
+
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: SimpleNamespace(start=start)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    driver = PlaywrightWebDriver(executable_path="C:/synthetic/chrome.exe")
+    executor = None
+    try:
+        with pytest.raises(RuntimeError, match="first page creation failed") as failure:
+            driver.start_browser(WebStartBrowserParams())
+        assert failure.value is startup_error
+        executor = driver._executor
+        assert executor is not None
+        assert (driver._context, driver._browser, driver._playwright) == resources[1]
+        cleanup_allowed = not retry_cleanup_fails
+        if retry_cleanup_fails:
+            with pytest.raises(OSError, match="first generation cleanup failed") as failure:
+                driver.start_browser(WebStartBrowserParams())
+            assert failure.value is cleanup_error
+            assert acquired == [1]
+            assert (driver._context, driver._browser, driver._playwright) == resources[1]
+            assert driver._executor is executor
+            cleanup_allowed = True
+        assert driver.start_browser(WebStartBrowserParams())["status"] == "passed"
+        assert acquired == [1, 2]
+        assert driver._executor is executor
+    finally:
+        cleanup_allowed = True
+        driver.close()
+    assert disposed == [(owner, kind) for owner in (1, 2) for kind in ("context", "browser", "playwright")]
+    assert len(set(workers)) == 1
+    assert workers[0] != threading.get_ident()
+    assert driver._executor is None
+    assert all(not thread.is_alive() for thread in executor._threads)
+    driver.close()
+    assert len(disposed) == 6
+
+
 def test_playwright_web_driver_rejects_unsupported_channel() -> None:
     with pytest.raises(ConfigurationError, match="Unsupported Playwright browser channel"):
         PlaywrightWebDriver(channel="firefox", page=_FakePage())

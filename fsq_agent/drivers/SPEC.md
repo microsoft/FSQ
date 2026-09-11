@@ -16,17 +16,13 @@ Drivers must not import adapters, Application, Execution, concrete harnesses, Co
 
 The root package exports no concrete backend classes. Each platform package is a canonical implementation owner consumed through `core.interfaces` and composition factories. Driver capability metadata discovery is available through a narrow package-internal composition boundary; callers do not import concrete backend modules merely to inspect capability definitions.
 
-`core.interfaces._factories` is the sole approved external importer of private `_factory._DriverFactoryImplementation` for the stable `DriverFactory` wrapper. This named composition exception exposes no concrete backend type; Driver implementations depend only on Core protocol definitions, never the factory wrapper.
-
-Metadata-only composition is a separate named exception:
-
-- `core._default_capabilities` may use `_factory._driver_class_for_backend` and `_capabilities._discover_driver_capability_definitions` to inspect declarations without constructing or connecting a driver.
-- `harnesses._android`, `harnesses._web`, `harnesses._windows`, and `harnesses._macos` may use `_capabilities._capability_matches`, `_discover_driver_capability_definitions`, `_schema_from_capability_definition`, and `_with_driver_metadata` against injected driver instances.
-- Compatibility module `core.harness._driver_tools` aliases `drivers._capabilities` and retains canonical module/symbol identity without a second implementation. It is not a new application-facing discovery API.
-
-These exceptions keep registry bootstrap and Harness adaptation on one declaration implementation while preserving lazy runtime construction. They do not permit arbitrary private-backend access or backend construction during metadata inspection. Any additional importer, helper, or runtime-selection purpose requires a separate boundary decision.
+Every factory-created Driver implements the public idempotent `close()` disposal contract inherited from `DriverObservationInterface`. Disposal releases only owned connections, sessions, and worker resources and never constructs an unopened backend or stops a shared host service. Web disposal closes the owned browser/Playwright session and executor; Windows disposal shuts down its owned worker; macOS disposal releases its owned Appium session. Android disposal does not stop/restart ADB, uninstall automation services, or terminate the application. Disposal is distinct from recordable `close_browser`, `kill_app`, or other lifecycle capabilities and creates no execution or replay record.
 
 ## Internal Structure
+
+The sole external importer of `_factory._DriverFactoryImplementation` is `core.interfaces._factories`, implementing the stable lazy DriverFactory wrapper. Driver implementations consume Core protocols, not that wrapper.
+
+Metadata-only composition has separate named importers: `core._default_capabilities` may use `_factory._driver_class_for_backend` and `_capabilities._discover_driver_capability_definitions`; private Android/Web/Windows/macOS Harness modules may use `_capability_matches`, `_discover_driver_capability_definitions`, `_schema_from_capability_definition`, and `_with_driver_metadata` against injected instances. Compatibility `core.harness._driver_tools` aliases the canonical metadata module without another implementation. These exceptions permit no arbitrary private access or backend construction/connection during metadata inspection.
 
 - `android/`: uiautomator2 backend and Android action/observation implementation.
 - `web/`: Playwright backend and browser/page lifecycle implementation.

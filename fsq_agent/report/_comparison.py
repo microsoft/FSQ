@@ -195,8 +195,9 @@ def _recording_mapping(current, baseline):
     for lineage in relations:
         if (lineage.get("case_digest") or lineage.get("case_sha256")) != verified_source_digest(current):
             continue
+        candidate_digest = lineage.get("candidate_digest") or verified_source_digest(current)
         candidate = next(
-            (item for item in baseline.artifacts if item.get("artifact_id") == "candidate_case" and item.get("sha256") == verified_source_digest(current) and item.get("availability") == "available"),
+            (item for item in baseline.artifacts if item.get("artifact_id") == "candidate_case" and item.get("sha256") == candidate_digest and item.get("availability") == "available"),
             None,
         )
         if candidate is None:
@@ -223,6 +224,8 @@ def _recording_mapping(current, baseline):
         if not isinstance(records, list):
             continue
         _validate_retained_mapping(recording, records, baseline, lineage)
+        if lineage.get("candidate_digest"):
+            _validate_saved_case(lineage, retained_bytes, current, baseline, records)
         mapping = {}
         for item in records:
             if isinstance(item, dict) and item.get("step_execution_id"):
@@ -241,6 +244,32 @@ def _recording_mapping(current, baseline):
         if mapping:
             return mapping
     return {}
+
+
+def _validate_saved_case(lineage, candidate_bytes, current, baseline, records):
+    import yaml
+
+    from fsq_agent.report._run_report import contained_file
+
+    artifact = next((item for item in baseline.artifacts if item.get("artifact_id") == "saved-case-" + str(lineage.get("case_digest")) and item.get("availability") == "available"), None)
+    if artifact is None or artifact.get("path") != lineage.get("saved_snapshot_path") or artifact.get("sha256") != verified_source_digest(current):
+        raise ReportGenerationError("Saved Case identity is unavailable.", context={"reason": "lineage_invalid"})
+    try:
+        saved = contained_file(baseline._run_dirs[baseline.run["run_id"]], artifact["path"]).read_bytes()
+        if hashlib.sha256(saved).hexdigest() != artifact["sha256"]:
+            raise ValueError("Saved Case changed")  # noqa: TRY301
+        candidate_documents = list(yaml.safe_load_all(candidate_bytes))
+        saved_documents = list(yaml.safe_load_all(saved))
+        if len(candidate_documents) != 2 or len(saved_documents) != 2 or not isinstance(candidate_documents[0], dict) or not isinstance(saved_documents[0], dict):
+            raise ValueError("Invalid Case documents")  # noqa: TRY301
+        candidate_documents[0].pop("name", None)
+        saved_documents[0].pop("name", None)
+        if candidate_documents != saved_documents or not isinstance(saved_documents[1], list):
+            raise ValueError("Changed Case commands or configuration")  # noqa: TRY301
+        if [record.get("command_index") for record in records] != list(range(len(saved_documents[1]))):
+            raise ValueError("Incomplete saved command mapping")  # noqa: TRY301
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        raise ReportGenerationError("Saved Case mapping does not match retained source.", context={"reason": "lineage_invalid"}) from exc
 
 
 def _validate_retained_mapping(recording, records, baseline, lineage):

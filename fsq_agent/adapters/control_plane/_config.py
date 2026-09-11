@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from fsq_agent.application import ApplicationError, configure_google_gemini, configure_openai, list_google_gemini_models, list_openai_models
 from fsq_agent.config import load_user_provider_config, save_azure_openai_provider
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import test_model_provider_connection
@@ -45,6 +46,10 @@ def get_config(user_config_root: Path | None) -> dict[str, Any]:
     provider = config.provider
     if provider is None:
         return {"configured": False, "provider": None}
+    if provider.type == "google_gemini":
+        return {"configured": True, "provider": {"type": "google_gemini", "modelName": provider.model, "apiKey": config.api_key}}
+    if provider.type == "openai":
+        return {"configured": True, "provider": {"type": "openai", "modelName": provider.model, "apiKey": config.api_key}}
     if provider.type == "azure_openai":
         presentation = {
             "type": "azure_openai",
@@ -59,6 +64,36 @@ def get_config(user_config_root: Path | None) -> dict[str, Any]:
             "authenticated": True,
         }
     return {"configured": True, "provider": presentation}
+
+
+def list_openai_config_models(body: dict[str, Any]) -> dict[str, Any]:
+    _require_openai_fields(body, {"apiKey"})
+    models = list_openai_models(api_key=body["apiKey"])
+    return {"models": [{"id": model.id, "name": model.name} for model in models]}
+
+
+def save_openai_config(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
+    _require_openai_fields(body, {"modelName", "apiKey"})
+    configure_openai(model=body["modelName"], api_key=body["apiKey"], user_config_root=user_config_root)
+    return get_config(user_config_root)
+
+
+def list_google_gemini_config_models(body: dict[str, Any]) -> dict[str, Any]:
+    _require_openai_fields(body, {"apiKey"}, provider_name="Google Gemini")
+    models = list_google_gemini_models(api_key=body["apiKey"])
+    return {"models": [{"id": model.id, "name": model.name} for model in models]}
+
+
+def save_google_gemini_config(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
+    _require_openai_fields(body, {"modelName", "apiKey"}, provider_name="Google Gemini")
+    configure_google_gemini(model=body["modelName"], api_key=body["apiKey"], user_config_root=user_config_root)
+    return get_config(user_config_root)
+
+
+def _require_openai_fields(body: dict[str, Any], fields: set[str], *, provider_name: str = "OpenAI") -> None:
+    _require_exact_fields(body, fields)
+    if not all(isinstance(body[name], str) and body[name].strip() for name in fields):
+        raise ConfigAPIError(400, "invalid_provider_config", f"{provider_name} configuration fields must be non-empty strings.", f"Complete the required {provider_name} fields and retry.")
 
 
 def save_azure_config(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
@@ -89,6 +124,24 @@ def test_saved_connection(body: dict[str, Any], user_config_root: Path | None) -
 def map_config_exception(exc: BaseException) -> ConfigAPIError:
     if isinstance(exc, ConfigAPIError):
         return exc
+    if isinstance(exc, ApplicationError) and exc.details.get("provider") in {"openai", "google_gemini"}:
+        name = "Google Gemini" if exc.details["provider"] == "google_gemini" else "OpenAI"
+        mappings = {
+            "invalid_candidate": (400, "invalid_provider_config"),
+            "model_not_offered": (400, "provider_model_not_offered"),
+            "authentication": (401, "provider_authorization_failed"),
+            "access_denied": (403, "provider_access_denied"),
+            "rate_limited": (429, "provider_rate_limited"),
+            "timeout": (504, "provider_timeout"),
+            "network": (503, "provider_unavailable"),
+            "malformed_response": (502, "provider_response_invalid"),
+            "storage": (503, "provider_storage_unavailable"),
+        }
+        reason = exc.details.get("reason")
+        if isinstance(reason, str) and reason in mappings:
+            status, code = mappings[reason]
+            return ConfigAPIError(status, code, exc.message, exc.action or f"Retry the {name} operation.")
+        return ConfigAPIError(500, "config_internal_error", f"{name} configuration could not be completed.", "Reload the current configuration before retrying.")
     if isinstance(exc, ConfigurationError):
         message = str(exc).splitlines()[0]
         lowered = message.casefold()

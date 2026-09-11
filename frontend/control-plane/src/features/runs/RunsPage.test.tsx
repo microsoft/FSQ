@@ -1,10 +1,52 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { controlPlaneClient } from '../../api/controlPlaneClient';
 import { RunsPage } from './RunsPage';
 
 beforeEach(() => vi.restoreAllMocks());
+
+it.each(['baseline', 'related', 'format', 'refresh', 'failed-refresh'])('invalidates pending and completed exports after %s changes', async change => {
+  const response: Awaited<ReturnType<typeof controlPlaneClient.runReport>> = {workspace:'demo',run_id:'r1',platform:'web',warnings:[],report:{schema_version:'fsq.report/v1',run:{run_id:'r1',platform:'web',gate:{status:'passed',reasons:[]}},source:{},execution:{outcome:'success'},verification:{status:'success'},evidence:{status:'complete'},processing:{},steps:[],artifacts:[],tool_calls:[],logs:[],metrics:{},comparison:{},lineage:{},warnings:[]}};
+  const reports = vi.spyOn(controlPlaneClient, 'runReport').mockResolvedValue(response);
+  let finish!: (value: Awaited<ReturnType<typeof controlPlaneClient.exportReport>>) => void;
+  let signal: AbortSignal | undefined;
+  const exports = vi.spyOn(controlPlaneClient, 'exportReport').mockImplementation((_workspace, _platform, _run, _format, _baseline, selectedSignal) => {
+    signal = selectedSignal;
+    return new Promise(resolve => { finish = resolve; });
+  });
+  const result: Awaited<ReturnType<typeof controlPlaneClient.exportReport>> = {run_id:'r1',platform:'web',export_id:'old',format:'html',files:[{file_id:'report',name:'old-report.html',mime_type:'text/html',size_bytes:10,download_url:'/old-export'}],warnings:[]};
+  render(<RunsPage route={{workspace:'demo',platform:'web',run:'r1'}} workspaces={[]} onNavigate={vi.fn()} />);
+  await screen.findByText('Gate: passed');
+  const changeContext = async (suffix: string) => {
+    if (change === 'baseline') {
+      await userEvent.clear(screen.getByLabelText('Baseline Run ID'));
+      await userEvent.type(screen.getByLabelText('Baseline Run ID'), 'baseline-' + suffix);
+      await userEvent.click(screen.getByRole('button',{name:'Compare baseline'}));
+    } else if (change === 'related') {
+      await userEvent.clear(screen.getByLabelText('Related Run IDs'));
+      await userEvent.type(screen.getByLabelText('Related Run IDs'), 'related-' + suffix);
+      await userEvent.click(screen.getByRole('button',{name:'Load related Runs'}));
+    } else if (change === 'format') {
+      await userEvent.selectOptions(screen.getByLabelText('Format'), suffix === 'first' ? 'json' : 'junit');
+    } else {
+      if (change === 'failed-refresh') reports.mockRejectedValueOnce(new Error('Revalidation failed'));
+      await userEvent.click(screen.getByRole('button',{name:'Refresh'}));
+    }
+  };
+  await userEvent.click(screen.getByRole('button',{name:'Export report'}));
+  await changeContext('first');
+  expect(signal?.aborted).toBe(true);
+  await act(async () => finish(result));
+  expect(screen.queryByRole('link',{name:/old-report/})).not.toBeInTheDocument();
+  if (change === 'failed-refresh') await userEvent.click(screen.getByRole('button',{name:'Refresh'}));
+  await waitFor(() => expect(screen.getByRole('button',{name:'Export report'})).toBeEnabled());
+  exports.mockResolvedValue(result);
+  await userEvent.click(screen.getByRole('button',{name:'Export report'}));
+  expect(await screen.findByRole('link',{name:/old-report/})).toBeVisible();
+  await changeContext('second');
+  expect(screen.queryByRole('link',{name:/old-report/})).not.toBeInTheDocument();
+});
 
 it('explains omitted logs and offers the full persisted source', async () => {
   vi.spyOn(controlPlaneClient, 'runReport').mockResolvedValue({ workspace: 'demo', run_id: 'r1', platform: 'web', warnings: [], report: { schema_version: 'fsq.report/v1', run: { run_id: 'r1', platform: 'web', gate: { status: 'failed', reasons: [] }, display_omissions: { logs: { original_count: 10000, returned_count: 0, original_size_bytes: 9000000, reason: 'aggregate_log_display_budget', full_artifacts: [{ run_id: 'r1', artifact_id: 'runtime-events' }] } } }, source: {}, execution: {}, verification: {}, evidence: {}, processing: {}, steps: [{ step_execution_id: 's1', status: 'failed' }], artifacts: [], tool_calls: [], logs: [], metrics: {}, comparison: {}, lineage: {}, warnings: [] } });

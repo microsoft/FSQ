@@ -2,6 +2,9 @@ import type {
   HistoryResponse, RunReportResponse, ReportExportResponse, ReportFormat,
   ApiErrorBody,
   AzureConfigPayload,
+  OpenAIConfigPayload,
+  GoogleGeminiConfigPayload,
+  OpenAIModelsResponse,
   BootstrapResponse,
   CasesResponse,
   ConfigResponse,
@@ -53,7 +56,7 @@ const modes = new Set(['explore', 'strict']);
 const statuses = new Set(['preparing', 'running', 'finalizing', 'success', 'failed', 'inconclusive', 'cancelled', 'error']);
 const readinessStatuses = new Set(['ready', 'unavailable', 'error']);
 const deviceFlowStatuses = new Set(['waiting', 'loading_models', 'ready', 'model_error', 'success', 'failed', 'expired', 'cancelled']);
-const providerTypes = new Set(['azure_openai', 'github_copilot']);
+const providerTypes = new Set(['openai', 'azure_openai', 'google_gemini', 'github_copilot']);
 
 export class ControlPlaneApiError extends Error {
   readonly status: number;
@@ -235,13 +238,20 @@ function validateConfig(value: unknown): ConfigResponse {
   if (!record(provider) || !string(provider.type) || !providerTypes.has(provider.type) || !string(provider.modelName) || !provider.modelName) {
     invalidResponse('config', 'Invalid Provider identity.');
   }
-  if (provider.type === 'azure_openai') {
+  if (provider.type === 'openai' || provider.type === 'google_gemini') {
+    if (!hasOnlyKeys(provider, ['type', 'modelName', 'apiKey']) || !string(provider.apiKey) || !provider.apiKey.trim()) invalidResponse('config', 'Invalid API-key Provider fields.');
+  } else if (provider.type === 'azure_openai') {
     if (!hasOnlyKeys(provider, ['type', 'modelName', 'baseUrl', 'apiKey']) || !string(provider.baseUrl) || !provider.baseUrl
       || !string(provider.apiKey) || !provider.apiKey) invalidResponse('config', 'Invalid Azure Provider fields.');
   } else if (!hasOnlyKeys(provider, ['type', 'modelName', 'authenticated']) || provider.authenticated !== true) {
     invalidResponse('config', 'Invalid GitHub Provider fields.');
   }
   return value as unknown as ConfigResponse;
+}
+function validateOpenAIModels(value: unknown): OpenAIModelsResponse {
+  const model = (item: unknown) => record(item) && hasOnlyKeys(item, ['id', 'name']) && string(item.id) && Boolean(item.id.trim()) && string(item.name) && Boolean(item.name.trim());
+  if (!record(value) || !hasOnlyKeys(value, ['models']) || !arrayOf(value.models, model)) invalidResponse('Provider models', 'Invalid model-list fields.');
+  return value as unknown as OpenAIModelsResponse;
 }
 function validateDeviceFlow(value: unknown): GitHubDeviceFlowResponse {
   if (!record(value) || !string(value.authRequestId) || !value.authRequestId || !string(value.status) || !deviceFlowStatuses.has(value.status)
@@ -274,7 +284,7 @@ function validateDeviceFlow(value: unknown): GitHubDeviceFlowResponse {
   return value as unknown as GitHubDeviceFlowResponse;
 }
 function validateConnectionTest(value: unknown): ConnectionTestResponse {
-  if (!record(value) || value.success !== true || !string(value.provider) || !providerTypes.has(value.provider)
+  if (!record(value) || !hasOnlyKeys(value, ['success', 'provider', 'modelName', 'durationMs']) || value.success !== true || !string(value.provider) || !providerTypes.has(value.provider)
     || !string(value.modelName) || !value.modelName || !finiteNumber(value.durationMs) || value.durationMs < 0) {
     invalidResponse('connection test', 'Invalid connection-test fields.');
   }
@@ -486,6 +496,14 @@ export const controlPlaneClient = {
   saveYaml: (requestId: string, payload: SaveYamlPayload, signal?: AbortSignal) =>
     jsonRequest(`/runs/${encodeURIComponent(requestId)}/save-yaml`, validateSaveYaml, { method: 'POST', body: JSON.stringify(payload), signal }),
   config: (signal?: AbortSignal) => jsonRequest('/config', validateConfig, { signal }),
+  openaiModels: (apiKey: string, signal?: AbortSignal) =>
+    jsonRequest('/config/openai/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
+  googleGeminiModels: (apiKey: string, signal?: AbortSignal) =>
+    jsonRequest('/config/google-gemini/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
+  saveGoogleGeminiConfig: (payload: GoogleGeminiConfigPayload, signal?: AbortSignal) =>
+    jsonRequest('/config/google-gemini', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
+  saveOpenAIConfig: (payload: OpenAIConfigPayload, signal?: AbortSignal) =>
+    jsonRequest('/config/openai', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   saveAzureConfig: (payload: AzureConfigPayload, signal?: AbortSignal) =>
     jsonRequest('/config/azure', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   startGithubDeviceFlow: (signal?: AbortSignal) =>

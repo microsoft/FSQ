@@ -28,7 +28,7 @@ async def test_verifier_accepts_structured_success() -> None:
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Done","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A","Criterion B"],"unmet_criteria":[],"evidence":["Observed A and B"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ],
     )
@@ -48,7 +48,7 @@ async def test_verifier_preserves_structured_goal_failure() -> None:
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"failed","summary":"Goal unmet","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A"],"unmet_criteria":["Criterion B"],"evidence":[],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ],
     )
@@ -66,7 +66,7 @@ async def test_verifier_preserves_structured_goal_inconclusive() -> None:
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"inconclusive","summary":"Partial evidence","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A"],"unmet_criteria":["Criterion B"],"evidence":["Observed A"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ],
     )
@@ -76,7 +76,7 @@ async def test_verifier_preserves_structured_goal_inconclusive() -> None:
 
 
 @pytest.mark.asyncio
-async def test_verifier_uses_structured_sdk_unmet_criteria_when_pre_plan_step_failed() -> None:
+async def test_verifier_uses_structured_runtime_unmet_criteria_when_pre_plan_step_failed() -> None:
     result = await Verifier().verify(
         _task(),
         [
@@ -90,7 +90,7 @@ async def test_verifier_uses_structured_sdk_unmet_criteria_when_pre_plan_step_fa
                 step_id=2,
                 status="success",
                 actual_outcome='{"status":"failed","summary":"Only B failed","pre_plan":[],"plan_updates":["B tool failed"],"satisfied_criteria":["Criterion A"],"unmet_criteria":["Criterion B"],"evidence":["Observed A"],"errors":["B failed"]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             ),
         ],
     )
@@ -116,7 +116,7 @@ async def test_verifier_uses_structured_success_when_execution_step_failed() -> 
                 step_id=2,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Done","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A","Criterion B"],"unmet_criteria":[],"evidence":["Observed A and B"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             ),
         ],
     )
@@ -136,7 +136,7 @@ async def test_verifier_marks_non_json_output_inconclusive() -> None:
                 step_id=1,
                 status="success",
                 actual_outcome="I think it worked.",
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ],
     )
@@ -157,7 +157,7 @@ async def test_verifier_accepts_agent_derived_criteria_when_task_has_none() -> N
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Done","pre_plan":[],"plan_updates":[],"satisfied_criteria":["The task flow completed successfully."],"unmet_criteria":[],"evidence":["Flow completed"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ],
     )
@@ -177,7 +177,7 @@ async def test_verifier_uses_agent_status_without_provided_or_derived_criteria()
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Done","pre_plan":[],"plan_updates":[],"satisfied_criteria":[],"unmet_criteria":[],"evidence":[],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             )
         ],
     )
@@ -205,7 +205,7 @@ async def test_verifier_preserves_verification_agent_single_goal_output_without_
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"failed","summary":"Goal not complete","pre_plan":[],"plan_updates":[],"satisfied_criteria":[],"unmet_criteria":["Verify that Downloads can be opened."],"evidence":["Downloads page was not reached"],"errors":[]}',
-                tool_name="openai_agents.verifier",
+                tool_name="agent_runtime.verifier",
             )
         ],
     )
@@ -268,13 +268,13 @@ async def test_verifier_prefers_verification_agent_output_over_runner_claims() -
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"inconclusive","summary":"Runner was unsure","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A"],"unmet_criteria":["Criterion B"],"evidence":["Runner evidence"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             ),
             StepResult(
                 step_id=2,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Verifier proved both criteria","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A","Criterion B"],"unmet_criteria":[],"evidence":["Evidence bundle proved A and B"],"errors":[]}',
-                tool_name="openai_agents.verifier",
+                tool_name="agent_runtime.verifier",
             ),
         ],
     )
@@ -300,7 +300,7 @@ async def test_verifier_uses_successful_verification_agent_output_despite_failed
                 step_id=2,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Verifier proved both criteria","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A","Criterion B"],"unmet_criteria":[],"evidence":["Evidence bundle proved A and B"],"errors":[]}',
-                tool_name="openai_agents.verifier",
+                tool_name="agent_runtime.verifier",
             ),
         ],
     )
@@ -320,14 +320,14 @@ async def test_verifier_marks_invalid_verification_agent_output_inconclusive() -
                 step_id=1,
                 status="success",
                 actual_outcome='{"status":"success","summary":"Runner proved both criteria","pre_plan":[],"plan_updates":[],"satisfied_criteria":["Criterion A","Criterion B"],"unmet_criteria":[],"evidence":["Runner evidence"],"errors":[]}',
-                tool_name="openai_agents.runner",
+                tool_name="agent_runtime.runner",
             ),
             StepResult(
                 step_id=2,
                 status="failed",
                 actual_outcome="Verifier crashed before structured output.",
                 error="boom",
-                tool_name="openai_agents.verifier",
+                tool_name="agent_runtime.verifier",
             ),
         ],
     )

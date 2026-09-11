@@ -155,6 +155,8 @@ class EvidenceRecorder:
         }
         if manifest.is_file():
             payload = json.loads(manifest_bytes)
+            if "schema_version" not in payload and "run_id" not in payload and isinstance(payload.get("artifacts"), list) and all(isinstance(item, dict) for item in payload["artifacts"]):
+                payload = {**payload, "run_id": root.name}
             legacy_manifest = payload.get("schema_version") == "1.0" or ("schema_version" not in payload and "run_id" in payload)
             if legacy_manifest and journal.is_file():
                 compatibility_warnings.append("Legacy report manifest is superseded by the authoritative evidence journal.")
@@ -509,7 +511,9 @@ def _normalize_legacy(bundle: EvidenceBundle) -> EvidenceBundle:
         if not step.metadata.get("timing_measured"):
             updates.update(duration_ms=None, unavailable_reason="legacy_unmeasured")
         steps.append(step.model_copy(update=updates))
-    return bundle.model_copy(update={"steps": steps, "warnings": [*bundle.warnings, "Historical evidence measurements or coverage may be unavailable."]})
+    metadata = dict(bundle.metadata)
+    metadata["legacy_coverage_unknown"] = "completeness" not in bundle.model_fields_set
+    return bundle.model_copy(update={"steps": steps, "metadata": metadata, "warnings": [*bundle.warnings, "Historical evidence measurements or coverage may be unavailable."]})
 
 
 def _legacy_dynamic(payload: dict) -> EvidenceBundle:
@@ -527,7 +531,8 @@ def _legacy_dynamic(payload: dict) -> EvidenceBundle:
         run_id=payload["run_id"],
         schema_version="1.0",
         steps=results,
-        completeness="partial",
+        completeness=payload.get("completeness", "partial"),
+        metadata={"legacy_artifacts": payload.get("artifacts", []), "legacy_coverage_unknown": "completeness" not in payload},
         warnings=["Historical dynamic manifest has incomplete capability evidence."],
     )
 

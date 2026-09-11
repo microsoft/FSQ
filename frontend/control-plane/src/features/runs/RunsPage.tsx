@@ -135,6 +135,7 @@ export function RunsPage({ route, workspaces, registryStatus = 'ready', registry
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<ApiErrorBody | null>(null);
   const exportGeneration = useRef(0);
+  const exportController = useRef<AbortController | null>(null);
   const identity = [route.workspace, route.platform, route.run].join(':');
   const filtersKey = JSON.stringify(filters);
   useEffect(() => { exportGeneration.current += 1; setBaseline(''); setBaselineDraft(''); setRelated(current => current.length ? [] : current); setRelatedDraft(''); setExportResult(null); setExportError(null); setExporting(false); }, [identity]);
@@ -148,12 +149,20 @@ export function RunsPage({ route, workspaces, registryStatus = 'ready', registry
     void request.catch(error => { if (!controller.signal.aborted) { setError(toApiError(error)); setReportFreshness('stale'); setExportResult(null); } }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [route.workspace, route.platform, route.run, route.error, filtersKey, baseline, related, revision]);
-  useEffect(() => () => { exportGeneration.current += 1; }, []);
+  useEffect(() => {
+    exportGeneration.current += 1;
+    exportController.current?.abort();
+    setExportResult(null); setExportError(null); setExporting(false);
+    return () => { exportGeneration.current += 1; exportController.current?.abort(); };
+  }, [identity, baseline, related, format, revision, reportFreshness]);
   const exportReport = () => {
     if (!route.workspace || !route.platform || !route.run || reportFreshness !== 'current') return;
     const generation = ++exportGeneration.current;
+    exportController.current?.abort();
+    const controller = new AbortController();
+    exportController.current = controller;
     setExporting(true); setExportError(null); setExportResult(null);
-    void controlPlaneClient.exportReport(route.workspace, route.platform, route.run, format, baseline || undefined, undefined, related).then(value => { if (generation === exportGeneration.current) setExportResult(value); }).catch(error => { if (generation === exportGeneration.current) setExportError(toApiError(error)); }).finally(() => { if (generation === exportGeneration.current) setExporting(false); });
+    void controlPlaneClient.exportReport(route.workspace, route.platform, route.run, format, baseline || undefined, controller.signal, related).then(value => { if (generation === exportGeneration.current) setExportResult(value); }).catch(error => { if (generation === exportGeneration.current) setExportError(toApiError(error)); }).finally(() => { if (generation === exportGeneration.current) setExporting(false); });
   };
   if (route.error) return <div className="runs-page"><h1>Runs</h1><Notice message={route.error} /><button className="button" onClick={() => onNavigate({})}>Choose Workspace</button></div>;
   if (!route.workspace && registryStatus === 'loading') return <div className="runs-page"><h1>Runs</h1><p role="status">Loading registered Workspaces…</p></div>;

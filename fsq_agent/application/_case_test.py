@@ -7,9 +7,10 @@ import os
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import Protocol
+from typing import Never, Protocol
 
 from fsq_agent._capability_bootstrap import build_capability_registry, provider_required_capability_names, steps_require_provider
+from fsq_agent.ai_services import CaseSuggestionAnalysis, build_ai_assertion_evaluator
 from fsq_agent.application.contracts import (
     ApplicationError,
     ApplicationErrorCategory,
@@ -24,7 +25,6 @@ from fsq_agent.config import Settings, list_workspace_registry, load_workspace_p
 from fsq_agent.core import ArtifactStore, HarnessFactory, RuntimeSecretStore
 from fsq_agent.execution import RunLifecycleService, RunSource, RunStepCounts, allocate_run, collect_strict_lifecycle_cases, load_run_metadata, run_strict_lifecycle_case, transition_run
 from fsq_agent.models import ConfigurationError, EvidenceBundle
-from fsq_agent.providers import CaseSuggestionAnalysis, build_ai_assertion_evaluator
 
 _MAX_FACT_ITEMS = 100
 _MAX_FACT_STRING = 2_000
@@ -207,6 +207,18 @@ def execute_case_test(
     )
 
 
+def _raise_analysis_error(error: BaseException, run_id: str, report_path: Path) -> Never:
+    if not isinstance(error, Exception) or isinstance(error, ApplicationError):
+        raise error
+    raise ApplicationError(
+        code=ApplicationErrorCode.CASE_SUGGESTION_FAILED,
+        category=ApplicationErrorCategory.UNAVAILABLE,
+        message="Case suggestion analysis failed.",
+        action="The completed Run is preserved. Check Provider readiness and retry suggestion analysis.",
+        details={"run_id": run_id, "report_path": str(report_path)},
+    ) from error
+
+
 def _resolve_case_path(value: Path, cases_dir: Path, current_directory: Path) -> Path:
     candidates = [value] if value.is_absolute() else [cases_dir / value, current_directory / value]
     for candidate in candidates:
@@ -340,7 +352,7 @@ def _write_analysis_artifacts(
                 "execution_status": execution_status,
                 "execution_summary": execution_summary,
                 "analysis_summary": analysis.summary,
-                "suggestions": list(analysis.suggestions),
+                "suggestions": [dict(item) for item in analysis.suggestions],
                 "candidate_case_path": candidate_path.name if candidate_path else None,
                 "candidate_case_status": candidate_status,
                 "candidate_diagnostics": candidate_diagnostics,

@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from fsq_agent.agent_engine import ToolBinding, ToolCall, ToolInputFailure
 from fsq_agent.models import (
     AgentToolCall,
     AgentToolResult,
@@ -45,41 +46,49 @@ class AgentToolAdapter:
 
     def build_tools(
         self,
-        function_tool_cls: Any,
         *,
         run_id: str = "",
         task_id: str = "",
         event_sink: RunEventSink | None = None,
         runner_invoker: RunnerInvoker | None = None,
-    ) -> list[Any]:
+    ) -> list[ToolBinding]:
         self.run_id = run_id
         self.task_id = task_id
         self.event_sink = event_sink
         self.runner_invoker = runner_invoker
         self._configure_provider_runs(run_id)
         return [
-            function_tool_cls(
+            ToolBinding(
                 name=definition.name,
                 description=definition.description,
-                params_json_schema=definition.params_json_schema,
-                strict_json_schema=definition.strict,
-                on_invoke_tool=self._handler_for(definition.name),
+                parameters_schema=definition.params_json_schema,
+                strict=definition.strict,
+                invoke=self._handler_for(definition.name),
+                on_invalid_input=self._invalid_input_handler_for(definition.name),
             )
             for definition in self.registry.list_tools()
         ]
 
+    def _invalid_input_handler_for(self, tool_name: str):
+        async def reject(failure: ToolInputFailure) -> str:
+            result = AgentToolResult(tool_name=tool_name, status="failed", error=failure.message, duration_ms=0)
+            await self._emit_tool_failed(tool_name, failure.message, time.perf_counter(), {})
+            return self._format_tool_response(result)
+
+        return reject
+
     def _handler_for(self, tool_name: str):
-        async def invoke(_ctx: Any, args: str) -> str:
+        async def invoke(call: ToolCall) -> str:
             started = time.perf_counter()
             arguments: dict[str, Any] = {}
             try:
-                arguments = self._parse_args(args)
+                arguments = call.arguments
                 await self._emit_tool_started(tool_name, arguments)
                 if self.runner_invoker is not None and self._recordable_capability(tool_name) is not None:
                     result = await self._execute_through_runner(tool_name, arguments)
                 else:
                     result = await self.executor.execute(AgentToolCall(tool_name=tool_name, arguments=arguments))
-            # The SDK callback boundary normalizes all tool failures into structured results.
+            # The tool callback boundary normalizes all tool failures into structured results.
             except Exception as exc:  # noqa: BLE001
                 result = AgentToolResult(
                     tool_name=tool_name,

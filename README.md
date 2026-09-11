@@ -131,6 +131,8 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
+For direct official OpenAI access, run `fsq providers configure openai` and enter the API key at the hidden prompt, then select an offered GPT-5-or-later model. Google Gemini uses `fsq providers configure google_gemini` with a [Google AI Studio API key](https://aistudio.google.com/apikey) and an explicitly selected stable Gemini 3-or-later Flash/Pro model. Azure deployments use `fsq providers configure azure_openai`. The browser's Settings page offers the same four Providers; see [the setup guide](docs/getting-started.md#configure-ai-exploration).
+
 Then return to the Workspace:
 
 ```bash
@@ -213,7 +215,7 @@ Platform target options for `fsq init`:
 
 Use `fsq runs list`, `fsq runs show RUN_ID`, and `fsq runs logs RUN_ID`, or open historical Runs in the Control Plane. `fsq runs show RUN_ID --open` rebuilds an offline HTML report. `fsq runs export RUN_ID --format json|junit|html|bundle` creates a non-interactive export without a Provider or UI execution. Reports link failure facts, steps, metrics, screenshots, snapshot differences, and recorded replay provenance. See [CI evidence](docs/ci-evidence.md) and the [public evidence demo](examples/evidence-demo/README.md). Evidence can contain visible application data; review it before sharing. Do not commit `.fsq`, credentials, reports, screenshots, or private target data.
 
-Provider configuration is stored under `~/.fsq` and shared by the CLI and local Control Plane. Supported first-release Providers are GitHub Copilot and Azure OpenAI.
+Provider configuration is stored under `~/.fsq` and shared by the CLI and local Control Plane. Supported Providers are OpenAI (official API), Azure OpenAI, Google Gemini (Developer API), and GitHub Copilot. One Provider is active at a time; successful replacement removes inactive credentials. Gemini keys live in `~/.fsq/auth/google-gemini.json`; Vertex AI, custom Gemini endpoints, and Preview/specialized models are not supported.
 
 ## Documentation
 

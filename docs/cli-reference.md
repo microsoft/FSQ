@@ -38,6 +38,24 @@ Choose one `--format json|junit|html|bundle`. Omitted `--output` creates a uniqu
 
 `init` never installs Driver/Runtime packages or system prerequisites. The public CLI has no `environments` command, `providers list`, or `--install-driver` option.
 
+## Provider configuration
+
+```bash
+fsq providers configure openai [--model MODEL] [--api-key KEY]
+fsq providers configure azure_openai [--base-url URL] [--model DEPLOYMENT] [--api-key KEY]
+fsq providers configure google_gemini [--model MODEL] [--api-key KEY]
+fsq providers configure github_copilot [--model MODEL]
+fsq providers status
+```
+
+OpenAI uses the official API only and rejects `--base-url`. Human interactive mode hides omitted API-key input and requires explicit selection from authenticated, filtered GPT-5-or-later general models. An explicit `--model` must also be offered to that key. Saving re-fetches model metadata before activation and never sends inference. An empty eligible list cannot be saved.
+
+OpenAI non-interactive/JSON/JSONL modes require both `--model` and `--api-key`. Avoid putting real keys in shared command history; use the hidden interactive prompt for local setup. Missing/inapplicable options exit 2; rejected candidates/models or confirmed local storage failures exit 3; supplier unavailability exits 4; unexpected/unconfirmed failures exit 5. No output includes the key. GitHub retains its Human-only device authorization flow; Azure retains endpoint/deployment/key configuration.
+
+Google Gemini uses the same hidden-key prompt, explicit discovered-model selection, machine-mode option requirements, and exit categories as OpenAI. It rejects `--base-url`. The complete paginated model list is filtered to stable Gemini 3-or-later general-purpose Flash/Pro; even an explicit `--model` must be offered to the candidate key at save time. Vertex AI and Preview/specialized models are not supported. Keys are stored only in `~/.fsq/auth/google-gemini.json`, not Workspace configuration or environment fallbacks.
+
+All Provider commands are user-level and share the one active configuration under `~/.fsq` with Settings. Status does not discover models or send inference. Use Settings **Test connection** for an explicit saved-model request. A disconnected save is not a guaranteed cancellation and is never automatically retried. See the [setup guide](getting-started.md#configure-ai-exploration).
+
 ## Static Case formatting
 
 ```bash

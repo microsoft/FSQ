@@ -60,7 +60,41 @@ def prepare_export(report, options, *, replace_derived=False):
     checked._fingerprints = report._fingerprints
     checked._related = report._related
     report = checked
-    _require_trustworthy_source_identity(report)
+    legacy_rebuild = False
+    if replace_derived and options.format == "html" and len(report._run_dirs) == 1:
+        run_id = report.run["run_id"]
+        root = report._run_dirs.get(run_id)
+        if root is not None:
+            metadata_path = contained_file(Path(root), "run.json")
+            if metadata_path.is_file():
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                source = metadata.get("source", {})
+                legacy_rebuild = (
+                    metadata.get("schema_version") == "fsq.run/v1"
+                    and metadata.get("run_id") == run_id == Path(root).name
+                    and metadata.get("platform") == report.run.get("platform")
+                    and isinstance(source, dict)
+                    and source.get("kind") in {"goal", "case"}
+                    and not source.get("snapshot_path")
+                    and not source.get("digest")
+                    and not report.comparison.get("baseline_report")
+                    and not report.lineage.get("related_runs")
+                    and options.share_profile is None
+                )
+            else:
+                historical_files = {"core-report.json", "report.json", "report-fallback.json", "evidence-manifest.json", "evidence-events.jsonl", "events.jsonl"}
+                fingerprints = report._fingerprints.get(run_id, {})
+                legacy_rebuild = (
+                    run_id == Path(root).name
+                    and any(fingerprints.get(name) for name in historical_files)
+                    and not report.comparison.get("baseline_report")
+                    and not report.lineage.get("related_runs")
+                    and options.share_profile is None
+                )
+    if legacy_rebuild:
+        report.warnings.append("Historical Run source snapshot and digest are unavailable; this is a local compatibility view, not a verified source export.")
+    else:
+        _require_trustworthy_source_identity(report)
     destination = options.destination.expanduser().absolute()
     roots = {**report._run_dirs, **options.run_dirs}
     _destination(destination, roots, replace_derived)

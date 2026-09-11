@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
     from fsq_agent.config import Settings
     from fsq_agent.core.interfaces import EvidenceJournalSink
-    from fsq_agent.models import GoalPrePlan, KnowledgeBundle, RunEvent, RunEventSink, RunExecutionContext, SkillBundle, StepResult, Task, TaskResult
+    from fsq_agent.models import GoalPrePlan, KnowledgeBundle, RunEvent, RunExecutionContext, SkillBundle, StepResult, Task
 
 
 class CodingAgentRuntime(Protocol):
@@ -43,7 +43,3 @@ class CodingAgentRuntime(Protocol):
 
 class CodingAgentRuntimeFactory(Protocol):
     def __call__(self, settings: Settings, *, harness_factory: Any | None = None) -> CodingAgentRuntime: ...
-
-
-class RunCoordinator(Protocol):
-    async def __call__(self, task: Task, event_sink: RunEventSink | None = None) -> TaskResult: ...

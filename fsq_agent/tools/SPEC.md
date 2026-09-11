@@ -2,17 +2,17 @@
 
 ## Purpose
 
-Expose dynamic-only AgentTools for the OpenAI Agents SDK runtime. AgentTools help the agent inspect local context and recover large historical outputs during dynamic execution, but they are not recordable FSQ capabilities and are never included in strict replay registries.
+Expose dynamic-only AgentTools through neutral agent-engine tool bindings. AgentTools help the agent inspect local context and recover large historical outputs during dynamic execution, but they are not recordable FSQ capabilities and are never included in strict replay registries.
 
 The tools module owns scoped file read/write behavior, bounded run-artifact search and slice reads, AgentTool result normalization, model-facing output artifacting for large helper outputs, and safe AgentTool run-event metadata.
 
-The tools module does not own CommonTools, PlatformTools, platform actions, AI assertions, runtime progress events, local CLI execution, shell execution, or runtime-secret resolution. Recordable CommonTool capabilities such as `wait_ms` are inherited by platform tool providers owned by `core`; runtime-secret text input is resolved by `core`, not by an AgentTool or secret-fetch helper. Platform actions and `assertWithAI` are PlatformTools owned by `core`, with backend-specific tool bodies on concrete drivers. Progress events are runtime-internal events emitted by `agent`; provider-backed AI evaluation is owned by `providers` and injected into platform runtimes by entry-layer code.
+The tools module does not own CommonTools, PlatformTools, platform actions, AI assertions, runtime progress events, local CLI execution, shell execution, or runtime-secret resolution. Recordable CommonTool capabilities such as `wait_ms` are inherited by platform tool providers owned by `core`; runtime-secret text input is resolved by `core`, not by an AgentTool or secret-fetch helper. Platform actions and `assertWithAI` are PlatformTools owned by `core`, with backend-specific tool bodies on concrete drivers. Progress events are runtime-internal events emitted by `agent`; provider-backed AI evaluation is owned by `ai_services` and injected into platform runtimes by entry-layer code.
 
 ## Dependencies
 
-- Internal project dependencies: `models` only.
+- Internal project dependencies: `models` and public `agent_engine` tool contracts.
 - External dependencies: standard library path, JSON, async, and typing helpers plus Pydantic for private AgentTool argument models.
-- Forbidden dependencies: `agent`, `providers`, `core`, `cli`, `config`, `knowledge`, `skills`, `report`, `capabilities`, and OpenAI Agents SDK types at import time. The SDK adapter may accept SDK classes through dependency injection when building runtime tools.
+- Forbidden dependencies: `agent`, `providers`, `ai_services`, `core`, `cli`, `config`, `knowledge`, `skills`, `report`, `capabilities`, and SDK classes or constructor/callback shapes, including injected SDK types.
 
 ## Public Interface
 
@@ -24,7 +24,8 @@ Current `__init__.py` exports via `__all__`:
 - `FileOps`: Performs scoped file reads and writes. Read roots include the selected workspace platform's resolved cases/knowledge roots, resolved preset skill resources, and the current run where needed; writes are restricted to the current run artifact boundary.
 - `ToolArtifactStore`: Persists complete AgentTool outputs under the current run directory and provides bounded artifact search and slice reads.
 - `DefaultAgentToolProvider`: Built-in provider for `read_file`, `write_file`, `search_artifact`, and `read_artifact_slice`.
-- `AgentToolAdapter`: Builds OpenAI Agents SDK `FunctionTool` objects from AgentTool definitions while preserving SDK-neutral execution semantics.
+- `AgentToolAdapter`: Builds neutral `ToolBinding` values from AgentTool definitions, receives `ToolCall` JSON-object arguments, and preserves existing helper execution and model-facing JSON. `build_tools` does not accept an SDK class.
+- Tool bindings supply a safe invalid-input formatter so malformed JSON and non-object arguments return the existing failed AgentTool JSON without invoking a helper or losing the agent continuation path.
 - Backward-compatible `CommonTool*` import aliases are private compatibility shims only. New code and SPEC text use AgentTool names for this module.
 
 The exposed AgentTool names are:
@@ -44,7 +45,7 @@ This module does not expose `wait_ms`, `get_runtime_secret`, runtime-secret reso
 
 - `__init__.py`: Public exports only.
 - `_agent_tools.py`: AgentTool provider protocol, registry, executor, built-in helper wiring, and AgentTool result normalization.
-- `_agents_adapter.py`: OpenAI Agents SDK adapter that converts AgentTool definitions into SDK `FunctionTool` objects, maps SDK JSON arguments into AgentTool calls, emits AgentTool-origin events, and never emits replay metadata.
+- `_agents_adapter.py`: Neutral tool-binding construction, AgentTool execution callbacks, AgentTool-origin events, and existing safe model-facing results.
 - `_tool_artifacts.py`: Per-run AgentTool output artifact persistence plus bounded artifact search and slice helpers.
 - `_file_ops.py`: Scoped file operations.
 - `_common.py`: Compatibility module for existing aliases only; new behavior belongs in AgentTool modules above.
@@ -53,16 +54,16 @@ This module does not expose `wait_ms`, `get_runtime_secret`, runtime-secret reso
 ## Python Architecture
 
 - Architecture level: 2 Simple Package.
-- Public API: AgentTool provider/executor interfaces, built-in AgentTool provider, scoped file/artifact utilities, and SDK adapter exported from `__init__.py`.
+- Public API: AgentTool provider/executor interfaces, built-in AgentTool provider, scoped file/artifact utilities, and neutral tool adapter exported from `__init__.py`.
 - Internal modules: `_agent_tools.py`, `_agents_adapter.py`, `_tool_artifacts.py`, `_file_ops.py`, and `_common.py` are private implementation modules.
 - Domain boundaries: dynamic helper safety, scoped file access, artifact bounds, output artifacting, and AgentTool event metadata live here. Global capability routing, evidence capture, replay decisions, CommonTool behavior, PlatformTool behavior, and result/event normalization for recordable execution live in `core` and entry/runtime layers.
-- Boundary models: AgentTool definitions/calls/results come from `models` or private Pydantic helper models as specified by `models/SPEC.md`; runtime SDK objects remain adapter-local.
-- Dependency direction: may import public symbols from `models`; must not import `capabilities`, `core`, `agent`, `cli`, `config`, `providers`, `knowledge`, `skills`, `report`, or SDK classes at import time.
-- Rationale: the module owns focused dynamic helper behavior and SDK adaptation without orchestrating platform execution or strict replay, so Level 2 is sufficient.
+- Boundary models: AgentTool definitions/calls/results come from `models` or private Pydantic helper models; model-facing bindings/callback records come from public `agent_engine`.
+- Dependency direction: may import public symbols from `models` and `agent_engine`; must not import `capabilities`, `core`, `agent`, `cli`, `config`, `providers`, `knowledge`, `skills`, `report`, or SDK packages.
+- Rationale: focused dynamic helper behavior and neutral tool adaptation do not require platform orchestration or another application layer.
 
 ## Error Handling
 
-During SDK-managed runs, recoverable AgentTool failures return model-visible structured error JSON so the agent can retry or report failure. Invalid configuration, duplicate tool names, invalid tool names, malformed arguments, path traversal, attempts to read or write outside allowed roots, artifact bounds violations, and malformed outputs raise or normalize to `ToolExecutionError` from `models` depending on whether the failure happens during construction or invocation.
+During agent-engine-managed runs, recoverable AgentTool failures return model-visible structured error JSON so the agent can retry or report failure. Invalid configuration, duplicate tool names, invalid tool names, malformed arguments, path traversal, attempts to read or write outside allowed roots, artifact bounds violations, and malformed outputs raise or normalize to `ToolExecutionError` from `models` depending on whether the failure happens during construction or invocation.
 
 AgentTool outputs may be persisted to run-local tool artifacts when they exceed configured inline limits. AgentTool artifacts must stay under the current run directory and bounded read/search helpers must enforce maximum response sizes.
 
@@ -70,7 +71,7 @@ AgentTool events must use an AgentTool-specific origin such as `agent_tool`. Rec
 
 ## Verification Scope
 
-- Verification covers AgentTool registration, scoped file access, bounded artifact lookup/slicing, large-output artifacting, structured failure results, and SDK adapter behavior.
+- Verification covers AgentTool registration, scoped file access, bounded artifact lookup/slicing, large-output artifacting, structured failure results, and neutral tool binding behavior.
 - Boundary verification ensures AgentTools remain dynamic-only, absent from strict capability registries, and ignored by dynamic strict-case recording.
 
 ## Current Invariants
@@ -80,6 +81,7 @@ AgentTool events must use an AgentTool-specific origin such as `agent_tool`. Rec
 - AgentTools do not use the `capabilities` decorator layer because they are not executable FSQ capabilities and must not enter strict registries. Any decorated compatibility path must be hidden behind compatibility shims and must not be exposed as current AgentTool behavior.
 - File operation tools treat the selected workspace platform's cases/knowledge and resolved preset skill resources as read-only inputs. They write generated files only under the current run's artifact directory, which is a direct-child run below the resolved platform run root.
 - Artifact read tools only resolve paths inside the current run directory and enforce bounded search/slice results so artifact recovery cannot reintroduce unbounded context growth.
+- Artifact filenames use the supplied tool label at creation. Reads, searches, and slices resolve the saved artifact path and preserve existing file contents; they never derive an old file's name from the current runtime's fallback label or rename historical files.
 - Local CLI and shell execution remain out of scope. Command execution requires an explicitly scoped capability with its own SPEC update.
 - `publish_progress` is not an AgentTool. Runtime progress is emitted directly by `agent` as `RunEvent` values so user-visible status does not consume a model tool call or become confused with external capabilities.
 - `submit_visual_assertion` is not an AgentTool. Platform `assertWithAI` is a backend-owned PlatformTool exposed by the active platform capability surface and evaluated through an injected provider-backed evaluator.

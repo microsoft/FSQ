@@ -15,11 +15,11 @@ class Verifier:
         events_path: Path | None = None,
     ) -> VerificationResult:
         _ = events_path
-        verifier_steps = [step for step in results if step.tool_name == "openai_agents.verifier"]
-        runner_steps = [step for step in results if step.tool_name == "openai_agents.runner"]
-        sdk_steps = verifier_steps or runner_steps
-        if sdk_steps:
-            return self._verify_first_parseable_sdk_result(task, sdk_steps, require_parseable=bool(verifier_steps))
+        verifier_steps = [step for step in results if step.tool_name == "agent_runtime.verifier"]
+        runner_steps = [step for step in results if step.tool_name == "agent_runtime.runner"]
+        runtime_steps = verifier_steps or runner_steps
+        if runtime_steps:
+            return self._verify_first_parseable_runtime_result(task, runtime_steps, require_parseable=bool(verifier_steps))
 
         failed_steps = [step for step in results if step.status == "failed"]
         if failed_steps:
@@ -37,7 +37,7 @@ class Verifier:
             diagnostics=["Verifier avoids claiming UI task success without direct evidence."],
         )
 
-    def _verify_first_parseable_sdk_result(
+    def _verify_first_parseable_runtime_result(
         self,
         task: Task,
         steps: list[StepResult],
@@ -49,7 +49,7 @@ class Verifier:
             if self._parse_final_output(step.actual_outcome) is None and self._parse_final_output(step.tool_output) is None:
                 invalid_diagnostics.append(step.error or step.actual_outcome)
                 continue
-            result = self._verify_sdk_result(task, step)
+            result = self._verify_runtime_result(task, step)
             if invalid_diagnostics:
                 result.diagnostics.extend(invalid_diagnostics)
             return result
@@ -61,12 +61,12 @@ class Verifier:
             diagnostics=invalid_diagnostics or ["No structured verification output was available."],
         )
 
-    def _verify_sdk_result(self, task: Task, step: StepResult) -> VerificationResult:
+    def _verify_runtime_result(self, task: Task, step: StepResult) -> VerificationResult:
         payload = self._parse_final_output(step.tool_output) or self._parse_final_output(step.actual_outcome)
         if payload is None:
             return VerificationResult(
                 status="inconclusive",
-                summary="OpenAI Agents SDK completed, but the final output was not valid verification JSON.",
+                summary="Agent runtime completed, but the final output was not valid verification JSON.",
                 satisfied_criteria=[],
                 unmet_criteria=self._goal_texts(task) or ["No verification goal was reported."],
                 diagnostics=[step.actual_outcome],

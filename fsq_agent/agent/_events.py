@@ -12,14 +12,14 @@ from fsq_agent.observation import ExecutionLogger
 
 class RunEventEmitter:
     def __init__(self, logger: ExecutionLogger | None = None, sink: RunEventSink | None = None, *, secret_values: tuple[str, ...] = ()) -> None:
-        self.secret_values = secret_values
         self.logger = logger
         self.sink = sink
         self.sequence = 0
+        self._secret_values = tuple(sorted({value for value in secret_values if value}, key=len, reverse=True))
 
     async def emit(self, event: RunEvent) -> None:
         self.sequence += 1
-        values = _safe_event_value(event.model_dump(mode="json"), self.secret_values)
+        values = _safe_event_value(event.model_dump(mode="json"), self._secret_values)
         values["sequence"] = self.sequence
         sequenced = RunEvent.model_validate(values)
         if self.logger:

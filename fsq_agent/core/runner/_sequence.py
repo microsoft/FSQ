@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import logging
 from collections.abc import Sequence
 
 from fsq_agent.core.interfaces import CancellationCheck, EvidenceSink
@@ -39,7 +40,10 @@ class StepSequenceRunner:
             interrupted = exc
             attempted = self.step_runner.last_step_result is not None and self.step_runner.last_step_result.invocation_path == step.invocation_path
             for remaining in normal[index + 1 if attempted else index :]:
-                self._unexecuted(remaining, "incomplete", "execution_interrupted", None)
+                try:
+                    self._unexecuted(remaining, "incomplete", "execution_interrupted", None)
+                except BaseException as persistence_error:  # noqa: BLE001 - preserve the original interruption.
+                    logging.getLogger(__name__).warning("Interrupted step persistence failed (%s)", type(persistence_error).__name__)
         finally:
             for step in teardown:
                 try:

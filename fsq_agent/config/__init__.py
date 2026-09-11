@@ -20,6 +20,8 @@ from fsq_agent.config._user_provider import (
     load_user_provider_config,
     refresh_provider_settings,
     save_azure_openai_provider,
+    save_google_gemini_provider,
+    save_openai_provider,
 )
 from fsq_agent.config._workspace import (
     add_workspace_platform,
@@ -70,6 +72,8 @@ __all__ = [
     "resolve_platform_config_path",
     "resolve_runtime_paths",
     "save_azure_openai_provider",
+    "save_google_gemini_provider",
+    "save_openai_provider",
     "update_workspace_platform",
     "validate_provider_settings",
     "validate_runtime_settings",

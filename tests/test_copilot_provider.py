@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fsq_agent.ai_services import build_ai_assertion_evaluator
 from fsq_agent.config import Settings
-from fsq_agent.models import ConfigurationError, OpenAIAgentsSettings
+from fsq_agent.models import AgentRuntimeSettings, ConfigurationError
 from fsq_agent.providers import _github_copilot as copilot
 from fsq_agent.providers import (
-    build_ai_assertion_evaluator,
     build_model_provider_session,
     prepare_model_provider_session,
     refresh_model_provider_session,
@@ -43,11 +43,11 @@ def _github_settings(
     github_token: dict[str, object] | None = None,
     provider_token: dict[str, object] | None = None,
 ) -> Settings:
-    settings = Settings(openai_agents=OpenAIAgentsSettings(provider="github_copilot"))
-    settings.openai_agents.model = "gpt-5.5"
-    settings.openai_agents.github_token = github_token
-    settings.openai_agents.provider_token = provider_token
-    settings.openai_agents.user_config_root = tmp_path
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider="github_copilot"))
+    settings.agent_runtime.model = "gpt-5.5"
+    settings.agent_runtime.github_token = github_token
+    settings.agent_runtime.provider_token = provider_token
+    settings.agent_runtime.user_config_root = tmp_path
     return settings
 
 
@@ -281,6 +281,25 @@ def test_list_copilot_models_requests_plan_endpoint_and_filters_general_gpt_five
     assert get.call_args.args[0] == "https://api.business.githubcopilot.com/models"
     assert get.call_args.kwargs["headers"]["authorization"] == "Bearer pending-token"
     assert get.call_args.kwargs["timeout"] == copilot.COPILOT_AUTH_TIMEOUT_SECONDS
+
+
+def test_copilot_reasoning_effort_filters_preserve_service_order() -> None:
+    eligible = ["gpt-7-pro", "gpt-5", "gpt-5-2025-08-07", "gpt-5.1", "gpt-5.2-pro", "gpt-5.4-pro-2026-03-05", "gpt-5.7", "gpt-5.10-pro", "gpt-6", "gpt-7"]
+    excluded = ["gpt-5-pro", "gpt-5-pro-2025-10-06", "gpt-5.1-pro", "gpt-5-chat-latest", "gpt-7-chat", "gpt-7-mini", "gpt-7-codex", "claude-4", "gemini-4-pro"]
+    response = MagicMock()
+    response.json.return_value = {
+        "data": [{"id": name, "capabilities": {"type": "chat"}} for name in eligible + excluded + eligible]
+        + [
+            {"id": "gpt-7.1", "name": "GPT 7.1 Chat"},
+            {"id": "gpt-5.0", "name": "GPT 5 Pro"},
+            {"id": "gpt-7.2", "model_picker_enabled": False},
+            {"id": "gpt-7.3", "capabilities": {"type": "completion"}},
+        ]
+    }
+
+    with patch.object(copilot.httpx, "get", return_value=response) as get:
+        assert [model.id for model in copilot.list_github_copilot_models(_authorization())] == eligible
+    get.assert_called_once()
 
 
 def test_list_copilot_models_rejects_malformed_envelope_without_exposing_token() -> None:

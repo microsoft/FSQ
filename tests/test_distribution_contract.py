@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +57,19 @@ def test_python_dependencies_are_lock_free_public_and_exactly_versioned() -> Non
     assert all(EXACT_REQUIREMENT.fullmatch(requirement) for requirement in project["build-system"]["requires"])
     assert all(EXACT_REQUIREMENT.fullmatch(requirement) for requirement in project["project"]["dependencies"])
     assert all(EXACT_REQUIREMENT.fullmatch(requirement) for requirements in project["project"]["optional-dependencies"].values() for requirement in requirements)
+
+
+def test_agent_engine_distribution_does_not_require_agents_sdk() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    metadata = project["project"]
+    requirements = [*metadata["dependencies"], *project["build-system"]["requires"]]
+    for optional in metadata["optional-dependencies"].values():
+        requirements.extend(optional)
+    assert "openai-agents" not in {canonicalize_name(Requirement(requirement).name) for requirement in requirements}
+    assert "openai==2.34.0" in metadata["dependencies"]
+    assert "google-genai==2.21.0" in metadata["dependencies"]
+    assert "httpx==0.28.1" in metadata["dependencies"]
+    assert "OpenAI Agents SDK" not in metadata["description"]
 
 
 def test_default_distribution_contract() -> None:

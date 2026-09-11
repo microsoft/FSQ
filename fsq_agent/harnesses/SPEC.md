@@ -16,9 +16,9 @@ Own concrete runtime gateways that combine inherited CommonTools, one injected p
 
 Concrete Android, Web, Windows, and macOS harness classes remain private. `core.interfaces.HarnessFactory` is the stable public construction boundary and returns `HarnessInterface`.
 
-`core.interfaces._factories` is the sole approved external importer of private `_factory._HarnessFactoryImplementation` for that wrapper. This named composition exception preserves lazy factory construction; Harness implementations consume Core protocol definitions and never import the factory wrapper.
+Factory-created Harnesses own their created Driver and receive ownership of the supplied run-local evaluator. `close()` attempts disposal of both through their public contracts, retains the first cleanup failure if more than one fails, and does not repeat successfully completed disposal. A construction failure releases resources created or transferred to the factory before propagating its primary failure. No cleanup call is exposed as a capability or recorded as an application lifecycle action.
 
-Private platform Harness modules consume only the named Drivers capability-metadata helpers approved in `drivers/SPEC.md`, using injected driver instances. This is a declaration-composition boundary, not permission to import concrete backend classes or factory selectors.
+The sole external importer of private `_factory._HarnessFactoryImplementation` is `core.interfaces._factories`; concrete Harnesses consume protocol definitions, never that wrapper. Private platform Harness modules use only the Drivers-approved metadata helpers against injected instances, not concrete backend classes or selectors.
 
 ## Internal Structure
 
@@ -44,6 +44,7 @@ Harnesses classify backend failures through normalized contracts, preserve cance
 
 - CommonTools route to the inherited platform provider; PlatformTools delegate to the injected driver.
 - Harnesses do not duplicate driver action bodies.
+- Capture services preserve execution identity, phase/reason, independent screenshot/UI snapshot outcomes, and supplied snapshot coverage/compaction metadata. Unknown coverage remains unknown. Allocation and durable acknowledgement use injected Core evidence boundaries, not manually constructed paths or a second journal.
 - Concrete harness selection is lazy and hidden behind `core.interfaces.HarnessFactory`.
-- Capture services preserve unique execution identity, phase and capture reason, independent screenshot/UI snapshot outcomes, and driver-supplied snapshot coverage/compaction metadata. Unknown coverage remains unknown; compact or clipped observations are not represented as complete application state. Artifact allocation and durable capture acknowledgements use the injected Core evidence boundaries rather than manually constructed paths or a second journal.
+- Closing releases owned backend/session/worker resources without starting a browser, device, or application, restarting ADB, or inventing an authored close/kill step. Shared externally owned resources are supplied through wrappers whose disposal does not release the borrowed resource.
 - Old `core.harness` imports forward to canonical Drivers, Harnesses, or Core Interfaces without duplicate state.

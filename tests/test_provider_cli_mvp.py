@@ -24,6 +24,52 @@ def test_azure_application_configuration_is_visible_to_ui_config_api(tmp_path: P
     assert saved.api_key == "top-secret"
 
 
+@pytest.mark.parametrize("output", ["human", "json", "jsonl"])
+def test_openai_cli_non_interactive_configures_shared_user_store(tmp_path, monkeypatch, output):
+    from fsq_agent.providers import OpenAIModel
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("fsq_agent.application.providers._discover_openai_models", lambda **kwargs: (OpenAIModel(id="gpt-5", name="gpt-5"),))
+    result = CliRunner().invoke(main, ["--output", output, "--non-interactive", "providers", "configure", "openai", "--model", "gpt-5", "--api-key", "cli-secret"])
+    assert result.exit_code == 0, result.output
+    saved = load_user_provider_config(tmp_path / ".fsq")
+    assert saved.provider.type == "openai"
+    assert saved.api_key == "cli-secret"
+    assert "cli-secret" not in result.output
+    status = provider_status(user_config_root=tmp_path / ".fsq")
+    assert status.status == "ready"
+    assert status.provider == "openai"
+
+
+def test_openai_cli_interactive_requires_explicit_model_choice_and_hides_key(tmp_path, monkeypatch):
+    from fsq_agent.providers import OpenAIModel
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("fsq_agent.application.providers._discover_openai_models", lambda **kwargs: (OpenAIModel(id="gpt-5", name="gpt-5"),))
+    result = CliRunner().invoke(main, ["providers", "configure", "openai"], input="cli-secret\n1\n")
+    assert result.exit_code == 0, result.output
+    assert "Select model" in result.output
+    assert "cli-secret" not in result.output
+    assert load_user_provider_config(tmp_path / ".fsq").provider.model == "gpt-5"
+
+
+@pytest.mark.parametrize("options", [[], ["--model", "gpt-5"], ["--api-key", "cli-secret"], ["--base-url", "https://untrusted.example", "--model", "gpt-5", "--api-key", "cli-secret"]])
+def test_openai_cli_rejects_missing_or_custom_endpoint_options(options):
+    result = CliRunner().invoke(main, ["--output", "json", "--non-interactive", "providers", "configure", "openai", *options])
+    assert result.exit_code == 2
+    assert "cli-secret" not in result.output
+
+
+def test_openai_cli_empty_models_does_not_save_or_prompt_for_selection(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("fsq_agent.application.providers._discover_openai_models", lambda **kwargs: ())
+    result = CliRunner().invoke(main, ["providers", "configure", "openai", "--api-key", "cli-secret"])
+    assert result.exit_code == 4
+    assert "Select model" not in result.output
+    assert "cli-secret" not in result.output
+    assert load_user_provider_config(tmp_path / ".fsq").provider is None
+
+
 def test_status_reads_github_configuration_written_by_shared_ui_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     activate_github_copilot_provider(
         model="gpt-5", github_token={"access_token": "oauth-secret"}, provider_token={"token": "provider-secret", "expires_at": 9999999999, "plan": "individual"}, user_config_root=tmp_path

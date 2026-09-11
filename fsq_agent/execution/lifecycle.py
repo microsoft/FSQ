@@ -365,7 +365,10 @@ class _StrictLifecycleExecutor:
             finally:
                 self._completion_depth -= 1
         if interrupted is not None:
-            self._skip_scope(self._invocation_path, "execution_interrupted", status="incomplete")
+            try:
+                self._skip_scope(self._invocation_path, "execution_interrupted", status="incomplete")
+            except BaseException as persistence_error:  # noqa: BLE001 - preserve the original interruption.
+                logging.getLogger(__name__).warning("Interrupted scope persistence failed (%s)", type(persistence_error).__name__)
             raise interrupted
         return start_ok and main_ok and complete_ok and config_complete_ok
 

@@ -7,6 +7,7 @@ import json
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
@@ -567,10 +568,6 @@ async def test_explore_execution_delegates_to_agent_and_records_without_changing
     state = ControlPlaneState()
     request_id = state.reserve(workspace_name="checkout", platform="android", target_id="device", mode="explore", source={"goal": "Verify it"})
     prepared = type("Prepared", (), {"settings": settings, "request_id": request_id, "goal": "Verify it"})()
-    run_dir = settings.output.runs_dir / "run-1"
-    run_dir.mkdir(parents=True)
-    report_path = run_dir / "report.md"
-    report_path.write_text("report", encoding="utf-8")
     captured: dict[str, object] = {}
 
     class FakeAgent:
@@ -633,6 +630,26 @@ def test_evidence_projection_rejects_escape_and_reads_latest_artifacts(tmp_path:
     assert headers["X-Evidence-Revision"] == "1"
     assert tree["content"] == '{"node":"safe"}'
     assert "super-secret" not in json.dumps(state.snapshot(request_id))
+
+
+@pytest.mark.parametrize(
+    ("ready_title", "failure_title", "failure_category"),
+    [("SDK agent ready", "SDK run failed", "sdk_error"), ("Agent runtime ready", "Agent run failed", "agent_runtime_error")],
+)
+def test_evidence_projection_preserves_runtime_labels_as_data(tmp_path: Path, ready_title: str, failure_title: str, failure_category: str) -> None:
+    state = ControlPlaneState()
+    request_id = state.reserve(workspace_name="checkout", platform="android", target_id="device", mode="explore", source={"goal": "Go"})
+    projection = EvidenceProjection(state, request_id, tmp_path / "runs")
+    projection.project_run_event(RunEvent(run_id="run-1", task_id="task", type="planning_update", title=ready_title))
+    projection.project_run_event(
+        RunEvent(run_id="run-1", task_id="task", type="run_failed", title=failure_title, message="Runtime failed.", payload={"failure_category": failure_category, "failure_reason": failure_category})
+    )
+
+    events = state.snapshot(request_id)["events"]
+    assert [event["label"] for event in events] == [ready_title, failure_title]
+    assert "status" not in events[0]
+    assert events[1]["status"] == "failed"
+    assert events[1]["payload"] == {"failure_category": failure_category, "failure_reason": failure_category}
 
 
 def test_strict_step_results_project_to_case_steps_without_event_status_override(tmp_path: Path) -> None:
@@ -1056,6 +1073,41 @@ def test_server_save_yaml_uses_frozen_cases_directory(tmp_path: Path, monkeypatc
     assert not (changed_settings.cases.dir / "frozen-flow.fsq.yaml").exists()
 
 
+@pytest.mark.parametrize("failure_kind", ["conflict", "recording", "case"])
+def test_save_yaml_http_errors_preserve_existing_files(tmp_path: Path, monkeypatch, failure_kind: str) -> None:
+    settings = _settings(tmp_path, "web")
+    (tmp_path / "index.html").write_text("<!doctype html><title>Test</title>")
+    server = ControlPlaneServer(ControlPlaneServerOptions(static_path=tmp_path, port=0))
+    monkeypatch.setattr("fsq_agent.adapters.control_plane._server.load_control_plane_settings", lambda *_args: settings)
+    request_id = server.state.reserve(workspace_name="checkout", platform="web", target_id="chrome", mode="explore", source={"goal": "Go"})
+    run_dir = settings.output.runs_dir / "run-1"
+    run_dir.mkdir()
+    candidate = run_dir / "recorded.fsq.yaml"
+    _case(candidate, platform="web", app_id=False)
+    destination = settings.cases.dir / "occupied.fsq.yaml"
+    _case(destination, platform="web", command="waitMs:\n    duration_ms: 2", app_id=False)
+    if failure_kind == "recording":
+        (run_dir / "recording.json").write_text('{"draft": "invalid"}')
+    elif failure_kind == "case":
+        candidate.write_text("invalid: [")
+    before = {path: path.read_bytes() for path in [candidate, destination]}
+    server.state.bind_cases_dir(request_id, settings.cases.dir.resolve())
+    server.state.bind_run(request_id, "run-1", run_dir.resolve())
+    server.state.finish(request_id, status="success", summary="done")
+    server.start()
+    try:
+        with pytest.raises(HTTPError) as error:
+            _post_json(f"{server.url}/api/control-plane/runs/{request_id}/save-yaml", {"caseName": "occupied"})
+        payload = json.loads(error.value.read())
+        assert error.value.code == (409 if failure_kind == "conflict" else 400)
+        assert payload["code"] == ("case.publication_conflict" if failure_kind == "conflict" else "case.invalid")
+        assert payload["action"]
+        assert str(tmp_path) not in json.dumps(payload)
+    finally:
+        server.stop()
+    assert {path: path.read_bytes() for path in before} == before
+
+
 def test_server_save_yaml_rejects_strict_and_missing_recording(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path)
     server = ControlPlaneServer(ControlPlaneServerOptions(static_path=tmp_path))
@@ -1382,7 +1434,7 @@ def test_server_actual_http_run_paths_sse_evidence_and_cancellation(tmp_path: Pa
             if "cancel" in task.description.casefold():
                 await asyncio.Event().wait()
             run_dir = settings.output.runs_dir / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
+            assert (run_dir / "run.json").is_file()
             report = run_dir / "report.md"
             report.write_text("report", encoding="utf-8")
             return DynamicAgentOutcome(

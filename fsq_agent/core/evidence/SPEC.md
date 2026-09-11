@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Own run-contained artifact storage, the durable runner evidence journal, atomic evidence checkpoints, and read-only reconstruction of persisted execution facts. Evidence persists safe facts and artifact references supplied by Runner and harness observation boundaries; it does not decide execution, Run lifecycle or liveness, transport projection, Case recording, or report presentation.
+Own run-contained artifact storage, durable runner evidence journals, atomic evidence checkpoints, and read-only reconstruction. Evidence persists safe facts supplied by Runner and harness observation boundaries; it does not decide execution, Run lifecycle/liveness, transport projection, Case recording, or report presentation.
 
 ## Dependencies
 
@@ -13,8 +13,8 @@ Evidence must not import adapters, Application, Agent, Case DSL, concrete harnes
 
 ## Public Interface
 
-- `ArtifactStore`: owns run-local directory containment, unique artifact allocation, atomic artifact writes, and explicit capture availability records.
-- `EvidenceRecorder`: implements the public evidence sink contracts, appends normalized execution facts durably, builds bundles, and atomically checkpoints the manifest. Existing `record_event`, `record_step_result`, `build_bundle`, and `write_manifest` methods remain supported. Its public `recover_bundle(run_dir: Path) -> EvidenceBundle` class operation reconstructs a bundle from a validated checkpoint and acknowledged journal records without invoking execution or rewriting source facts.
+- `ArtifactStore`: owns contained unique artifact allocation, atomic writes, and explicit capture availability records.
+- `EvidenceRecorder`: implements public evidence sinks, durably appends execution facts, builds bundles, and atomically checkpoints manifests. Existing `record_event`, `record_step_result`, `build_bundle`, and `write_manifest` remain supported. Public `recover_bundle(run_dir: Path) -> EvidenceBundle` reconstructs validated checkpoint/journal facts without execution or source mutation.
 
 Both symbols are exported from `core.evidence` and re-exported from `core` with identical object identity.
 
@@ -22,7 +22,7 @@ Both symbols are exported from `core.evidence` and re-exported from `core` with 
 
 - `__init__.py`: public exports.
 - `_artifact_store.py`: contained unique artifact paths, availability records, and atomic writes.
-- `_recorder.py`: journal append, evidence reconstruction, bundle accumulation, and atomic manifest checkpoints.
+- `_recorder.py`: journal append, evidence reconstruction, bundle accumulation, and atomic checkpoints.
 
 ## Python Architecture
 
@@ -36,19 +36,14 @@ Both symbols are exported from `core.evidence` and re-exported from `core` with 
 
 ## Error Handling
 
-All paths remain contained under the explicit Run directory, including resolved symlinks. IO and serialization failures are reported without leaking secret values or writing outside the Run. A failed append or checkpoint never replaces a previously valid checkpoint or silently acknowledges an unpersisted fact.
-
-Recovery preserves complete validated records before an incomplete trailing write and reports the truncated tail explicitly. A malformed complete record, conflicting sequence, or inconsistent identity is an evidence-integrity error; it cannot be silently discarded to manufacture a complete or successful bundle. Missing, unreadable, truncated, deliberately omitted, and not-applicable artifacts are distinguishable from captured artifacts. Unknown values remain null with a reason.
+All paths remain contained under the explicit Run directory, including resolved symlinks. IO/serialization failures do not leak secrets, replace a valid checkpoint, or acknowledge unpersisted facts. Recovery preserves validated records before an incomplete trailing write and reports truncation. Malformed complete records, conflicting sequences, and inconsistent identities are integrity errors, not silently discarded facts. Missing, unreadable, truncated, omitted, not-applicable, and captured artifacts remain distinct; unknown values are null with reasons.
 
 ## Current Invariants
 
 - Artifact paths are Run-relative in persisted contracts.
 - Callers do not manually construct artifact storage paths.
 - Evidence facts remain distinct from transport progress projection and generated Case recording.
-- `evidence-events.jsonl` stores `fsq.evidence-event/v1` runner journal records with a strictly increasing Run-local sequence and stable event identity. It is separate from Agent `events.jsonl`; a capability fact is persisted once even when SDK progress events also describe it.
-- Step start, phase transitions, external action result, artifact capture outcome, and step completion are appended as they occur, with flush and durable acknowledgement at the boundary that depends on them. Evidence does not wait for the complete step or Run to return before persisting facts.
-- `evidence-manifest.json` uses `fsq.evidence/v2`, records its checkpoint sequence and completeness, and is written through same-directory temporary storage, flush, fsync, and atomic replacement. Recovery can expose a partial Run from the checkpoint and journal after a crash.
-- Historical core evidence version `1.0` and the supported unversioned dynamic manifest shape remain readable without migration or invented missing fields. New dynamic and strict capability evidence use the same versioned manifest contract.
-- Artifact identity includes artifact kind, `step_execution_id`, phase, and capture occurrence. Screenshot and UI snapshot references are distinct; repeated invocations, attempts, and captures never overwrite earlier evidence. Safe artifact content integrity metadata describes the bytes actually persisted; secret values are neither persisted nor hashed as provenance.
-- Evidence completeness is derived from required capture outcomes and acknowledged execution facts, independently of action and verification verdicts. Partial evidence cannot silently become complete during report generation.
-- `recover_bundle` owns versioned journal/checkpoint reconstruction. Execution exposes this through its read-only evidence boundary; report renderers receive the normalized `models.EvidenceBundle` and do not import Core or implement another journal-replay algorithm.
+- `evidence-events.jsonl` stores `fsq.evidence-event/v1` records with strictly increasing Run-local sequence and stable event identity, separately from Agent progress. Step starts, phases, action results, artifact outcomes, and completion are durably acknowledged as they occur rather than buffered until the Run completes.
+- Atomic `evidence-manifest.json` uses `fsq.evidence/v2` with checkpoint sequence/completeness; recovery exposes partial Runs. Core evidence `1.0` and the supported unversioned dynamic shape remain readable without migration or invented facts.
+- Artifact identity combines kind, execution identity, phase, and capture occurrence; repeated invocations/attempts never overwrite evidence. Integrity metadata describes safe persisted bytes, never private-value digests.
+- Completeness follows required capture outcomes and acknowledged execution facts, independently of action/verification verdicts. Execution exposes recovery through its read-only boundary; Report receives a normalized Models bundle without importing Core or replaying the journal independently.

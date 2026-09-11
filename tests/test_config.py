@@ -60,6 +60,42 @@ def test_platform_config_paths_are_package_owned() -> None:
     assert all(path.is_file() for path in PLATFORM_CONFIG_PATHS.values())
 
 
+@pytest.mark.parametrize("effort", ["low", "mid", "high"])
+def test_reasoning_effort_loads_from_runtime_config(tmp_path: Path, effort: str) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path, f"agent_runtime:\n  reasoning_effort: {effort}\n"), encoding="utf-8")
+
+    settings = load_settings(config_path, user_config_root=tmp_path / "user")
+
+    assert settings.agent_runtime.reasoning_effort == effort
+
+
+def test_reasoning_effort_omitted_uses_neutral_fallback(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path), encoding="utf-8")
+
+    assert load_settings(config_path, user_config_root=tmp_path / "user").agent_runtime.reasoning_effort == "mid"
+
+
+@pytest.mark.parametrize("effort", ["auto", "medium", "''", "null", "false", "1"])
+def test_reasoning_effort_rejects_invalid_config(tmp_path: Path, effort: str) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_base_config(tmp_path, f"agent_runtime:\n  reasoning_effort: {effort}\n"), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError) as failure:
+        load_settings(config_path, user_config_root=tmp_path / "user")
+    assert any(error["loc"] == ("agent_runtime", "reasoning_effort") for error in failure.value.context["errors"])
+
+
+@pytest.mark.parametrize("platform", ["android", "web", "windows", "macos"])
+def test_reasoning_effort_is_explicit_platform_policy(tmp_path: Path, platform: str) -> None:
+    preset = yaml.safe_load(PLATFORM_CONFIG_PATHS[platform].read_text(encoding="utf-8"))
+    effort = preset["agent_runtime"]["reasoning_effort"]
+
+    assert effort in {"low", "mid", "high"}
+    assert load_platform_settings(platform, user_config_root=tmp_path / "user").agent_runtime.reasoning_effort == effort
+
+
 def test_load_workspace_platform_settings_composes_workspace_without_creating_content(tmp_path: Path) -> None:
     workspace = tmp_path / "checkout-android"
     config_dir = workspace / ".fsq" / "config"
@@ -116,7 +152,7 @@ env: {{}}
     assert settings.harness.platform == "android"
     assert settings.harness.android.backend == "uiautomator2"
     assert settings.harness.android.app_id == "com.example.registered"
-    assert settings.openai_agents.max_turns == 100
+    assert settings.agent_runtime.max_turns == 100
     assert settings.agent_context.knowledge.skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
 
 
@@ -247,7 +283,7 @@ def test_load_settings_from_yaml(tmp_path: Path) -> None:
             """
 agent:
   name: test-agent
-openai_agents:
+agent_runtime:
   max_turns: 40
   tracing_enabled: false
 """,
@@ -258,10 +294,10 @@ openai_agents:
     settings = load_settings(config_path)
 
     assert settings.agent.name == "test-agent"
-    assert settings.openai_agents.provider == "github_copilot"
-    assert settings.openai_agents.model == "gpt-5.5"
-    assert settings.openai_agents.max_turns == 40
-    assert settings.openai_agents.tracing_enabled is False
+    assert settings.agent_runtime.provider == "github_copilot"
+    assert settings.agent_runtime.model == "gpt-5.5"
+    assert settings.agent_runtime.max_turns == 40
+    assert settings.agent_runtime.tracing_enabled is False
     assert not hasattr(settings, "verification")
     assert not hasattr(settings, "cli_tools")
     assert not hasattr(settings, "shell")
@@ -355,25 +391,17 @@ def test_config_example_is_reference_only_and_shows_case_lifecycle(tmp_path: Pat
     assert settings.agent_context.knowledge.skills.dir == repository_root / "fsq_agent" / "resources" / "skills"
 
 
-@pytest.mark.parametrize(
-    ("platform", "expected_max_turns"),
-    [
-        ("android", 100),
-        ("web", 50),
-        ("windows", 100),
-        ("macos", 50),
-    ],
-)
-def test_committed_platform_presets_define_max_turns_and_bind_package_skills(platform: str, expected_max_turns: int, tmp_path: Path) -> None:
+@pytest.mark.parametrize("platform", ["android", "web", "windows", "macos"])
+def test_committed_platform_presets_define_max_turns_and_bind_package_skills(platform: str, tmp_path: Path) -> None:
     config_path = PLATFORM_CONFIG_PATHS[platform]
+    preset = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-    settings = load_settings(config_path, workspace=tmp_path / config_path.stem)
+    settings = load_settings(config_path, workspace=tmp_path / config_path.stem, user_config_root=tmp_path / "user")
 
-    assert settings.openai_agents.max_turns == expected_max_turns
+    assert settings.agent_runtime.max_turns == preset["agent_runtime"]["max_turns"]
     skills = settings.agent_context.knowledge.skills
     assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
     assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
-    preset = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert "dir" not in preset["agent_context"]["knowledge"]["skills"]
 
 
@@ -396,12 +424,13 @@ caseLifecycle:
 
 
 def test_load_platform_settings_loads_committed_platform_preset(tmp_path: Path) -> None:
-    settings = load_platform_settings("web", workspace=tmp_path / "legacy-web")
+    preset = yaml.safe_load(PLATFORM_CONFIG_PATHS["web"].read_text(encoding="utf-8"))
+    settings = load_platform_settings("web", workspace=tmp_path / "legacy-web", user_config_root=tmp_path / "user")
 
     assert settings.harness.platform == "web"
     assert settings.harness.web.backend == "playwright"
     assert settings.harness.web.base_url is None
-    assert settings.openai_agents.max_turns == 50
+    assert settings.agent_runtime.max_turns == preset["agent_runtime"]["max_turns"]
     skills = settings.agent_context.knowledge.skills
     assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
     assert all(item.path is not None and (skills.dir / item.path).is_file() for item in skills.items)
@@ -1050,10 +1079,10 @@ def test_azure_openai_endpoint_model_and_key_come_from_user_provider_store(tmp_p
     settings = load_settings(config_path)
 
     validate_runtime_settings(settings)
-    assert settings.openai_agents.provider == "azure_openai"
-    assert settings.openai_agents.base_url == "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
-    assert settings.openai_agents.model == "gpt-5.4"
-    assert settings.openai_agents.api_key == "dummy"
+    assert settings.agent_runtime.provider == "azure_openai"
+    assert settings.agent_runtime.base_url == "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
+    assert settings.agent_runtime.model == "gpt-5.4"
+    assert settings.agent_runtime.api_key == "dummy"
 
 
 def test_load_settings_ignores_provider_environment_variables(
@@ -1070,9 +1099,9 @@ def test_load_settings_ignores_provider_environment_variables(
     settings = load_settings(config_path)
 
     validate_provider_settings(settings)
-    assert settings.openai_agents.provider == "github_copilot"
-    assert settings.openai_agents.base_url == ""
-    assert settings.openai_agents.model == "gpt-5.5"
+    assert settings.agent_runtime.provider == "github_copilot"
+    assert settings.agent_runtime.base_url == ""
+    assert settings.agent_runtime.model == "gpt-5.5"
 
 
 def test_load_settings_rejects_provider_in_platform_yaml(tmp_path: Path) -> None:
@@ -1081,7 +1110,7 @@ def test_load_settings_rejects_provider_in_platform_yaml(tmp_path: Path) -> None
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   provider: azure_openai
 """,
         ),
@@ -1102,7 +1131,7 @@ def test_load_settings_ignores_invalid_fsq_llm_provider_env(
 
     settings = load_settings(config_path)
 
-    assert settings.openai_agents.provider == "github_copilot"
+    assert settings.agent_runtime.provider == "github_copilot"
 
 
 def test_validate_provider_settings_does_not_require_platform_target(tmp_path: Path) -> None:
@@ -1136,8 +1165,8 @@ def test_configured_github_copilot_provider_skips_azure_key(tmp_path: Path, monk
     settings = load_settings(config_path)
 
     validate_runtime_settings(settings)
-    assert settings.openai_agents.provider == "github_copilot"
-    assert settings.openai_agents.model == "gpt-5.5"
+    assert settings.agent_runtime.provider == "github_copilot"
+    assert settings.agent_runtime.model == "gpt-5.5"
 
 
 def test_load_settings_rejects_explicit_openai_model_in_yaml(tmp_path: Path) -> None:
@@ -1146,7 +1175,7 @@ def test_load_settings_rejects_explicit_openai_model_in_yaml(tmp_path: Path) -> 
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   provider: github_copilot
   model: custom-copilot-model
 """,
@@ -1164,7 +1193,7 @@ def test_load_settings_rejects_azure_endpoint_fields_in_yaml(tmp_path: Path) -> 
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   provider: azure_openai
   base_url: https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/
   api_key_env: AZURE_OPENAI_API_KEY
@@ -1183,7 +1212,7 @@ def test_load_settings_rejects_sensitive_tracing_in_yaml(tmp_path: Path) -> None
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   trace_include_sensitive_data: true
 """,
         ),
@@ -1200,7 +1229,7 @@ def test_load_settings_rejects_invalid_provider(tmp_path: Path) -> None:
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   provider: local_llm
 """,
         ),
@@ -1221,7 +1250,7 @@ def test_load_settings_accepts_prompt_config(tmp_path: Path) -> None:
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   prompt:
     agent_template_path: ./agent.j2
     task_template_path: ./task.j2
@@ -1234,9 +1263,9 @@ openai_agents:
 
     settings = load_settings(config_path)
 
-    assert settings.openai_agents.prompt.agent_template_path == agent_template.resolve()
-    assert settings.openai_agents.prompt.task_template_path == task_template.resolve()
-    assert settings.openai_agents.prompt.variables == {"voice": "concise"}
+    assert settings.agent_runtime.prompt.agent_template_path == agent_template.resolve()
+    assert settings.agent_runtime.prompt.task_template_path == task_template.resolve()
+    assert settings.agent_runtime.prompt.variables == {"voice": "concise"}
 
 
 def test_load_settings_rejects_obsolete_prompt_custom_instructions(tmp_path: Path) -> None:
@@ -1245,7 +1274,7 @@ def test_load_settings_rejects_obsolete_prompt_custom_instructions(tmp_path: Pat
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   prompt:
     custom_instructions:
       - Prefer semantic UI assertions before visual fallback.
@@ -1264,7 +1293,7 @@ def test_load_settings_rejects_obsolete_prompt_custom_instructions_path(tmp_path
         _base_config(
             tmp_path,
             """
-openai_agents:
+agent_runtime:
   prompt:
     custom_instructions_path: ./custom-instructions.md
 """,
@@ -1282,11 +1311,10 @@ def test_load_settings_rejects_internal_context_and_tool_output_policy(tmp_path:
         _base_config(
             tmp_path,
             """
-openai_agents:
-  context_trimming:
-    recent_turns: 3
+agent_runtime:
   local_tool_output:
-    recent_full_output_count: 4
+        recent_inline_output_count: 4
+        total_inline_output_max_chars: 50000
 """,
         ),
         encoding="utf-8",
@@ -1312,12 +1340,12 @@ def test_validate_runtime_settings_requires_azure_model(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(_base_config(tmp_path), encoding="utf-8")
     settings = load_settings(config_path)
-    settings.openai_agents.provider = "azure_openai"
-    settings.openai_agents.base_url = "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
-    settings.openai_agents.model = ""
-    settings.openai_agents.api_key = "dummy"
+    settings.agent_runtime.provider = "azure_openai"
+    settings.agent_runtime.base_url = "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
+    settings.agent_runtime.model = ""
+    settings.agent_runtime.api_key = "dummy"
 
-    with pytest.raises(ConfigurationError, match="model deployment"):
+    with pytest.raises(ConfigurationError, match="Model deployment name is required"):
         validate_runtime_settings(settings)
 
 
@@ -1325,10 +1353,10 @@ def test_validate_runtime_settings_requires_azure_api_key(tmp_path: Path) -> Non
     config_path = tmp_path / "config.yaml"
     config_path.write_text(_base_config(tmp_path), encoding="utf-8")
     settings = load_settings(config_path)
-    settings.openai_agents.provider = "azure_openai"
-    settings.openai_agents.base_url = "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
-    settings.openai_agents.model = "gpt-5.4"
-    settings.openai_agents.api_key = ""
+    settings.agent_runtime.provider = "azure_openai"
+    settings.agent_runtime.base_url = "https://edgeqa-resource.cognitiveservices.azure.com/openai/v1/"
+    settings.agent_runtime.model = "gpt-5.4"
+    settings.agent_runtime.api_key = ""
 
     with pytest.raises(ConfigurationError, match="API key"):
         validate_runtime_settings(settings)

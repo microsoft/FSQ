@@ -3,11 +3,11 @@
 
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from fsq_agent.agent_engine import ModelRequest, ModelResult
 from fsq_agent.config import (
     Settings,
     activate_github_copilot_provider,
@@ -15,7 +15,7 @@ from fsq_agent.config import (
     load_user_provider_config,
     save_azure_openai_provider,
 )
-from fsq_agent.models import ConfigurationError, OpenAIAgentsSettings
+from fsq_agent.models import AgentRuntimeSettings, ConfigurationError
 from fsq_agent.providers import (
     GitHubDeviceCode,
     activate_github_copilot_authorization,
@@ -77,9 +77,9 @@ def test_github_client_uses_saved_custom_model_and_user_provider_token(tmp_path:
 
 
 def test_runtime_missing_github_credentials_never_starts_device_flow(tmp_path: Path) -> None:
-    settings = Settings(openai_agents=OpenAIAgentsSettings(provider="github_copilot"))
-    settings.openai_agents.model = "copilot-model"
-    settings.openai_agents.user_config_root = tmp_path
+    settings = Settings(agent_runtime=AgentRuntimeSettings(provider="github_copilot"))
+    settings.agent_runtime.model = "copilot-model"
+    settings.agent_runtime.user_config_root = tmp_path
 
     with (
         patch.object(copilot, "request_github_copilot_device_code") as request_device_code,
@@ -216,6 +216,8 @@ def test_completed_github_device_flow_requires_explicit_activation_to_commit(tmp
 
 
 def test_connection_test_uses_saved_provider_and_always_closes_session(tmp_path: Path) -> None:
+    from fsq_agent.config import Settings
+
     user_root = tmp_path / "user"
     save_azure_openai_provider(
         base_url="https://example.openai.azure.com",
@@ -226,13 +228,18 @@ def test_connection_test_uses_saved_provider_and_always_closes_session(tmp_path:
     session = MagicMock()
     session.provider = "azure_openai"
     session.model = "saved-model"
-    session.invoke_responses_sync.return_value = SimpleNamespace(output_text="FSQ_OK")
+    session.complete_sync.return_value = ModelResult(text="FSQ_OK")
 
-    with patch("fsq_agent.providers._connection_test.build_model_provider_session", return_value=session):
+    settings = Settings()
+    settings.agent_runtime.reasoning_effort = "high"
+    with (
+        patch("fsq_agent.providers._connection_test.build_model_provider_session", return_value=session),
+        patch("fsq_agent.providers._connection_test.Settings", return_value=settings),
+    ):
         result = test_model_provider_connection(user_config_root=user_root)
 
     assert result.provider == "azure_openai"
     assert result.model == "saved-model"
     assert result.duration_seconds >= 0
-    assert session.invoke_responses_sync.call_args.kwargs == {"input": "Reply with FSQ_OK."}
+    session.complete_sync.assert_called_once_with(ModelRequest(input="Reply with FSQ_OK.", reasoning_effort="low"))
     session.close_sync.assert_called_once_with()

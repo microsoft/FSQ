@@ -4,7 +4,7 @@
 .runs-eyebrow { color: var(--cp-muted); margin: 0; font-size: 12px; }
 .runs-controls,.runs-workspaces,.runs-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
 .runs-controls label,.runs-filters label { display: grid; gap: 5px; font-size: 12px; color: var(--cp-muted); }
-.runs-filters input,.runs-filters select,.runs-controls input,.runs-controls select { border: 1px solid var(--cp-border-strong); border-radius: 6px; background: var(--cp-surface); min-height: 36px; padding: 6px 9px; max-width: 260px; }
+.runs-filters input,.runs-filters select,.runs-controls input,.runs-controls select { border: 1px solid var(--cp-border-strong); border-radius: 6px; background: var(--cp-surface); min-height: var(--cp-control-height); padding: 6px 9px; max-width: 260px; }
 .runs-panel,.runs-result,.runs-table-wrap { background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: var(--cp-card-radius); padding: 20px; min-width: 0; }
 .runs-panel h2,.runs-result h2 { margin: 0 0 12px; font-size: 17px; }
 .runs-panel p { color: var(--cp-muted); line-height: 1.55; }
@@ -44,7 +44,7 @@
 .runs-download { display: block; margin: 8px 0; }
 @media(max-width:820px) { .runs-page { padding: 16px; } .runs-heading { align-items: start; flex-direction: column; } .runs-workbench { grid-template-columns: minmax(0,1fr); } .runs-timeline { max-height: 320px; } .runs-evidence { max-height: none; } .runs-outcomes { grid-template-columns: repeat(2,minmax(0,1fr)); } .runs-controls input { max-width: 100%; } .runs-table { min-width: 760px; } .runs-table td:first-child { min-width: 240px; } }
 .runs-metrics { display: grid; grid-template-columns: repeat(auto-fit,minmax(110px,1fr)); gap: 10px; padding: 12px; background: var(--cp-bg-elevated); border: 1px solid var(--cp-border); border-radius: 7px; }
-.runs-metrics dt { font-size: 11px; color: var(--cp-muted); text-transform: capitalize; }
+.runs-metrics dt { font-size: var(--cp-type-meta); line-height: var(--cp-leading-meta); color: var(--cp-muted); text-transform: capitalize; }
 .runs-metrics dd { margin: 5px 0 0; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
 .runs-evidence .ui-diff { margin: 14px 0; max-height: 420px; overflow: auto; }
 .runs-failure { padding: 14px; margin: 14px 0; border-left: 3px solid var(--cp-danger); background: var(--cp-accent-soft); }

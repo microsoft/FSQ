@@ -13,6 +13,8 @@ Implement Web automation through optional Playwright, including explicit browser
 
 Instances satisfy `WebDriverInterface`; the concrete backend class is private outside Drivers and composition.
 
+`close()` is the runtime-owner disposal operation. It releases an owned browser/Playwright session and shuts down the owned executor, is safe to repeat after successful disposal, and does not initialize an unopened browser. This is not the recordable `close_browser` capability and produces no Case command or evidence of an authored action.
+
 ## Internal Structure
 
 - Private Playwright backend implementation and Web capability declarations.

@@ -74,6 +74,9 @@ class UiAutomator2AndroidDriver(AIAssertionBackendToolMixin):
         self.serial = serial
         self.device = device if device is not None else self._connect(serial)
 
+    def close(self) -> None:
+        return None
+
     def context(self) -> dict[str, object]:
         info = self._device_info()
         width = info.get("displayWidth")

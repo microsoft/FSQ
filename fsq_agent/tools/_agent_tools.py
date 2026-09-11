@@ -13,6 +13,7 @@ from fsq_agent.models import (
     AgentToolDefinition,
     AgentToolResult,
     LocalToolOutputSettings,
+    RuntimeSecretSettings,
     ToolExecutionError,
 )
 from fsq_agent.tools._file_ops import FileOps
@@ -126,12 +127,14 @@ class DefaultAgentToolProvider:
         self,
         file_ops: FileOps,
         *,
+        runtime_secret_settings: RuntimeSecretSettings | None = None,
         local_tool_output_settings: LocalToolOutputSettings | None = None,
         runs_dir: Path | None = None,
         run_id: str = "",
         **_: Any,
     ) -> None:
         self.file_ops = file_ops
+        self.runtime_secret_settings = runtime_secret_settings or RuntimeSecretSettings()
         self.local_tool_output_settings = local_tool_output_settings or LocalToolOutputSettings()
         self.runs_dir = runs_dir
         self.run_id = run_id
@@ -199,7 +202,7 @@ class DefaultAgentToolProvider:
         return AgentToolResult(
             tool_name="search_artifact",
             status="success",
-            output=result,
+            output=self._redact(result),
             duration_ms=int((time.perf_counter() - started) * 1000),
         )
 
@@ -212,22 +215,35 @@ class DefaultAgentToolProvider:
         return AgentToolResult(
             tool_name="read_artifact_slice",
             status="success",
-            output=result,
+            output=self._redact(result),
             duration_ms=int((time.perf_counter() - started) * 1000),
         )
 
     def _from_file_result(self, tool_name: str, result: AgentToolResult, started: float, metadata: dict[str, Any]) -> AgentToolResult:
-        payload = result.model_dump(mode="json")
+        payload = self._redact(result.model_dump(mode="json"))
+        metadata = self._redact(metadata)
         if result.status == "failed":
             return AgentToolResult(
                 tool_name=tool_name,
                 status="failed",
                 output=payload,
-                error=result.error,
+                error=payload["error"],
                 duration_ms=result.duration_ms,
                 metadata=metadata,
             )
         return self._with_optional_artifact(tool_name, payload, started, metadata)
+
+    def _redact(self, value: Any) -> Any:
+        if isinstance(value, str):
+            for private_value in sorted(self.runtime_secret_settings.private_values().values(), key=len, reverse=True):
+                if private_value:
+                    value = value.replace(private_value, "***")
+            return value
+        if isinstance(value, dict):
+            return {key: self._redact(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._redact(item) for item in value]
+        return value
 
     def _with_optional_artifact(
         self,

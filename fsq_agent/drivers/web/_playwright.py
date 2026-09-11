@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import logging
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -95,15 +96,27 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
             self._ensure_executor()
         try:
             return self._run_sync(lambda: self._start_browser(params))
-        except Exception:
-            if self.page is None:
-                self._shutdown_executor()
+        except BaseException:
+            if self.page is None and all(resource is None for resource in (self._context, self._browser, self._playwright)):
+                try:
+                    self._shutdown_executor()
+                except BaseException as cleanup_error:  # noqa: BLE001 - startup failure retains precedence.
+                    logging.getLogger(__name__).warning("Web startup worker disposal failed (%s)", type(cleanup_error).__name__)
             raise
 
     def _start_browser(self, params: WebStartBrowserParams) -> dict[str, object]:
         if self.page is not None:
             return self._passed({"already_started": True, "url": self._page_url()})
-        self.page = self._create_page()
+        if any(resource is not None for resource in (self._context, self._browser, self._playwright)):
+            self._close()
+        try:
+            self.page = self._create_page()
+        except BaseException:
+            try:
+                self._close()
+            except BaseException as cleanup_error:  # noqa: BLE001 - clean every acquired resource before propagating startup failure.
+                logging.getLogger(__name__).warning("Web startup resource disposal failed (%s)", type(cleanup_error).__name__)
+            raise
         return self._passed({"already_started": False, "url": self._page_url()})
 
     @_web_driver_tool("closeBrowser", description="Close the active Web browser.")
@@ -372,19 +385,23 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
 
     def _close(self) -> None:
         self._snapshot_refs.clear()
-        try:
-            for candidate in [self._context, self._browser, self._playwright]:
+        failure = None
+        for attribute in ("_context", "_browser", "_playwright"):
+            candidate = getattr(self, attribute)
+            try:
                 close = getattr(candidate, "close", None)
                 stop = getattr(candidate, "stop", None)
                 if callable(close):
                     close()
                 elif callable(stop):
                     stop()
-        finally:
-            self.page = None
-            self._context = None
-            self._browser = None
-            self._playwright = None
+            except BaseException as exc:  # noqa: BLE001 - attempt all owned backend cleanup.
+                failure = failure or exc
+            else:
+                setattr(self, attribute, None)
+        self.page = None
+        if failure is not None:
+            raise failure
 
     def _run_sync(self, func: Callable[[], _T]) -> _T:
         if self._executor is None:
@@ -409,8 +426,8 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
                 "playwright is required for PlaywrightWebDriver.",
                 context={"action": "Reinstall or repair fsq-agent."},
             ) from exc
-        playwright = sync_playwright().start()
-        browser_factory = getattr(playwright, "chromium", None)
+        self._playwright = sync_playwright().start()
+        browser_factory = getattr(self._playwright, "chromium", None)
         if browser_factory is None:
             raise ConfigurationError(
                 "Playwright chromium browser type is unavailable.",
@@ -422,16 +439,13 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
                 context={"config_key": "target.browser_executable_path", "channel": self.channel},
             )
         launch_kwargs: dict[str, object] = {"headless": self.headless, "channel": self.channel, "executable_path": self.executable_path}
-        browser = browser_factory.launch(**launch_kwargs)
+        self._browser = browser_factory.launch(**launch_kwargs)
         context_kwargs: dict[str, object] = {}
         if self.viewport is not None:
             width, height = self.viewport
             context_kwargs["viewport"] = {"width": width, "height": height}
-        context = browser.new_context(**context_kwargs)
-        self._playwright = playwright
-        self._browser = browser
-        self._context = context
-        return context.new_page()
+        self._context = self._browser.new_context(**context_kwargs)
+        return self._context.new_page()
 
     def _resolve_url(self, url: str) -> str:
         if url.startswith(("http://", "https://")):

@@ -7,9 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from fsq_agent.agent_engine import EngineError
+from fsq_agent.ai_services import CaseSuggestionAnalysis
 from fsq_agent.application import ApplicationError, ApplicationErrorCode, CaseTestRequest
 from fsq_agent.application import _case_test as case_test_module
-from fsq_agent.providers import CaseSuggestionAnalysis
 
 
 @pytest.mark.parametrize("platform", ["android", "web", "windows", "macos"])
@@ -155,7 +156,12 @@ def test_bounded_execution_facts_limit_items_strings_and_total_size() -> None:
     assert len(json.dumps(facts).encode()) <= case_test_module._MAX_FACT_BYTES
 
 
-def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("execution_status", ["passed", "failed"])
+@pytest.mark.parametrize("analysis_error", [TimeoutError("provider unavailable"), EngineError("invalid_output", "Invalid suggestion output")])
+@pytest.mark.parametrize("processing_write_fails", [False, True])
+def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, execution_status: str, analysis_error: Exception, processing_write_fails: bool
+) -> None:
     case_path = tmp_path / "search.fsq.yaml"
     source = "schemaVersion: fsq.ai-test/v1\nname: Search\nplatform: web\n"
     case_path.write_text(source, encoding="utf-8")
@@ -164,7 +170,7 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(tmp_path:
     report_path = run_dir / "core-report.md"
     report_path.write_text("report", encoding="utf-8")
     report_path.with_suffix(".json").write_text(
-        json.dumps({"run_id": "run-1", "summary": {"status": "passed", "failed_steps": 0}, "steps": [], "events": []}),
+        json.dumps({"run_id": "run-1", "summary": {"status": execution_status, "failed_steps": 0 if execution_status == "passed" else 1, "total_steps": 1}, "steps": [], "events": []}),
         encoding="utf-8",
     )
     settings = SimpleNamespace(
@@ -175,6 +181,7 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(tmp_path:
         execution=SimpleNamespace(post_action_delay_seconds=0),
     )
     order: list[str] = []
+    transitions: list[tuple[str, dict]] = []
     monkeypatch.setattr(case_test_module, "require_initialized_workspace", lambda _request: SimpleNamespace(workspace=tmp_path))
     monkeypatch.setattr(case_test_module, "list_workspace_registry", lambda: [SimpleNamespace(name="test-workspace", root_path=tmp_path)])
     monkeypatch.setattr(case_test_module, "load_workspace_platform_settings", lambda *_args: settings)
@@ -201,17 +208,18 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(tmp_path:
         "allocate_run",
         lambda **_kwargs: SimpleNamespace(run_id=run_dir.name, status="preparing"),
     )
-    monkeypatch.setattr(
-        case_test_module,
-        "transition_run",
-        lambda _run_dir, metadata, status, **_kwargs: SimpleNamespace(run_id=metadata.run_id, status=status),
-    )
+
+    def transition(_run_dir, metadata, status, **updates):
+        transitions.append((status, updates))
+        return SimpleNamespace(run_id=metadata.run_id, status=status)
+
+    monkeypatch.setattr(case_test_module, "transition_run", transition)
 
     class Analyzer:
         def analyze(self, *, parsed_case, execution_report):
             order.append("analyze")
             assert parsed_case["config"]["platform"] == "web"
-            assert execution_report["summary"]["status"] == "passed"
+            assert execution_report["summary"]["status"] == execution_status
             return CaseSuggestionAnalysis(summary="No change needed.", suggestions=())
 
     result = case_test_module.execute_case_test(
@@ -220,26 +228,40 @@ def test_suggest_runs_case_once_then_analyzes_and_returns_no_candidate(tmp_path:
     )
 
     assert order == ["execute", "analyze"]
-    assert result.status == "success"
+    expected_status = "success" if execution_status == "passed" else "failed"
+    assert result.status == expected_status
     assert result.suggestion_path == run_dir / "case-suggestions.json"
     assert result.candidate_case_path is None
     payload = json.loads(result.suggestion_path.read_text(encoding="utf-8"))
     assert payload["candidate_case_status"] == "absent"
     assert case_path.read_text(encoding="utf-8") == source
 
+    if processing_write_fails:
+
+        def fail_processing_write(path, content):
+            raise OSError("secondary processing write failure")
+
+        monkeypatch.setattr(case_test_module, "_atomic_write", fail_processing_write)
+
     class FailingAnalyzer:
         def analyze(self, *, parsed_case, execution_report):
-            raise TimeoutError("provider unavailable")
+            raise analysis_error
 
     completed = case_test_module.execute_case_test(
         CaseTestRequest(current_directory=tmp_path, platform="web", case_path=case_path, suggest=True),
         suggestion_analyzer_factory=lambda _settings: FailingAnalyzer(),
     )
-    assert completed.status == "success"
+    assert completed.status == expected_status
     assert completed.processing["suggestion"]["status"] == "failed"
     assert completed.report_path == report_path
     assert any("case.suggestion_failed" in warning for warning in completed.warnings)
     assert report_path.read_text(encoding="utf-8") == "report"
+    assert case_path.read_text(encoding="utf-8") == source
+    assert len(list(run_dir.glob("*.fsq.yaml"))) == 0
+    assert order == ["execute", "analyze", "execute"]
+    assert [status for status, _ in transitions] == ["running", "running"]
+    if processing_write_fails:
+        assert completed.processing["suggestion"]["persistence"] == "unavailable"
 
 
 def test_suggestion_cannot_introduce_run_metadata(tmp_path: Path) -> None:

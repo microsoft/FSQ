@@ -10,6 +10,7 @@ from fsq_agent.core.evidence import ArtifactStore
 from fsq_agent.core.interfaces import AIAssertionEvaluatorProtocol, WebDriverInterface
 from fsq_agent.drivers._capabilities import _capability_matches, _discover_driver_capability_definitions, _schema_from_capability_definition, _with_driver_metadata
 from fsq_agent.harnesses._common_tools import CommonPlatformTools
+from fsq_agent.harnesses._resources import OwnedResources
 from fsq_agent.models import (
     CapabilityDefinition,
     ExecutableStep,
@@ -51,6 +52,7 @@ class WebHarness:
         self.driver = driver
         self.artifact_store = artifact_store
         self.ai_assertion_evaluator = ai_assertion_evaluator
+        self._owned_resources = OwnedResources(driver, ai_assertion_evaluator)
         self.common_tools = CommonPlatformTools(
             platform="web",
         )
@@ -58,6 +60,9 @@ class WebHarness:
 
     def capture_scope(self, callback):
         return self.artifact_store.capture_scope(callback) if self.artifact_store is not None else nullcontext()
+
+    def close(self) -> None:
+        self._owned_resources.close()
 
     def get_context(self) -> HarnessContext:
         context = self.driver.context()

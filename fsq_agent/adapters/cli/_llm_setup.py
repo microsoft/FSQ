@@ -45,7 +45,7 @@ def setup_llm_provider(*, provider: str) -> None:
     session = prepare_model_provider_session(settings, interactive_auth=True)
     try:
         logger.info("LLM provider readiness: ready")
-        logger.info("Provider: %s", settings.openai_agents.provider)
+        logger.info("Provider: %s", settings.agent_runtime.provider)
         logger.info("Setup root: %s", setup_root)
         logger.info("Environment file: %s", env_path)
         logger.info("Workspace: %s", settings.workspace.root_dir)

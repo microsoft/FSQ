@@ -18,6 +18,8 @@ export function ControlPlaneApp() {
   const [activePage, setActivePageState] = useState<'overview' | 'workspace' | 'devices' | 'runs' | 'config'>(() => parseRunRoute(window.location.hash) ? 'runs' : 'overview');
   const [runRoute, setRunRoute] = useState<RunRoute>(() => parseRunRoute(window.location.hash) ?? {});
   const [configDirty, setConfigDirty] = useState(false);
+  const [configPending, setConfigPending] = useState(false);
+  const [configUncertain, setConfigUncertain] = useState(false);
   const [workspacePending,setWorkspacePending] = useState(false);
   const [workspaceDirty, setWorkspaceDirty] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceRegistryEntry[]>([]);
@@ -85,6 +87,10 @@ export function ControlPlaneApp() {
         setOverviewProvider({ status: 'unconfigured' });
       } else if (response.provider.type === 'github_copilot') {
         setOverviewProvider({ status: 'configured', provider: 'GitHub Copilot', modelName: response.provider.modelName, authenticated: true });
+      } else if (response.provider.type === 'openai') {
+        setOverviewProvider({ status: 'configured', provider: 'OpenAI', modelName: response.provider.modelName });
+      } else if (response.provider.type === 'google_gemini') {
+        setOverviewProvider({ status: 'configured', provider: 'Google Gemini', modelName: response.provider.modelName });
       } else {
         setOverviewProvider({ status: 'configured', provider: 'Azure OpenAI', modelName: response.provider.modelName });
       }
@@ -110,12 +116,13 @@ export function ControlPlaneApp() {
   }, [selectedWorkspaceName, selectedWorkspace]);
 
   const acceptedNavigation = useRef({ href: window.location.href, index: Number(window.history.state?.cpIndex ?? 0), page: activePage });
-  const navigationGuard = useRef({ activePage, configDirty, workspaceDirty, startPending, workspacePending });
-  navigationGuard.current = { activePage, configDirty, workspaceDirty, startPending, workspacePending };
+  const navigationGuard = useRef({ activePage, configDirty, configPending, configUncertain, workspaceDirty, startPending, workspacePending });
+  navigationGuard.current = { activePage, configDirty, configPending, configUncertain, workspaceDirty, startPending, workspacePending };
   const canDiscardDraft = (destination: ControlPlanePageId) => {
     const current = navigationGuard.current;
-    if (startPendingRef.current || current.workspacePending) return false;
-    if (current.activePage === 'config' && destination !== 'config' && current.configDirty && !window.confirm('Discard unsaved Azure changes?')) return false;
+    if (startPendingRef.current || current.workspacePending || current.configPending) return false;
+    if (current.activePage === 'config' && destination !== 'config' && current.configUncertain && !window.confirm('The save result is unknown. Leaving does not cancel it. Continue?')) return false;
+    if (current.activePage === 'config' && destination !== 'config' && current.configDirty && !window.confirm('Discard unsaved Provider changes?')) return false;
     if (current.activePage === 'workspace' && current.workspaceDirty && !window.confirm('Discard unsaved workspace changes?')) return false;
     return true;
   };
@@ -156,8 +163,8 @@ export function ControlPlaneApp() {
 
   const navigate = (page: ControlPlanePageId) => {
     if (page !== 'overview' && page !== 'workspace' && page !== 'devices' && page !== 'config' && page !== 'runs') return;
-    if (!canDiscardDraft(page)) return;
     if (page === 'runs') { navigateRuns({ workspace: selectedWorkspaceName ?? undefined }); return; }
+    if (!canDiscardDraft(page)) return;
     setConfigDirty(false);
     setWorkspaceDirty(false);
     workspaceCreateInitiator.current = null;
@@ -252,7 +259,7 @@ export function ControlPlaneApp() {
     message: workspace.status === 'unavailable' ? `${workspace.message} ${workspace.action}` : undefined,
   }));
   const shellWorkspaceProps = {
-    interactionLocked: startPending || workspacePending,
+    interactionLocked: startPending || workspacePending || configPending,
     workspaces: workspaceNavigation,
     selectedWorkspaceId: selectedWorkspace?.name ?? null,
     workspaceRegistryStatus: workspaceRegistryLoading ? 'loading' as const : workspaceRegistryError ? 'error' as const : 'ready' as const,
@@ -313,7 +320,7 @@ export function ControlPlaneApp() {
   if (activePage === 'config') return <ControlPlaneShell
     activePage="config" title="Settings" description="Manage the active model provider used by the next complete FSQ task."
     onNavigate={navigate} {...shellWorkspaceProps}
-  ><ConfigPage onDirtyChange={setConfigDirty} /></ControlPlaneShell>;
+  ><ConfigPage onDirtyChange={setConfigDirty} onSavePendingChange={setConfigPending} onSaveUncertainChange={setConfigUncertain} /></ControlPlaneShell>;
 
   if (activePage === 'runs') return <ControlPlaneShell activePage="runs" title="Runs" description="Inspect persisted execution, verification, and evidence." onNavigate={navigate} {...shellWorkspaceProps}><RunsPage key={[runRoute.workspace,runRoute.platform,runRoute.run].join(':')} route={runRoute} workspaces={authoritativeWorkspaces} registryStatus={workspaceRegistryLoading ? 'loading' : workspaceRegistryError ? 'error' : 'ready'} registryError={workspaceRegistryError?.message} onRetryRegistry={() => { void refreshWorkspaces(); }} onNavigate={navigateRuns} /></ControlPlaneShell>;
 

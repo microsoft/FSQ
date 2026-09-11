@@ -233,6 +233,7 @@ class RunLifecycleService:
         result = {
             "platform": platform,
             "backend": getattr(block, "backend", None),
+            "agent_runtime": {"reasoning_effort": settings.agent_runtime.reasoning_effort, "max_turns": settings.agent_runtime.max_turns},
             "post_action_delay_seconds": settings.execution.post_action_delay_seconds.model_dump(),
             "app_version": None,
             "app_version_unavailable_reason": "not_reported",
@@ -367,6 +368,15 @@ class RunLifecycleService:
             "backend_kind",
         }
         safe_config = {key: value for key, value in (configuration or {}).items() if key in allowed}
+        runtime_policy = (configuration or {}).get("agent_runtime")
+        if isinstance(runtime_policy, dict):
+            safe_policy = {}
+            if runtime_policy.get("reasoning_effort") in ("low", "mid", "high"):
+                safe_policy["reasoning_effort"] = runtime_policy["reasoning_effort"]
+            if type(runtime_policy.get("max_turns")) is int and runtime_policy["max_turns"] > 0:
+                safe_policy["max_turns"] = runtime_policy["max_turns"]
+            if safe_policy:
+                safe_config["agent_runtime"] = safe_policy
         import platform as python_platform
 
         packages = {"web": "playwright", "android": "uiautomator2", "windows": "pywinauto", "macos": "Appium-Python-Client"}
@@ -514,6 +524,7 @@ class RunLifecycleService:
         index = artifacts or RunArtifactIndex(
             report=next((name for name in ("report.json", "core-report.json", "report-fallback.json", "execution-result.json") if (run_dir / name).is_file()), None),
             report_markdown=next((name for name in ("report.md", "core-report.md") if (run_dir / name).is_file()), None),
+            html_report="report.html" if (run_dir / "report.html").is_file() else None,
             candidate_case=next((name for name in ("recorded.fsq.yaml", "candidate.fsq.yaml") if (run_dir / name).is_file()), None),
             evidence_manifest="evidence-manifest.json" if (run_dir / "evidence-manifest.json").is_file() else None,
             evidence_journal="evidence-events.jsonl" if (run_dir / "evidence-events.jsonl").is_file() else None,

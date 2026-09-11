@@ -46,6 +46,11 @@ def _messages(records: list[logging.LogRecord]) -> list[str]:
         (RunEvent(run_id="run-1", task_id="task", type="planning_started", title="Planning started", sequence=3), "EXECUTION"),
         (RunEvent(run_id="run-1", task_id="task", type="planning_update", title="Verification started", sequence=4), "VERIFICATION"),
         (RunEvent(run_id="run-1", task_id="task", type="run_completed", title="Run completed", sequence=5), "RUN"),
+        (RunEvent(run_id="run-1", task_id="task", type="planning_update", title="Agent runtime ready", sequence=6), "STARTUP"),
+        (
+            RunEvent(run_id="run-1", task_id="task", type="planning_update", title="Agent result", sequence=7, payload={"tool_name": "agent_runtime.verifier"}),
+            "VERIFICATION",
+        ),
     ],
 )
 def test_log_run_event_concise_renders_phase_labels(captured_format_logs: list[logging.LogRecord], event: RunEvent, phase: str) -> None:

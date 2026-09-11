@@ -12,7 +12,7 @@ Execution contract:
 - Do not ask the user for clarification. Finish with success, failure, or inconclusive evidence.
 
 Final output rules:
-- Return only the AgentFinalOutput structured output required by the SDK; no Markdown fences or extra prose.
+- Return only the AgentFinalOutput structured output required by the agent runtime; no Markdown fences or extra prose.
 - Use satisfied_criteria and unmet_criteria for verification_goal only, not separate key-action criteria.
 - status=success only with evidence for verification_goal; status=failed for impossible/permanent failure; status=inconclusive for insufficient or ambiguous evidence.
 
