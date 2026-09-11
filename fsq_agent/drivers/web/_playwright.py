@@ -34,7 +34,7 @@ from fsq_agent.models import (
 )
 
 DEFAULT_WEB_WAIT_TIMEOUT_MS = 10000
-SUPPORTED_WEB_CHANNELS = frozenset({"chromium", "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", "msedge-canary"})
+EDGE_CDP_ENDPOINT = "http://127.0.0.1:9222"
 _BROWSER_NOT_STARTED_MESSAGE = "Browser is not started. Call startBrowser before Web page actions."
 _T = TypeVar("_T")
 
@@ -52,21 +52,17 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         viewport: tuple[int, int] | None = None,
         page: object | None = None,
     ) -> None:
-        self.channel = channel.strip() if isinstance(channel, str) else channel
-        if self.channel not in SUPPORTED_WEB_CHANNELS:
-            raise ConfigurationError(
-                "Unsupported Playwright browser channel.",
-                context={"channel": self.channel, "supported": sorted(SUPPORTED_WEB_CHANNELS)},
-            )
-        self.executable_path = str(Path(executable_path)) if executable_path else None
-        self.headless = headless
+        self.channel = "msedge"
+        self.executable_path = None
+        self.headless = False
         self.base_url = base_url.rstrip("/") + "/" if isinstance(base_url, str) and base_url.strip() else None
-        self.viewport = viewport
+        self.viewport = None
         self._playwright: object | None = None
         self._browser: object | None = None
         self._context: object | None = None
         self._executor: ThreadPoolExecutor | None = None
         self.page: object | None = page
+        self._owns_page = False
         self._snapshot_refs: dict[str, tuple[str, str]] = {}
 
     def context(self) -> dict[str, object]:
@@ -90,7 +86,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
             },
         }
 
-    @_web_driver_tool("startBrowser", description="Start or reuse the configured Web browser.")
+    @_web_driver_tool("startBrowser", description="Attach to the operator-started Edge browser and create or reuse the FSQ page.")
     def start_browser(self, params: WebStartBrowserParams) -> dict[str, object]:
         if self.page is None:
             self._ensure_executor()
@@ -111,6 +107,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
             self._close()
         try:
             self.page = self._create_page()
+            self._owns_page = True
         except BaseException:
             try:
                 self._close()
@@ -119,7 +116,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
             raise
         return self._passed({"already_started": False, "url": self._page_url()})
 
-    @_web_driver_tool("closeBrowser", description="Close the active Web browser.")
+    @_web_driver_tool("closeBrowser", description="Close the FSQ page and disconnect without exiting Edge.")
     def close_browser(self, params: WebCloseBrowserParams) -> dict[str, object]:
         return self._run_sync(lambda: self._close_browser(params))
 
@@ -386,7 +383,18 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _close(self) -> None:
         self._snapshot_refs.clear()
         failure = None
-        for attribute in ("_context", "_browser", "_playwright"):
+        if self._owns_page and self.page is not None:
+            try:
+                self.page.close()
+            except BaseException as exc:  # noqa: BLE001 - attempt all owned backend cleanup.
+                failure = exc
+            else:
+                self.page = None
+                self._owns_page = False
+        else:
+            self.page = None
+        self._context = None
+        for attribute in ("_browser", "_playwright"):
             candidate = getattr(self, attribute)
             try:
                 close = getattr(candidate, "close", None)
@@ -399,7 +407,6 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
                 failure = failure or exc
             else:
                 setattr(self, attribute, None)
-        self.page = None
         if failure is not None:
             raise failure
 
@@ -431,20 +438,16 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         if browser_factory is None:
             raise ConfigurationError(
                 "Playwright chromium browser type is unavailable.",
-                context={"channel": self.channel},
+                context={"browser": "msedge"},
             )
-        if self.executable_path is None:
+        self._browser = browser_factory.connect_over_cdp(EDGE_CDP_ENDPOINT)
+        contexts = getattr(self._browser, "contexts", None)
+        if not contexts:
             raise ConfigurationError(
-                "Web browser executable path is required for PlaywrightWebDriver.",
-                context={"config_key": "target.browser_executable_path", "channel": self.channel},
+                "The Edge CDP connection has no browser context.",
+                context={"endpoint": EDGE_CDP_ENDPOINT},
             )
-        launch_kwargs: dict[str, object] = {"headless": self.headless, "channel": self.channel, "executable_path": self.executable_path}
-        self._browser = browser_factory.launch(**launch_kwargs)
-        context_kwargs: dict[str, object] = {}
-        if self.viewport is not None:
-            width, height = self.viewport
-            context_kwargs["viewport"] = {"width": width, "height": height}
-        self._context = self._browser.new_context(**context_kwargs)
+        self._context = contexts[0]
         return self._context.new_page()
 
     def _resolve_url(self, url: str) -> str:

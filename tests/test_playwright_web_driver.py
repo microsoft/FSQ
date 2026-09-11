@@ -5,7 +5,6 @@ import sys
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 import pytest
 
@@ -21,6 +20,7 @@ class _FakePage:
     def __init__(self, *, aria_snapshot: str = '- document "Example" [ref=e1]') -> None:
         self.url = "about:blank"
         self.viewport_size = {"width": 800, "height": 600}
+        self.closed = False
         self._aria_snapshot = aria_snapshot
         self.thread_ids: list[int] = []
         self.aria_kwargs: dict[str, object] | None = None
@@ -37,6 +37,9 @@ class _FakePage:
         self._record_thread()
         self.aria_kwargs = kwargs
         return self._aria_snapshot
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _ThreadedFakePlaywrightDriver(PlaywrightWebDriver):
@@ -118,12 +121,8 @@ class _LaunchFakeContext:
 class _LaunchFakeBrowser:
     def __init__(self, page: _FakePage) -> None:
         self.context = _LaunchFakeContext(page)
-        self.context_kwargs: dict[str, object] | None = None
+        self.contexts = [self.context]
         self.closed = False
-
-    def new_context(self, **kwargs: object) -> _LaunchFakeContext:
-        self.context_kwargs = kwargs
-        return self.context
 
     def close(self) -> None:
         self.closed = True
@@ -132,10 +131,10 @@ class _LaunchFakeBrowser:
 class _LaunchFakeBrowserType:
     def __init__(self, browser: _LaunchFakeBrowser) -> None:
         self.browser = browser
-        self.launch_kwargs: dict[str, object] | None = None
+        self.endpoint_url: str | None = None
 
-    def launch(self, **kwargs: object) -> _LaunchFakeBrowser:
-        self.launch_kwargs = kwargs
+    def connect_over_cdp(self, endpoint_url: str) -> _LaunchFakeBrowser:
+        self.endpoint_url = endpoint_url
         return self.browser
 
 
@@ -205,7 +204,7 @@ def test_playwright_web_driver_ui_snapshot_falls_back_when_aria_snapshot_is_empt
     }
 
 
-def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_playwright_web_driver_attaches_to_fixed_edge_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     page = _FakePage()
     browser = _LaunchFakeBrowser(page)
     browser_type = _LaunchFakeBrowserType(browser)
@@ -225,16 +224,17 @@ def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch
         driver.close()
 
     assert start == {"status": "passed", "output": {"already_started": False, "url": "about:blank"}}
-    assert browser_type.launch_kwargs == {"headless": False, "channel": "chrome", "executable_path": str(Path("C:/Chrome/chrome.exe"))}
-    assert browser.context_kwargs == {"viewport": {"width": 1024, "height": 768}}
-    assert context["metadata"]["channel"] == "chrome"
-    assert context["metadata"]["browser_executable_configured"] is True
-    assert browser.context.closed is True
+    assert browser_type.endpoint_url == "http://127.0.0.1:9222"
+    assert context["metadata"]["channel"] == "msedge"
+    assert context["metadata"]["browser_executable_configured"] is False
+    assert context["metadata"]["headless"] is False
+    assert page.closed is True
+    assert browser.context.closed is False
     assert browser.closed is True
     assert playwright.stopped is True
 
 
-@pytest.mark.parametrize("failure_stage", ["launch", "context", "page"])
+@pytest.mark.parametrize("failure_stage", ["connect", "page"])
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 @pytest.mark.parametrize("cancelled", [False, True])
 def test_partial_browser_startup_releases_acquired_resources_on_owner_worker(monkeypatch, failure_stage, cleanup_fails, cancelled):
@@ -257,25 +257,18 @@ def test_partial_browser_startup_releases_acquired_resources_on_owner_worker(mon
         workers.append(threading.get_ident())
         raise primary
 
-    context = SimpleNamespace(new_page=new_page, close=lambda: dispose("context"))
+    context = SimpleNamespace(new_page=new_page)
+    browser = SimpleNamespace(contexts=[context], close=lambda: dispose("browser"))
 
-    def new_context(**kwargs):
+    def connect_over_cdp(endpoint):
         workers.append(threading.get_ident())
-        if failure_stage == "context":
-            raise primary
-        acquired.append("context")
-        return context
-
-    browser = SimpleNamespace(new_context=new_context, close=lambda: dispose("browser"))
-
-    def launch(**kwargs):
-        workers.append(threading.get_ident())
-        if failure_stage == "launch":
+        assert endpoint == "http://127.0.0.1:9222"
+        if failure_stage == "connect":
             raise primary
         acquired.append("browser")
         return browser
 
-    playwright = SimpleNamespace(chromium=SimpleNamespace(launch=launch), stop=lambda: dispose("playwright"))
+    playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect_over_cdp), stop=lambda: dispose("playwright"))
 
     def start():
         workers.append(threading.get_ident())
@@ -285,7 +278,7 @@ def test_partial_browser_startup_releases_acquired_resources_on_owner_worker(mon
     sync_api = types.ModuleType("playwright.sync_api")
     sync_api.sync_playwright = lambda: SimpleNamespace(start=start)
     monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
-    driver = PlaywrightWebDriver(executable_path="C:/synthetic/chrome.exe")
+    driver = PlaywrightWebDriver()
     executor = None
     try:
         with pytest.raises(type(primary)) as failure:
@@ -335,16 +328,19 @@ def test_repeated_start_preserves_pending_resources_before_replacement(monkeypat
         generation += 1
         owner = generation
         if owner > 1:
-            assert set(disposed) == {(1, "context"), (1, "browser"), (1, "playwright")}
+            assert set(disposed) == {(1, "browser"), (1, "playwright")}
 
         def new_page():
             if owner == 1:
                 raise startup_error
             return _FakePage()
 
-        context = SimpleNamespace(new_page=new_page, close=lambda: dispose(owner, "context"))
-        browser = SimpleNamespace(new_context=lambda **kwargs: context, close=lambda: dispose(owner, "browser"))
-        playwright = SimpleNamespace(chromium=SimpleNamespace(launch=lambda **kwargs: browser), stop=lambda: dispose(owner, "playwright"))
+        context = SimpleNamespace(new_page=new_page)
+        browser = SimpleNamespace(contexts=[context], close=lambda: dispose(owner, "browser"))
+        playwright = SimpleNamespace(
+            chromium=SimpleNamespace(connect_over_cdp=lambda endpoint: browser),
+            stop=lambda: dispose(owner, "playwright"),
+        )
         resources[owner] = (context, browser, playwright)
         acquired.append(owner)
         return playwright
@@ -352,7 +348,7 @@ def test_repeated_start_preserves_pending_resources_before_replacement(monkeypat
     sync_api = types.ModuleType("playwright.sync_api")
     sync_api.sync_playwright = lambda: SimpleNamespace(start=start)
     monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
-    driver = PlaywrightWebDriver(executable_path="C:/synthetic/chrome.exe")
+    driver = PlaywrightWebDriver()
     executor = None
     try:
         with pytest.raises(RuntimeError, match="first page creation failed") as failure:
@@ -360,14 +356,14 @@ def test_repeated_start_preserves_pending_resources_before_replacement(monkeypat
         assert failure.value is startup_error
         executor = driver._executor
         assert executor is not None
-        assert (driver._context, driver._browser, driver._playwright) == resources[1]
+        assert (driver._browser, driver._playwright) == resources[1][1:]
         cleanup_allowed = not retry_cleanup_fails
         if retry_cleanup_fails:
             with pytest.raises(OSError, match="first generation cleanup failed") as failure:
                 driver.start_browser(WebStartBrowserParams())
             assert failure.value is cleanup_error
             assert acquired == [1]
-            assert (driver._context, driver._browser, driver._playwright) == resources[1]
+            assert (driver._browser, driver._playwright) == resources[1][1:]
             assert driver._executor is executor
             cleanup_allowed = True
         assert driver.start_browser(WebStartBrowserParams())["status"] == "passed"
@@ -376,28 +372,41 @@ def test_repeated_start_preserves_pending_resources_before_replacement(monkeypat
     finally:
         cleanup_allowed = True
         driver.close()
-    assert disposed == [(owner, kind) for owner in (1, 2) for kind in ("context", "browser", "playwright")]
+    assert disposed == [(owner, kind) for owner in (1, 2) for kind in ("browser", "playwright")]
     assert len(set(workers)) == 1
     assert workers[0] != threading.get_ident()
     assert driver._executor is None
     assert all(not thread.is_alive() for thread in executor._threads)
     driver.close()
-    assert len(disposed) == 6
+    assert len(disposed) == 4
 
 
-def test_playwright_web_driver_rejects_unsupported_channel() -> None:
-    with pytest.raises(ConfigurationError, match="Unsupported Playwright browser channel"):
-        PlaywrightWebDriver(channel="firefox", page=_FakePage())
+def test_playwright_web_driver_rejects_cdp_connection_without_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    playwright = _LaunchFakePlaywright(_LaunchFakeBrowserType(types.SimpleNamespace(contexts=[], close=lambda: None)))
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: _LaunchFakeSyncPlaywright(playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+    driver = PlaywrightWebDriver()
+    with pytest.raises(ConfigurationError, match="no browser context"):
+        driver.start_browser(WebStartBrowserParams())
 
 
 @pytest.mark.parametrize(
     "channel",
     ["chromium", "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", "msedge-canary"],
 )
-def test_playwright_web_driver_accepts_all_supported_channels(channel: str) -> None:
+def test_playwright_web_driver_ignores_legacy_launch_configuration(channel: str) -> None:
     driver = PlaywrightWebDriver(channel=channel, page=_FakePage())
     try:
-        assert driver.context()["metadata"]["channel"] == channel
+        assert driver.context()["metadata"] == {
+            "backend": "playwright",
+            "channel": "msedge",
+            "browser_executable_configured": False,
+            "headless": False,
+            "base_url_configured": False,
+            "browser_started": True,
+        }
     finally:
         driver.close()
 
@@ -482,6 +491,7 @@ def test_playwright_web_driver_start_and_close_browser_are_idempotent(monkeypatc
     assert second_start == {"status": "passed", "output": {"already_started": True, "url": "about:blank"}}
     assert first_close == {"status": "passed", "output": {"already_closed": False}}
     assert second_close == {"status": "passed", "output": {"already_closed": True}}
-    assert browser.context.closed is True
+    assert page.closed is True
+    assert browser.context.closed is False
     assert browser.closed is True
     assert playwright.stopped is True

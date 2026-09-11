@@ -4,8 +4,9 @@ Use when `harness.platform` is Web. This skill contains Web-specific stability g
 
 ## Snapshot-First Rules
 
-- Start browser-owned workflows with `start_browser`, then navigate with `navigate_to`. Do not treat navigation as browser startup.
-- Close browser-owned workflows with `close_browser` as the final lifecycle action. For multi-cycle workflows, call `close_browser` before the next `start_browser` cycle.
+- The operator owns the Microsoft Edge process and starts it with remote debugging enabled on `127.0.0.1:9222`.
+- Start Web workflows with `start_browser`, which only attaches to the existing Edge process and creates an FSQ-owned tab. Never launch, restart, or replace Edge.
+- Close Web workflows with `close_browser` as the final lifecycle action. It closes only the FSQ-owned tab and disconnects automation; it never exits Edge. For multi-cycle workflows, call `close_browser` before the next `start_browser` cycle.
 - Call `ui_snapshot` after navigation and after state-changing actions when the next target is not already unambiguous.
 - Prefer replayable semantic locators and stable selectors over snapshot `ref` values, coordinates, or visual guessing.
 - Do not infer that a page changed from a screenshot path alone. Use a fresh snapshot or assertion after the action.
@@ -24,7 +25,7 @@ Use when `harness.platform` is Web. This skill contains Web-specific stability g
 - Use `wait_for` for waits so waiting does not change page state.
 - Prefer waiting for a semantic page element that proves readiness. A URL wait confirms navigation only, not that page content has rendered.
 - URL waits use Playwright glob syntax: `*` does not cross `/`; use `**` when the match must span URL path separators.
-- Do not use `Alt+F4`, `Control+W`, or other key presses as browser lifecycle controls. Use `close_browser`.
+- Do not use shell commands, `Alt+F4`, `Control+W`, or other mechanisms to launch or close Edge. Use `start_browser` and `close_browser` only for the FSQ attachment lifecycle.
 
 ## Correct Key Examples
 
