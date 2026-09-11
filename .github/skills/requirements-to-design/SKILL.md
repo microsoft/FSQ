@@ -1,17 +1,18 @@
 ---
 name: requirements-to-design
-description: "Optional internal design rules loaded only by the explicit /requirements-to-design prompt. Produces a confirmed design document for any requested change without changing SPEC or implementation files."
-user-invocable: false
+description: "Optional design workflow. Use when the user explicitly invokes /requirements-to-design to produce a confirmed design document without changing SPEC or implementation files."
+argument-hint: "Describe the requested change"
+user-invocable: true
 disable-model-invocation: true
 ---
 
 # Requirements To Design
 
-Turn an explicitly supplied requested change into a reviewed design document. This optional internal skill implements the `/requirements-to-design` prompt and is available whenever the user voluntarily invokes it, including for workflow-control maintenance and local-only ignored files that do not require SDD. It does not update `SPEC.md` files, implement changes, or become a prerequisite for modification. For project development that requires SDD, the confirmed design is higher-quality `/spec-driven` input.
+Turn an explicitly supplied requested change into a reviewed design document. This optional user-invocable skill implements the `/requirements-to-design` entry point and is available whenever the user voluntarily invokes it, including for workflow-control maintenance and local-only ignored files that do not require SDD. It does not update `SPEC.md` files, implement changes, or become a prerequisite for modification. For project development that requires SDD, the confirmed design is higher-quality `/spec-driven` input.
 
 ## Invocation Gate
 
-Load this skill only when the user explicitly invokes `.github/prompts/requirements-to-design.prompt.md` with a requested change. Ordinary discussion, explanation, review, planning, natural-language edit requests, skill-name mentions, and prose approvals must not trigger this skill. If the explicit prompt or its request is absent, stop without writing. An explicit invocation is valid for any requested change; do not reject it because downstream implementation is exempt from SDD.
+Run this skill only when the user explicitly invokes `/requirements-to-design` with a requested change. Ordinary discussion, explanation, review, planning, natural-language edit requests, skill-name mentions, and prose approvals must not trigger this skill. If the explicit invocation or its request is absent, stop without writing. An explicit invocation is valid for any requested change; do not reject it because downstream implementation is exempt from SDD.
 
 ## Hard Gate
 
