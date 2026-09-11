@@ -1,17 +1,18 @@
 ---
 name: spec-driven
-description: "Internal project modification rules loaded only by the explicit /spec-driven prompt with a confirmed design path or direct project change request."
-user-invocable: false
+description: "Required project modification workflow. Use when the user explicitly invokes /spec-driven with a confirmed design document path or direct project change request."
+argument-hint: "Confirmed design path or direct project change request"
+user-invocable: true
 disable-model-invocation: true
 ---
 
 # Spec-Driven Development
 
-Turn an explicitly supplied confirmed project design document or direct project change request into SPEC-grounded implementation, verification, and independent audit. This internal skill implements the required `/spec-driven` project write entry point; `/requirements-to-design` is optional upstream input refinement.
+Turn an explicitly supplied confirmed project design document or direct project change request into SPEC-grounded implementation, verification, and independent audit. This user-invocable skill is the required `/spec-driven` project write entry point; `/requirements-to-design` is optional upstream input refinement.
 
 ## Invocation Gate
 
-Load this skill only when the user explicitly invokes `.github/prompts/spec-driven.prompt.md` with either a confirmed project design document path or a direct project change request. Do not infer invocation or prompt input from ordinary discussion, editor state, a natural-language project edit request outside the prompt, a skill-name mention, or prose approval. If the explicit prompt or a non-empty input is absent, stop without writing and ask the user to invoke `/spec-driven <confirmed-design-document-path | direct-project-change-request>`.
+Run this skill only when the user explicitly invokes `/spec-driven` with either a confirmed project design document path or a direct project change request. Do not infer invocation or skill input from ordinary discussion, editor state, a natural-language project edit request outside the skill invocation, a skill-name mention, or prose approval. If the explicit invocation or a non-empty input is absent, stop without writing and ask the user to invoke `/spec-driven <confirmed-design-document-path | direct-project-change-request>`.
 
 This skill does not handle workflow-control-only maintenance. If the supplied input changes only `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.github/prompts/**`, or `.github/skills/**`, stop and explain that a clear ordinary edit request is sufficient.
 
