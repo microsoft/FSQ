@@ -86,8 +86,7 @@ def test_public_web_example_matches_current_executable_contract() -> None:
         "press_key",
         "click_on",
         "click_on",
-        "assert_visible",
-        "assert_not_visible",
+        "assert_text",
         "close_browser",
     ]
     assert steps[2].params["text"] == "Review FSQ evidence"
@@ -96,14 +95,11 @@ def test_public_web_example_matches_current_executable_contract() -> None:
     assert steps[4].params["text"] == "Publish v0.1.0"
     assert steps[4].params["textType"] == "literal"
     assert steps[4].params["clear"] is True
-    assert steps[6].params["locator"] == {"css": ".todo-list li:nth-child(1) input.toggle"}
-    assert "Active" in steps[7].params["target"]
+    assert steps[6].params["locator"] == {"role": "checkbox", "index": 0}
+    assert steps[7].params["locator"] == {"role": "link", "name": "Active"}
     assert steps[8].params == {
-        "locator": {"text": "Publish v0.1.0"},
-        "optional": False,
-    }
-    assert steps[9].params == {
-        "locator": {"text": "Review FSQ evidence"},
+        "locator": {"role": "main"},
+        "text": {"equals": "Toggle All Input\nPublish v0.1.0"},
         "optional": False,
     }
 
@@ -389,20 +385,25 @@ platform: web
     url: https://www.bing.com
 - uiSnapshot
 - clickOn:
-    target: Search box
     locator:
-      role: textbox
+      role: button
       name: Search
 - typeText:
     text: playwright
-    target: Search box
+    locator:
+      role: textbox
+      name: Search
 - pressKey:
     key: Enter
 - waitFor:
-    text: playwright
+    locator:
+      role: main
+      name: Search results
     timeout_ms: 5000
 - assertText:
-    target: Results
+    locator:
+      role: main
+      name: Search results
     text:
       contains: playwright
 - closeBrowser
@@ -437,15 +438,15 @@ platform: web
     ]
     assert steps[0].params == {}
     assert steps[1].params == {"url": "https://www.bing.com"}
-    assert {key: value for key, value in steps[3].params.items() if key != "textType"} == {"target": "Search box", "locator": {"role": "textbox", "name": "Search"}}
-    assert steps[4].params == {"target": "Search box", "text": "playwright", "textType": "literal"}
-    assert steps[6].params == {"text": "playwright", "timeout_ms": 5000}
-    assert steps[7].params == {"target": "Results", "text": {"contains": "playwright"}}
+    assert steps[3].params == {"locator": {"role": "button", "name": "Search"}}
+    assert steps[4].params == {"locator": {"role": "textbox", "name": "Search"}, "text": "playwright", "textType": "literal"}
+    assert steps[6].params == {"locator": {"role": "main", "name": "Search results"}, "timeout_ms": 5000}
+    assert steps[7].params == {"locator": {"role": "main", "name": "Search results"}, "text": {"contains": "playwright"}}
     assert steps[8].params == {}
     assert all(step.metadata["platform"] == "web" for step in steps)
 
 
-def test_fsq_executable_step_adapter_accepts_web_locator_ref(tmp_path: Path) -> None:
+def test_fsq_executable_step_adapter_rejects_web_locator_ref(tmp_path: Path) -> None:
     case_path = tmp_path / "web_ref_case.fsq.yaml"
     case_path.write_text(
         """
@@ -461,8 +462,8 @@ platform: web
     )
     case = FsqCaseLoader().load_case(case_path)
 
-    steps = _web_adapter().to_executable_steps(case)
-    assert steps[0].params["locator"] == {"ref": "e83"}
+    with pytest.raises(ConfigurationError, match="Invalid FSQ command parameters"):
+        _web_adapter().to_executable_steps(case)
 
 
 def test_fsq_executable_step_adapter_preserves_web_text_type_runtime_secret(tmp_path: Path) -> None:
@@ -476,7 +477,9 @@ platform: web
 - typeText:
     text: TEST_ACCOUNT_PASSWORD
     textType: runtimeSecret
-    target: Password field
+    locator:
+      role: textbox
+      name: Password
 """,
         encoding="utf-8",
     )
@@ -485,7 +488,11 @@ platform: web
     steps = _web_adapter().to_executable_steps(case)
 
     assert steps[0].action_name == "type_text"
-    assert steps[0].params == {"text": "TEST_ACCOUNT_PASSWORD", "textType": "runtimeSecret", "target": "Password field"}
+    assert steps[0].params == {
+        "locator": {"role": "textbox", "name": "Password"},
+        "text": "TEST_ACCOUNT_PASSWORD",
+        "textType": "runtimeSecret",
+    }
 
 
 def test_fsq_executable_step_adapter_resolves_macos_aliases_and_asserts_order(tmp_path: Path) -> None:

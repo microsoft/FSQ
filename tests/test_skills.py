@@ -80,8 +80,17 @@ def test_repository_web_harness_skill_documents_snapshot_first_guidance() -> Non
     assert "Tool Usage Error Recovery" in bundles[0].instructions
     assert "ui_snapshot" in bundles[0].instructions
     assert "assert_text" in bundles[0].instructions
+    assert "ref-free role/name hierarchy" in bundles[0].instructions
+    assert "unique `within` scope" in bundles[0].instructions
+    assert "order-sensitive last resort" in bundles[0].instructions
+    assert "locatorless `assert_text`" in bundles[0].instructions
+    assert "visible option labels" in bundles[0].instructions
+    assert "wait_ms" in bundles[0].instructions
     assert "textType" in bundles[0].instructions
     assert "runtimeSecret" in bundles[0].instructions
+    assert "stable selectors" not in bundles[0].instructions
+    assert "snapshot `ref`" not in bundles[0].instructions
+    assert '"target":' not in bundles[0].instructions
     assert "Unsupported Capability Families" not in bundles[0].instructions
     assert "raw Playwright APIs" not in bundles[0].instructions
     assert "JavaScript evaluation" not in bundles[0].instructions

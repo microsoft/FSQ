@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from fsq_agent.models import (
     WebClickOnParams,
     WebCloseBrowserParams,
     WebHoverOnParams,
+    WebLocator,
     WebNavigateBackParams,
     WebNavigateToParams,
     WebPressKeyParams,
@@ -67,7 +69,6 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         self._context: object | None = None
         self._executor: ThreadPoolExecutor | None = None
         self.page: object | None = page
-        self._snapshot_refs: dict[str, tuple[str, str]] = {}
 
     def context(self) -> dict[str, object]:
         return self._run_sync(self._context_payload)
@@ -140,7 +141,6 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         kwargs: dict[str, object] = {}
         if params.waitUntil is not None:
             kwargs["wait_until"] = params.waitUntil
-        self._snapshot_refs.clear()
         response = self.page.goto(url, **kwargs)
         status = getattr(response, "status", None)
         return self._passed({"url": self._page_url() or url, "status": status})
@@ -155,7 +155,6 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         kwargs: dict[str, object] = {}
         if params.waitUntil is not None:
             kwargs["wait_until"] = params.waitUntil
-        self._snapshot_refs.clear()
         response = self.page.go_back(**kwargs)
         status = getattr(response, "status", None)
         return self._passed({"url": self._page_url(), "status": status})
@@ -167,8 +166,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _click_on(self, params: WebClickOnParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        resolution_failure = self._locator_resolution_failure(locator, params)
+        locator, resolution_failure = self._resolve_target(params.locator, params=params)
         if resolution_failure is not None:
             return resolution_failure
         kwargs: dict[str, object] = {}
@@ -181,7 +179,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
                 locator.click(**kwargs)
         except Exception as exc:  # noqa: BLE001
             return self._failed(
-                "interaction_error",
+                "action_error",
                 "Web target click failed.",
                 metadata={"params": params.model_dump(mode="json", exclude_none=True), "diagnostic": self._safe_exception_message(exc)},
             )
@@ -194,14 +192,17 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _type_text(self, params: WebTypeTextParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        if not self._wait_for_locator(locator, state="visible"):
-            return self._target_missing(params)
-        if params.clear:
-            locator.fill(params.text)
-        else:
-            locator.click()
-            locator.type(params.text)
+        locator, resolution_failure = self._resolve_target(params.locator, params=params)
+        if resolution_failure is not None:
+            return resolution_failure
+        try:
+            if params.clear:
+                locator.fill(params.text)
+            else:
+                locator.click()
+                locator.type(params.text)
+        except Exception as exc:  # noqa: BLE001
+            return self._interaction_failure("Web text entry failed.", params, exc)
         return self._passed()
 
     @_web_driver_tool("selectOption", description="Select an option in a Web select target.")
@@ -211,19 +212,19 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _select_option(self, params: WebSelectOptionParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        if not self._wait_for_locator(locator, state="visible"):
-            return self._target_missing(params)
-        option: object
-        if params.values is not None:
-            option = params.values
-        elif params.value is not None:
-            option = params.value
-        elif params.label is not None:
-            option = {"label": params.label}
-        else:
-            option = {"index": params.index}
-        selected = locator.select_option(option)
+        locator, resolution_failure = self._resolve_target(params.locator, params=params)
+        if resolution_failure is not None:
+            return resolution_failure
+        try:
+            if len(params.labels) > 1 and not locator.evaluate("element => element instanceof HTMLSelectElement && element.multiple"):
+                return self._failed(
+                    "action_error",
+                    "Multiple labels require a multiple-select Web target.",
+                    metadata={"params": params.model_dump(mode="json", exclude_none=True)},
+                )
+            selected = locator.select_option(label=params.labels)
+        except Exception as exc:  # noqa: BLE001
+            return self._interaction_failure("Web option selection failed.", params, exc)
         return self._passed({"selected": selected})
 
     @_web_driver_tool("hoverOn", description="Hover over a Web page target resolved from the page snapshot.")
@@ -233,10 +234,13 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _hover_on(self, params: WebHoverOnParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        if not self._wait_for_locator(locator, state="visible"):
-            return self._target_missing(params)
-        locator.hover()
+        locator, resolution_failure = self._resolve_target(params.locator, params=params)
+        if resolution_failure is not None:
+            return resolution_failure
+        try:
+            locator.hover()
+        except Exception as exc:  # noqa: BLE001
+            return self._interaction_failure("Web hover failed.", params, exc)
         return self._passed()
 
     @_web_driver_tool("pressKey", description="Press a keyboard key in the current Web page.")
@@ -249,7 +253,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         self.page.keyboard.press(params.key)
         return self._passed({"key": params.key})
 
-    @_web_driver_tool("waitFor", description="Wait for a Web page target, text, URL, or timeout condition.")
+    @_web_driver_tool("waitFor", description="Wait for a semantic Web target or URL condition.")
     def wait_for(self, params: WebWaitForParams) -> dict[str, object]:
         return self._run_sync(lambda: self._wait_for(params))
 
@@ -257,22 +261,18 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         if self.page is None:
             return self._browser_not_started()
         timeout = params.timeout_ms or DEFAULT_WEB_WAIT_TIMEOUT_MS
-        if params.target or params.locator:
-            locator = self._locator(params)
+        if params.locator is not None:
             state = params.state or "visible"
-            if self._wait_for_locator(locator, state=state, timeout=timeout):
-                return self._passed({"state": state})
-            return self._failed("timeout_error", "Timed out waiting for Web target.")
-        if params.text:
-            locator = self.page.get_by_text(params.text)
-            if self._wait_for_locator(locator, state="visible", timeout=timeout):
-                return self._passed({"text": params.text})
-            return self._failed("timeout_error", "Timed out waiting for Web text.")
-        if params.url:
+            return self._wait_for_semantic_locator(params, state=state, timeout=timeout)
+        try:
             self.page.wait_for_url(params.url, timeout=timeout)
-            return self._passed({"url": self._page_url()})
-        self.page.wait_for_timeout(timeout)
-        return self._passed({"timeout_ms": timeout})
+        except Exception as exc:  # noqa: BLE001
+            return self._failed(
+                "timeout_error",
+                "Timed out waiting for Web URL.",
+                metadata={"params": params.model_dump(mode="json", exclude_none=True), "diagnostic": self._safe_exception_message(exc)},
+            )
+        return self._passed({"url": self._page_url()})
 
     @_web_driver_tool("takeScreenshot", description="Capture a Web page screenshot for evidence or debugging.")
     def take_screenshot(self, params: WebTakeScreenshotParams) -> dict[str, object]:
@@ -290,35 +290,37 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _ui_snapshot(self, params: WebUiSnapshotParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        self._snapshot_refs.clear()
         aria_snapshot = getattr(self.page, "aria_snapshot", None)
         if callable(aria_snapshot):
-            try:
-                snapshot = aria_snapshot(mode="ai")
-            except TypeError:
-                snapshot = aria_snapshot()
-            if isinstance(snapshot, str):
-                self._snapshot_refs = self._snapshot_reference_map(snapshot)
-            if not isinstance(snapshot, str) or snapshot.strip():
+            snapshot = aria_snapshot(mode="default")
+            if isinstance(snapshot, str) and snapshot.strip():
+                normalized = self._normalize_aria_snapshot(snapshot)
+                if normalized is None:
+                    return self._text_ui_snapshot(reason="aria_snapshot_normalization_failed")
+                normalized_snapshot, truncated = normalized
                 return {
                     "url": self._page_url(),
                     "snapshot_type": "aria",
-                    "snapshot": snapshot,
+                    "snapshot": normalized_snapshot,
                     "coverage": {
-                        "status": "complete" if isinstance(snapshot, str) else "unknown",
+                        "status": "complete",
                         "scope": "observed_aria_snapshot",
-                        "reason": "backend_observation_retained_without_clipping" if isinstance(snapshot, str) else "backend_snapshot_shape_unknown",
+                        "reason": "semantic_values_compacted_to_100_characters" if truncated else "backend_observation_retained_without_clipping",
                     },
-                    "truncated": False if isinstance(snapshot, str) else None,
+                    "truncated": truncated,
                 }
-        return self._text_ui_snapshot()
+            reason = "backend_aria_snapshot_empty" if isinstance(snapshot, str) else "backend_snapshot_shape_unknown"
+            return self._text_ui_snapshot(reason=reason)
+        return self._text_ui_snapshot(reason="backend_aria_snapshot_unavailable")
 
-    def _text_ui_snapshot(self) -> dict[str, object]:
+    def _text_ui_snapshot(self, *, reason: str) -> dict[str, object]:
         return {
             "url": self._page_url(),
             "snapshot_type": "text",
             "title": self._safe_page_title(),
             "text": self._safe_body_text(),
+            "coverage": {"status": "partial", "scope": "visible_body_text", "reason": reason},
+            "truncated": False,
         }
 
     @_web_driver_tool("assertVisible", description="Assert that a Web page target is visible.")
@@ -328,10 +330,8 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _assert_visible(self, params: WebAssertVisibleParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        if self._wait_for_locator(locator, state="visible"):
-            return self._passed()
-        return self._target_missing(params)
+        _, resolution_failure = self._resolve_target(params.locator, params=params)
+        return resolution_failure or self._passed()
 
     @_web_driver_tool("assertNotVisible", description="Assert that a Web page target is not visible.")
     def assert_not_visible(self, params: WebAssertNotVisibleParams) -> dict[str, object]:
@@ -340,10 +340,26 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _assert_not_visible(self, params: WebAssertNotVisibleParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        if self._wait_for_locator(locator, state="hidden"):
+        target, scope_failure, scope_absent = self._semantic_target(params.locator, params=params, scope_policy="not_visible")
+        if scope_failure is not None:
+            return scope_failure
+        if scope_absent:
             return self._passed()
-        return self._failed("assertion_error", "Target is visible.")
+        count, count_failure = self._locator_count(target, params=params)
+        if count_failure is not None:
+            return count_failure
+        visible_count = self._visible_match_count(target, count)
+        if visible_count == 0:
+            return self._passed()
+        return self._failed(
+            "assertion_error",
+            "Web target is visible.",
+            metadata={
+                "params": params.model_dump(mode="json", exclude_none=True),
+                "match_count": count,
+                "visible_match_count": visible_count,
+            },
+        )
 
     @_web_driver_tool("assertText", description="Assert text on a Web page target.")
     def assert_text(self, params: WebAssertTextParams) -> dict[str, object]:
@@ -352,17 +368,27 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _assert_text(self, params: WebAssertTextParams) -> dict[str, object]:
         if self.page is None:
             return self._browser_not_started()
-        locator = self._locator(params)
-        if not self._wait_for_locator(locator, state="visible"):
-            return self._target_missing(params)
-        actual = locator.inner_text()
+        if params.locator is None:
+            locator = self.page.locator("body")
+        else:
+            locator, resolution_failure = self._resolve_target(params.locator, params=params)
+            if resolution_failure is not None:
+                return resolution_failure
+        try:
+            actual = locator.inner_text()
+        except Exception as exc:  # noqa: BLE001
+            return self._failed(
+                "assertion_error",
+                "Web text could not be read.",
+                metadata={"params": params.model_dump(mode="json", exclude_none=True), "diagnostic": self._safe_exception_message(exc)},
+            )
         contains = params.text.contains
         if isinstance(contains, str) and contains in actual:
-            return self._passed({"text": actual})
+            return self._passed(self._bounded_text_output(actual))
         equals = params.text.equals
         if isinstance(equals, str) and equals == actual:
-            return self._passed({"text": actual})
-        return self._failed("assertion_error", "Text assertion failed.", output={"text": actual})
+            return self._passed(self._bounded_text_output(actual))
+        return self._failed("assertion_error", "Text assertion failed.", output=self._bounded_text_output(actual))
 
     @_web_driver_tool("assertWithAI", description="Evaluate an explicit Web visual assertion with AI.")
     def assert_with_ai(self, params: WebAssertWithAIParams) -> dict[str, object]:
@@ -384,7 +410,6 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
             self._shutdown_executor()
 
     def _close(self) -> None:
-        self._snapshot_refs.clear()
         failure = None
         for attribute in ("_context", "_browser", "_playwright"):
             candidate = getattr(self, attribute)
@@ -454,105 +479,285 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
             raise ConfigurationError("Web navigation requires an absolute URL or configured harness.web.base_url.")
         return urljoin(self.base_url, url.lstrip("/"))
 
-    def _locator(self, params: BaseModel) -> object:
-        data = params.model_dump(mode="python", exclude_none=True)
-        locator = data.get("locator")
-        if isinstance(locator, dict):
-            snapshot_ref = locator.get("ref")
-            if isinstance(snapshot_ref, str) and snapshot_ref.strip():
-                referenced = self._snapshot_refs.get(snapshot_ref.strip())
-                if referenced is not None:
-                    ref_role, ref_name = referenced
-                    return self.page.get_by_role(ref_role, name=self._snapshot_text_matcher(ref_name))
-                return self.page.locator("[data-fsq-missing-snapshot-ref]")
-            role = locator.get("role")
-            name = locator.get("name")
-            if isinstance(role, str) and role.strip():
-                kwargs: dict[str, object] = {}
-                if isinstance(name, str) and name.strip():
-                    kwargs["name"] = self._snapshot_text_matcher(name)
-                resolved = self.page.get_by_role(role, **kwargs)
-                return self._compose_locator(resolved, locator, excluded={"role", "name"})
-            for key, method_name in [
-                ("text", "get_by_text"),
-                ("label", "get_by_label"),
-                ("placeholder", "get_by_placeholder"),
-                ("testId", "get_by_test_id"),
-                ("altText", "get_by_alt_text"),
-                ("title", "get_by_title"),
-            ]:
-                value = locator.get(key)
-                if isinstance(value, str) and value.strip():
-                    resolved = getattr(self.page, method_name)(self._snapshot_text_matcher(value))
-                    return self._compose_locator(resolved, locator, excluded={key})
-            css = locator.get("css")
-            if isinstance(css, str) and css.strip():
-                return self._compose_locator(self.page.locator(css), locator, excluded={"css"})
-            xpath = locator.get("xpath")
-            if isinstance(xpath, str) and xpath.strip():
-                return self._compose_locator(self.page.locator(f"xpath={xpath}"), locator, excluded={"xpath"})
-        target = data.get("target")
-        if isinstance(target, str) and target.strip():
-            ref_match = re.search(r"\[ref=([^]\s]+)\]", target)
-            if ref_match and ref_match.group(1) in self._snapshot_refs:
-                ref_role, ref_name = self._snapshot_refs[ref_match.group(1)]
-                return self.page.get_by_role(ref_role, name=self._snapshot_text_matcher(ref_name))
-            snapshot = self._parse_snapshot_target(target)
-            if snapshot is not None:
-                role, name = snapshot
-                return self.page.get_by_role(role, name=self._snapshot_text_matcher(name))
-            return self.page.get_by_text(self._snapshot_text_matcher(target))
-        return self.page.locator(":root")
+    def _resolve_target(self, locator: WebLocator, *, params: BaseModel) -> tuple[object | None, dict[str, object] | None]:
+        target, scope_failure, _ = self._semantic_target(locator, params=params, scope_policy="positive")
+        if scope_failure is not None:
+            return None, scope_failure
+        count, count_failure = self._locator_count(target, params=params)
+        if count_failure is not None:
+            return None, count_failure
+        metadata = {"params": params.model_dump(mode="json", exclude_none=True), "match_count": count}
+        if count == 0:
+            return None, self._failed("target_not_found", "Web target was not found.", metadata=metadata)
+        if locator.index is None and count > 1:
+            return None, self._failed("target_ambiguous", "Web target matched multiple elements.", metadata=metadata)
+        if locator.index is not None:
+            if locator.index >= count:
+                return None, self._failed("target_not_found", "Web target index is out of range.", metadata=metadata)
+            target = target.nth(locator.index)
+        try:
+            if not target.is_visible():
+                return None, self._failed("target_not_visible", "Web target is not visible.", metadata=metadata)
+        except Exception as exc:  # noqa: BLE001
+            return None, self._failed(
+                "target_detached",
+                "Web target became unavailable.",
+                metadata={**metadata, "diagnostic": self._safe_exception_message(exc)},
+            )
+        return target, None
 
-    def _compose_locator(self, resolved: object, locator: dict[str, object], *, excluded: set[str]) -> object:
-        methods = {"text": "get_by_text", "label": "get_by_label", "placeholder": "get_by_placeholder", "testId": "get_by_test_id", "altText": "get_by_alt_text", "title": "get_by_title"}
-        for key, method_name in methods.items():
-            value = locator.get(key)
-            if key not in excluded and isinstance(value, str) and value.strip():
-                resolved = resolved.and_(getattr(self.page, method_name)(self._snapshot_text_matcher(value)))
-        for key, prefix in (("css", ""), ("xpath", "xpath=")):
-            value = locator.get(key)
-            if key not in excluded and isinstance(value, str) and value.strip():
-                resolved = resolved.and_(self.page.locator(f"{prefix}{value}"))
-        return resolved
+    def _semantic_target(
+        self,
+        locator: WebLocator,
+        *,
+        params: BaseModel,
+        scope_policy: str,
+    ) -> tuple[object | None, dict[str, object] | None, bool]:
+        owner = self.page
+        if locator.within is not None:
+            scope = self._role_locator(owner, locator.within.role, locator.within.name)
+            scope_count, count_failure = self._locator_count(scope, params=params, count_key="scope_match_count")
+            if count_failure is not None:
+                return None, count_failure, False
+            if scope_policy == "not_visible":
+                visible_indexes = self._visible_match_indexes(scope, scope_count)
+                if not visible_indexes:
+                    return None, None, True
+                if len(visible_indexes) > 1:
+                    return (
+                        None,
+                        self._failed(
+                            "target_ambiguous",
+                            "Web parent scope matched multiple visible elements.",
+                            metadata={
+                                "params": params.model_dump(mode="json", exclude_none=True),
+                                "scope_match_count": scope_count,
+                                "visible_scope_match_count": len(visible_indexes),
+                            },
+                        ),
+                        False,
+                    )
+                owner = scope if scope_count == 1 else scope.nth(visible_indexes[0])
+            else:
+                if scope_count == 0:
+                    if scope_policy == "disappearance":
+                        return None, None, True
+                    return (
+                        None,
+                        self._failed(
+                            "target_not_found",
+                            "Web parent scope was not found.",
+                            metadata={"params": params.model_dump(mode="json", exclude_none=True), "scope_match_count": 0},
+                        ),
+                        False,
+                    )
+                if scope_count > 1:
+                    return (
+                        None,
+                        self._failed(
+                            "target_ambiguous",
+                            "Web parent scope matched multiple elements.",
+                            metadata={"params": params.model_dump(mode="json", exclude_none=True), "scope_match_count": scope_count},
+                        ),
+                        False,
+                    )
+                if scope_policy == "positive":
+                    try:
+                        if not scope.is_visible():
+                            return (
+                                None,
+                                self._failed(
+                                    "target_not_visible",
+                                    "Web parent scope is not visible.",
+                                    metadata={"params": params.model_dump(mode="json", exclude_none=True), "scope_match_count": 1},
+                                ),
+                                False,
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        return (
+                            None,
+                            self._failed(
+                                "target_detached",
+                                "Web parent scope became unavailable.",
+                                metadata={
+                                    "params": params.model_dump(mode="json", exclude_none=True),
+                                    "scope_match_count": 1,
+                                    "diagnostic": self._safe_exception_message(exc),
+                                },
+                            ),
+                            False,
+                        )
+                owner = scope
+        return self._role_locator(owner, locator.role, locator.name), None, False
+
+    def _role_locator(self, owner: object, role: str, name: str | None) -> object:
+        kwargs: dict[str, object] = {}
+        if name is not None:
+            matcher = self._snapshot_text_matcher(name)
+            kwargs["name"] = matcher
+            if isinstance(matcher, str):
+                kwargs["exact"] = True
+        return owner.get_by_role(role, **kwargs)
+
+    def _locator_count(
+        self,
+        locator: object,
+        *,
+        params: BaseModel,
+        count_key: str = "match_count",
+    ) -> tuple[int, dict[str, object] | None]:
+        try:
+            return locator.count(), None
+        except Exception as exc:  # noqa: BLE001
+            return 0, self._failed(
+                "target_resolution_error",
+                "Web target resolution failed.",
+                metadata={
+                    "params": params.model_dump(mode="json", exclude_none=True),
+                    count_key: None,
+                    "diagnostic": self._safe_exception_message(exc),
+                },
+            )
 
     @staticmethod
-    def _parse_snapshot_target(target: str) -> tuple[str, str] | None:
-        match = re.match(r'^\s*([A-Za-z][\w-]*)\s+"([^"]+)"(?:\s+\[[^]]+\])*\s*$', target)
-        return (match.group(1), match.group(2)) if match else None
+    def _visible_match_indexes(locator: object, count: int) -> list[int]:
+        visible_indexes: list[int] = []
+        for index in range(count):
+            candidate = locator if count == 1 else locator.nth(index)
+            try:
+                if candidate.is_visible():
+                    visible_indexes.append(index)
+            except Exception as exc:  # noqa: BLE001 - detached candidates are not visible.
+                logging.getLogger(__name__).debug("Web visibility probe failed (%s)", type(exc).__name__)
+                continue
+        return visible_indexes
+
+    def _visible_match_count(self, locator: object, count: int) -> int:
+        return len(self._visible_match_indexes(locator, count))
+
+    def _wait_for_semantic_locator(self, params: WebWaitForParams, *, state: str, timeout: int) -> dict[str, object]:
+        disappearance = state in {"hidden", "detached"}
+        target, scope_failure, scope_absent = self._semantic_target(
+            params.locator,
+            params=params,
+            scope_policy="disappearance" if disappearance else "positive",
+        )
+        if scope_failure is not None:
+            return scope_failure
+        if scope_absent:
+            return self._passed({"state": state})
+        count, count_failure = self._locator_count(target, params=params)
+        if count_failure is not None:
+            return count_failure
+        if disappearance and count == 0:
+            return self._passed({"state": state})
+        if count > 1 and params.locator.index is None:
+            return self._failed(
+                "target_ambiguous",
+                "Web target matched multiple elements.",
+                metadata={"params": params.model_dump(mode="json", exclude_none=True), "match_count": count},
+            )
+        if params.locator.index is not None:
+            if params.locator.index >= count:
+                return self._failed(
+                    "target_not_found",
+                    "Web target index is out of range.",
+                    metadata={"params": params.model_dump(mode="json", exclude_none=True), "match_count": count},
+                )
+            target = target.nth(params.locator.index)
+        if self._wait_for_locator(target, state=state, timeout=timeout):
+            return self._passed({"state": state})
+        return self._failed(
+            "timeout_error",
+            "Timed out waiting for Web target.",
+            metadata={"params": params.model_dump(mode="json", exclude_none=True), "match_count": count},
+        )
+
+    @classmethod
+    def _normalize_aria_snapshot(cls, snapshot: str) -> tuple[str, bool] | None:
+        if re.search(r"\[ref=[^]]+\]", snapshot):
+            return None
+        normalized_lines: list[str] = []
+        truncated = False
+        for line in snapshot.splitlines(keepends=True):
+            ending = line[len(line.rstrip("\r\n")) :]
+            content = line[: len(line) - len(ending)] if ending else line
+            normalized = cls._normalize_aria_line(content)
+            if normalized is None:
+                return None
+            normalized_line, line_truncated = normalized
+            normalized_lines.append(normalized_line + ending)
+            truncated = truncated or line_truncated
+        return "".join(normalized_lines), truncated
+
+    @classmethod
+    def _normalize_aria_line(cls, line: str) -> tuple[str, bool] | None:
+        role_match = re.match(r"^(\s*-\s+)([A-Za-z][\w-]*)(.*)$", line)
+        if role_match is None:
+            return line, False
+        prefix, role, remainder = role_match.groups()
+        quoted_match = re.match(r'^(\s+)(".*)$', remainder)
+        if quoted_match is not None:
+            whitespace, scalar_and_suffix = quoted_match.groups()
+            decoded = cls._decode_quoted_scalar(scalar_and_suffix)
+            if decoded is None:
+                return None
+            value, suffix, _ = decoded
+            if len(value) <= 100:
+                return line, False
+            compacted = json.dumps(value[:100] + "...", ensure_ascii=False)
+            return f"{prefix}{role}{whitespace}{compacted}{suffix}", True
+        payload_match = re.match(r"^(\s*:\s*)(.*)$", remainder)
+        if payload_match is None:
+            return line, False
+        separator, scalar = payload_match.groups()
+        if not scalar:
+            return line, False
+        if scalar.startswith('"'):
+            decoded = cls._decode_quoted_scalar(scalar)
+            if decoded is None:
+                return None
+            value, suffix, _ = decoded
+            if suffix:
+                return None
+            if len(value) <= 100:
+                return line, False
+            compacted = json.dumps(value[:100] + "...", ensure_ascii=False)
+            return f"{prefix}{role}{separator}{compacted}", True
+        if len(scalar) <= 100:
+            return line, False
+        return f"{prefix}{role}{separator}{scalar[:100]}...", True
 
     @staticmethod
-    def _snapshot_reference_map(snapshot: str) -> dict[str, tuple[str, str]]:
-        references: dict[str, tuple[str, str]] = {}
-        pattern = re.compile(r'^\s*-?\s*([A-Za-z][\w-]*)\s+"([^"]+)".*?\[ref=([^]\s]+)\]', re.MULTILINE)
-        for match in pattern.finditer(snapshot):
-            references[match.group(3)] = (match.group(1), match.group(2))
-        return references
+    def _decode_quoted_scalar(source: str) -> tuple[str, str, str] | None:
+        try:
+            value, consumed = json.JSONDecoder().raw_decode(source)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, str):
+            return None
+        return value, source[consumed:], source[:consumed]
+
+    def _interaction_failure(self, message: str, params: BaseModel, exc: Exception) -> dict[str, object]:
+        return self._failed(
+            "action_error",
+            message,
+            metadata={
+                "params": params.model_dump(mode="json", exclude_none=True),
+                "diagnostic": self._safe_exception_message(exc),
+            },
+        )
+
+    @staticmethod
+    def _bounded_text_output(actual: str) -> dict[str, object]:
+        return {"text": actual[:1000], "truncated": len(actual) > 1000}
 
     @staticmethod
     def _snapshot_text_matcher(value: str) -> str | re.Pattern[str]:
         normalized = value.strip()
-        if normalized.endswith(("...", "…")):
-            prefix = normalized[:-3] if normalized.endswith("...") else normalized[:-1]
-            return re.compile(rf"^\s*{re.escape(prefix.rstrip())}", re.IGNORECASE)
+        if normalized.endswith("..."):
+            return re.compile(rf"^{re.escape(normalized[:-3])}")
         return normalized
-
-    def _locator_resolution_failure(self, locator: object, params: BaseModel) -> dict[str, object] | None:
-        metadata = {"params": params.model_dump(mode="json", exclude_none=True)}
-        try:
-            count = locator.count()
-        except Exception as exc:  # noqa: BLE001
-            return self._failed("target_resolution_error", "Web target resolution failed.", metadata={**metadata, "diagnostic": self._safe_exception_message(exc)})
-        if count == 0:
-            return self._failed("target_not_found", "Web target was not found.", metadata={**metadata, "match_count": 0})
-        if count > 1:
-            return self._failed("target_ambiguous", "Web target matched multiple elements.", metadata={**metadata, "match_count": count})
-        try:
-            if not locator.is_visible():
-                return self._failed("target_not_visible", "Web target is not visible.", metadata={**metadata, "match_count": 1})
-        except Exception as exc:  # noqa: BLE001
-            return self._failed("target_detached", "Web target became unavailable.", metadata={**metadata, "diagnostic": self._safe_exception_message(exc)})
-        return None
 
     @staticmethod
     def _safe_exception_message(exc: Exception) -> str:
@@ -605,13 +810,6 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         # Playwright page probes must tolerate closed pages and optional-backend errors.
         except Exception:  # noqa: BLE001
             return None
-
-    def _target_missing(self, params: BaseModel) -> dict[str, object]:
-        return self._failed(
-            "target_resolution_error",
-            "Target was not found.",
-            metadata={"params": params.model_dump(mode="json", exclude_none=True)},
-        )
 
     def _browser_not_started(self) -> dict[str, object]:
         return self._failed("context_error", _BROWSER_NOT_STARTED_MESSAGE)
