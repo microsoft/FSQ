@@ -157,8 +157,8 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
     assert "direction or both start and end" in android_swipe_schema["description"]
     assert "screen size" in android_swipe_schema["properties"]["reference_screen_size"]["description"]
 
-    assert "target, locator, text, url, or timeout_ms" in web_wait_schema["description"]
-    assert "bounded wait" in web_wait_schema["properties"]["timeout_ms"]["description"]
+    assert "exactly one locator or url" in web_wait_schema["description"]
+    assert "condition timeout" in web_wait_schema["properties"]["timeout_ms"]["description"]
 
     assert "non-empty locator" in windows_click_schema["description"]
     assert "descriptive" in windows_click_schema["properties"]["target"]["description"]
@@ -179,6 +179,46 @@ def test_capability_parameter_schemas_include_llm_facing_guidance() -> None:
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         MacOSLaunchAppParams(environment={"APP_MODE": "test"})
+
+
+def test_web_parameter_models_enforce_semantic_replay_contract() -> None:
+    locator_schema = models.WebLocator.model_json_schema()
+    scope_schema = models.WebLocatorScope.model_json_schema()
+    click_schema = models.WebClickOnParams.model_json_schema()
+    select_schema = models.WebSelectOptionParams.model_json_schema()
+
+    assert set(locator_schema["properties"]) == {"role", "name", "within", "index"}
+    assert locator_schema["required"] == ["role"]
+    assert set(scope_schema["properties"]) == {"role", "name"}
+    assert scope_schema["required"] == ["role"]
+    assert "locator" in click_schema["required"]
+    assert "target" not in click_schema["properties"]
+    assert set(select_schema["properties"]) == {"locator", "labels"}
+
+    locator = models.WebLocator(role="button", name="Edit", within={"role": "row", "name": "Alice"}, index=0)
+    assert locator.model_dump(mode="json", exclude_none=True) == {
+        "role": "button",
+        "name": "Edit",
+        "within": {"role": "row", "name": "Alice"},
+        "index": 0,
+    }
+
+    for invalid_locator in ({"role": ""}, {"role": "button", "ref": "e1"}, {"role": "button", "within": {"role": "row", "index": 0}}):
+        with pytest.raises(ValueError, match=r"non-empty role|Extra inputs are not permitted"):
+            models.WebLocator.model_validate(invalid_locator)
+
+    with pytest.raises(ValueError, match="unique"):
+        models.WebSelectOptionParams(locator={"role": "combobox"}, labels=["Newest", "Newest"])
+    with pytest.raises(ValueError, match="exactly one locator or url"):
+        models.WebWaitForParams(locator={"role": "main"}, url="**/search**")
+    with pytest.raises(ValueError, match="index"):
+        models.WebWaitForParams(locator={"role": "status", "index": 0}, state="hidden")
+    with pytest.raises(ValueError, match="index"):
+        models.WebAssertNotVisibleParams(locator={"role": "status", "index": 0})
+    with pytest.raises(ValueError, match="exactly one"):
+        models.WebTextAssertion(contains="done", equals="done")
+    with pytest.raises(ValueError, match="exactly one"):
+        models.WebTextAssertion()
 
 
 def test_local_tool_output_rejects_artifact_subdir_escape() -> None:

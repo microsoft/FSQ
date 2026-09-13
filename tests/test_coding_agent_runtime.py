@@ -1290,7 +1290,7 @@ async def test_harness_tool_adapter_uses_web_platform_registry_for_evidence_poli
     adapter = HarnessToolAdapter(harness, run_id="run-1", platform="web")
 
     tools = adapter.build_tools()
-    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"target": "Search"}, call_id="call-1"))
+    output = await tools[0].invoke(ToolCall(name=tools[0].name, arguments={"locator": {"role": "button", "name": "Search"}}, call_id="call-1"))
 
     payload = json.loads(output)
     assert payload["status"] == "passed"

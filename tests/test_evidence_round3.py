@@ -204,7 +204,10 @@ def test_redacted_replay_is_incomplete_and_cannot_publish(tmp_path):
 
     run, task, result, settings = _recordable_web_run(tmp_path)
     recorder = EvidenceRecorder(run_id=result.report.run_id, output_dir=run)
-    for identity, params, reason in [("one", {"target": "Search"}, None), ("two", None, "sensitive_parameters_redacted")]:
+    for identity, params, reason in [
+        ("one", {"locator": {"role": "button", "name": "Search"}}, None),
+        ("two", None, "sensitive_parameters_redacted"),
+    ]:
         recorder.record_event(RunnerEvent(run_id=result.report.run_id, event_type="step_start", step_id=identity, step_execution_id=identity, source_step_id=identity))
         recorder.record_step_result(
             RunnerStepResult(

@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
 import sys
 import threading
 import types
@@ -10,7 +11,18 @@ from pathlib import Path
 import pytest
 
 from fsq_agent.core.harness._playwright_driver import PlaywrightWebDriver
-from fsq_agent.models import ConfigurationError, WebClickOnParams, WebCloseBrowserParams, WebNavigateToParams, WebStartBrowserParams, WebUiSnapshotParams
+from fsq_agent.models import (
+    ConfigurationError,
+    WebAssertNotVisibleParams,
+    WebAssertTextParams,
+    WebClickOnParams,
+    WebCloseBrowserParams,
+    WebNavigateToParams,
+    WebSelectOptionParams,
+    WebStartBrowserParams,
+    WebUiSnapshotParams,
+    WebWaitForParams,
+)
 
 
 class _FakeResponse:
@@ -18,7 +30,7 @@ class _FakeResponse:
 
 
 class _FakePage:
-    def __init__(self, *, aria_snapshot: str = '- document "Example" [ref=e1]') -> None:
+    def __init__(self, *, aria_snapshot: str = '- document "Example"') -> None:
         self.url = "about:blank"
         self.viewport_size = {"width": 800, "height": 600}
         self._aria_snapshot = aria_snapshot
@@ -52,19 +64,31 @@ class _FakeLocator:
 
 
 class _ClickFakeLocator:
-    def __init__(self, count: int = 1, visible: bool = True) -> None:
+    def __init__(
+        self,
+        count: int = 1,
+        visible: bool = True,
+        *,
+        inner_text: str = "Target text",
+        multiple: bool = False,
+        nth_results: list["_ClickFakeLocator"] | None = None,
+        role_results: dict[str, "_ClickFakeLocator"] | None = None,
+    ) -> None:
         self.match_count = count
         self.visible = visible
+        self.text = inner_text
+        self.multiple = multiple
+        self.nth_results = nth_results
+        self.role_results = role_results or {}
         self.clicked = False
-        self.filters: list[object] = []
+        self.role_calls: list[tuple[str, dict[str, object]]] = []
+        self.nth_calls: list[int] = []
+        self.wait_calls: list[dict[str, object]] = []
+        self.selection: dict[str, object] | None = None
 
-    def filter(self, **kwargs: object) -> "_ClickFakeLocator":
-        self.filters.append(kwargs)
-        return self
-
-    def and_(self, other: object) -> "_ClickFakeLocator":
-        self.filters.append({"and": other})
-        return self
+    def get_by_role(self, role: str, **kwargs: object) -> "_ClickFakeLocator":
+        self.role_calls.append((role, kwargs))
+        return self.role_results.get(role, self)
 
     def count(self) -> int:
         return self.match_count
@@ -72,22 +96,45 @@ class _ClickFakeLocator:
     def is_visible(self) -> bool:
         return self.visible
 
+    def nth(self, index: int) -> "_ClickFakeLocator":
+        self.nth_calls.append(index)
+        if self.nth_results is not None:
+            return self.nth_results[index]
+        return self
+
+    def wait_for(self, **kwargs: object) -> None:
+        self.wait_calls.append(kwargs)
+
     def click(self, **kwargs: object) -> None:
         self.clicked = True
 
+    def select_option(self, **kwargs: object) -> list[str]:
+        self.selection = kwargs
+        return list(kwargs.get("label", []))
+
+    def evaluate(self, expression: str) -> bool:
+        assert "multiple" in expression
+        return self.multiple
+
+    def inner_text(self, **kwargs: object) -> str:
+        return self.text
+
 
 class _ClickFakePage(_FakePage):
-    def __init__(self, locator: _ClickFakeLocator) -> None:
+    def __init__(self, locator: _ClickFakeLocator, *, role_results: dict[str, _ClickFakeLocator] | None = None, body: _ClickFakeLocator | None = None) -> None:
         super().__init__()
         self.result = locator
+        self.role_results = role_results or {}
+        self.body = body or _ClickFakeLocator(inner_text="Page body")
         self.role_calls: list[tuple[str, dict[str, object]]] = []
 
     def get_by_role(self, role: str, **kwargs: object) -> _ClickFakeLocator:
         self.role_calls.append((role, kwargs))
-        return self.result
+        return self.role_results.get(role, self.result)
 
-    def get_by_text(self, text: object) -> _ClickFakeLocator:
-        return self.result
+    def locator(self, selector: str) -> _ClickFakeLocator:
+        assert selector == "body"
+        return self.body
 
 
 class _TextFallbackFakePage(_FakePage):
@@ -182,11 +229,11 @@ def test_playwright_web_driver_runs_page_operations_on_one_worker_thread() -> No
     assert snapshot == {
         "url": "https://example.com/two",
         "snapshot_type": "aria",
-        "snapshot": '- document "Example" [ref=e1]',
+        "snapshot": '- document "Example"',
         "coverage": {"status": "complete", "scope": "observed_aria_snapshot", "reason": "backend_observation_retained_without_clipping"},
         "truncated": False,
     }
-    assert driver.fake_page.aria_kwargs == {"mode": "ai"}
+    assert driver.fake_page.aria_kwargs == {"mode": "default"}
     assert context["current_url"] == "https://example.com/two"
     assert set(driver.fake_page.thread_ids) == {driver.create_thread_id}
     assert driver.create_thread_id not in external_thread_ids
@@ -202,7 +249,48 @@ def test_playwright_web_driver_ui_snapshot_falls_back_when_aria_snapshot_is_empt
         "snapshot_type": "text",
         "title": "Example Search",
         "text": "Search box\nResults",
+        "coverage": {"status": "partial", "scope": "visible_body_text", "reason": "backend_aria_snapshot_empty"},
+        "truncated": False,
     }
+
+
+def test_playwright_web_driver_ui_snapshot_compacts_only_long_semantic_values() -> None:
+    long_name = 'Account: [primary] "quoted" \\ path 雪 ' + "N" * 100
+    long_text = "Text: [state] 雪 " + "T" * 100
+    long_url = "https://example.com/" + "u" * 140
+    source = f'- document "Example":\n  - heading {json.dumps(long_name, ensure_ascii=False)} [level=2]\n  - paragraph: {long_text}\n  - link "Docs":\n    - /url: {long_url}'
+    driver = PlaywrightWebDriver(page=_FakePage(aria_snapshot=source))
+
+    snapshot = driver.ui_snapshot(WebUiSnapshotParams())
+
+    assert snapshot["snapshot_type"] == "aria"
+    assert snapshot["truncated"] is True
+    assert snapshot["coverage"] == {
+        "status": "complete",
+        "scope": "observed_aria_snapshot",
+        "reason": "semantic_values_compacted_to_100_characters",
+    }
+    assert f"heading {json.dumps(long_name[:100] + '...', ensure_ascii=False)} [level=2]" in snapshot["snapshot"]
+    assert f"paragraph: {long_text[:100]}..." in snapshot["snapshot"]
+    assert f"/url: {long_url}" in snapshot["snapshot"]
+    assert snapshot["snapshot"].splitlines()[1].startswith("  - heading")
+
+
+def test_playwright_web_driver_ui_snapshot_falls_back_when_compaction_cannot_preserve_syntax() -> None:
+    page = _TextFallbackFakePage()
+    page._aria_snapshot = '- heading "' + "A" * 101
+    driver = PlaywrightWebDriver(page=page)
+
+    snapshot = driver.ui_snapshot(WebUiSnapshotParams())
+
+    assert snapshot["snapshot_type"] == "text"
+    assert snapshot["coverage"] == {
+        "status": "partial",
+        "scope": "visible_body_text",
+        "reason": "aria_snapshot_normalization_failed",
+    }
+    assert "snapshot" not in snapshot
+    assert "ref" not in json.dumps(snapshot)
 
 
 def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,29 +490,57 @@ def test_playwright_web_driver_accepts_all_supported_channels(channel: str) -> N
         driver.close()
 
 
-def test_click_on_parses_truncated_snapshot_target_as_prefix() -> None:
+def test_click_on_uses_case_sensitive_snapshot_name_matching() -> None:
     locator = _ClickFakeLocator()
     page = _ClickFakePage(locator)
     driver = PlaywrightWebDriver(page=page)
 
-    result = driver.click_on(WebClickOnParams(target='link "GitHub - microsoft/FSQ: FSQ is an evidence-first agent ..." [ref=e12]'))
+    result = driver.click_on(WebClickOnParams(locator={"role": "link", "name": "GitHub - microsoft/FSQ: FSQ is an evidence-first agent ..."}))
 
     assert result["status"] == "passed"
     role, kwargs = page.role_calls[0]
     assert role == "link"
     assert kwargs["name"].match("GitHub - microsoft/FSQ: FSQ is an evidence-first agent harness")
+    assert not kwargs["name"].match("github - microsoft/FSQ: FSQ is an evidence-first agent harness")
     assert locator.clicked is True
 
 
-def test_click_on_composes_role_and_text_locator() -> None:
+def test_click_on_uses_exact_complete_accessible_name() -> None:
     locator = _ClickFakeLocator()
     page = _ClickFakePage(locator)
     driver = PlaywrightWebDriver(page=page)
 
-    result = driver.click_on(WebClickOnParams(locator={"role": "link", "text": "microsoft/FSQ"}))
+    result = driver.click_on(WebClickOnParams(locator={"role": "link", "name": "microsoft/FSQ"}))
 
     assert result["status"] == "passed"
-    assert len(locator.filters) == 1
+    assert page.role_calls == [("link", {"name": "microsoft/FSQ", "exact": True})]
+
+
+def test_click_on_resolves_unique_parent_before_final_index() -> None:
+    first = _ClickFakeLocator()
+    second = _ClickFakeLocator()
+    targets = _ClickFakeLocator(count=2, nth_results=[first, second])
+    scope = _ClickFakeLocator(role_results={"button": targets})
+    page = _ClickFakePage(targets, role_results={"row": scope})
+    driver = PlaywrightWebDriver(page=page)
+
+    result = driver.click_on(WebClickOnParams(locator={"role": "button", "name": "Edit", "within": {"role": "row", "name": "Alice"}, "index": 1}))
+
+    assert result["status"] == "passed"
+    assert page.role_calls == [("row", {"name": "Alice", "exact": True})]
+    assert scope.role_calls == [("button", {"name": "Edit", "exact": True})]
+    assert targets.nth_calls == [1]
+    assert second.clicked is True
+
+
+def test_click_on_reports_ambiguous_parent_scope() -> None:
+    scope = _ClickFakeLocator(count=2)
+    driver = PlaywrightWebDriver(page=_ClickFakePage(_ClickFakeLocator(), role_results={"row": scope}))
+
+    result = driver.click_on(WebClickOnParams(locator={"role": "button", "within": {"role": "row"}}))
+
+    assert result["failure_category"] == "target_ambiguous"
+    assert result["metadata"]["scope_match_count"] == 2
 
 
 def test_click_on_reports_ambiguous_target() -> None:
@@ -434,6 +550,71 @@ def test_click_on_reports_ambiguous_target() -> None:
 
     assert result["failure_category"] == "target_ambiguous"
     assert result["metadata"]["match_count"] == 2
+
+
+def test_click_on_reports_out_of_range_final_index() -> None:
+    driver = PlaywrightWebDriver(page=_ClickFakePage(_ClickFakeLocator(count=1)))
+
+    result = driver.click_on(WebClickOnParams(locator={"role": "link", "index": 1}))
+
+    assert result["failure_category"] == "target_not_found"
+    assert result["metadata"]["match_count"] == 1
+
+
+def test_assert_not_visible_passes_without_visible_target_and_fails_for_any_visible_match() -> None:
+    absent_driver = PlaywrightWebDriver(page=_ClickFakePage(_ClickFakeLocator(count=0)))
+    visible_driver = PlaywrightWebDriver(
+        page=_ClickFakePage(
+            _ClickFakeLocator(
+                count=2,
+                nth_results=[_ClickFakeLocator(visible=False), _ClickFakeLocator(visible=True)],
+            )
+        )
+    )
+
+    absent = absent_driver.assert_not_visible(WebAssertNotVisibleParams(locator={"role": "dialog"}))
+    visible = visible_driver.assert_not_visible(WebAssertNotVisibleParams(locator={"role": "dialog"}))
+
+    assert absent["status"] == "passed"
+    assert visible["failure_category"] == "assertion_error"
+    assert visible["metadata"]["visible_match_count"] == 1
+
+
+def test_wait_for_hidden_treats_absence_as_satisfied() -> None:
+    driver = PlaywrightWebDriver(page=_ClickFakePage(_ClickFakeLocator(count=0)))
+
+    result = driver.wait_for(WebWaitForParams(locator={"role": "status"}, state="hidden", timeout_ms=50))
+
+    assert result == {"status": "passed", "output": {"state": "hidden"}}
+
+
+def test_select_option_uses_exact_authored_labels_and_requires_multiple_target() -> None:
+    single = _ClickFakeLocator(multiple=False)
+    multiple = _ClickFakeLocator(multiple=True)
+    single_driver = PlaywrightWebDriver(page=_ClickFakePage(single))
+    multiple_driver = PlaywrightWebDriver(page=_ClickFakePage(multiple))
+
+    one = single_driver.select_option(WebSelectOptionParams(locator={"role": "combobox"}, labels=["Newest"]))
+    invalid_many = single_driver.select_option(WebSelectOptionParams(locator={"role": "combobox"}, labels=["Newest", "Oldest"]))
+    many = multiple_driver.select_option(WebSelectOptionParams(locator={"role": "combobox"}, labels=["Newest", "Oldest"]))
+
+    assert one["status"] == "passed"
+    assert single.selection == {"label": ["Newest"]}
+    assert invalid_many["failure_category"] == "action_error"
+    assert many["status"] == "passed"
+    assert multiple.selection == {"label": ["Newest", "Oldest"]}
+
+
+def test_assert_text_uses_target_or_page_body_without_normalization() -> None:
+    target = _ClickFakeLocator(inner_text="Target\r\nText")
+    body = _ClickFakeLocator(inner_text="Page body literal")
+    driver = PlaywrightWebDriver(page=_ClickFakePage(target, body=body))
+
+    target_result = driver.assert_text(WebAssertTextParams(locator={"role": "main"}, text={"equals": "Target\r\nText"}))
+    body_result = driver.assert_text(WebAssertTextParams(text={"contains": "body literal"}))
+
+    assert target_result["status"] == "passed"
+    assert body_result["status"] == "passed"
 
 
 def test_playwright_web_driver_does_not_launch_until_start_browser(monkeypatch: pytest.MonkeyPatch) -> None:

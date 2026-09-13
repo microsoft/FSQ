@@ -144,17 +144,17 @@ def test_web_harness_dispatches_fsq_action_names_to_driver() -> None:
         ("startBrowser", {}, "start_browser"),
         ("navigateTo", {"url": "https://www.bing.com"}, "navigate_to"),
         ("navigateBack", {}, "navigate_back"),
-        ("clickOn", {"target": "Search box"}, "click_on"),
-        ("typeText", {"target": "Search box", "text": "playwright", "textType": "literal"}, "type_text"),
-        ("selectOption", {"target": "Region", "label": "United States"}, "select_option"),
-        ("hoverOn", {"target": "Menu"}, "hover_on"),
+        ("clickOn", {"locator": {"role": "textbox", "name": "Search box"}}, "click_on"),
+        ("typeText", {"locator": {"role": "textbox", "name": "Search box"}, "text": "playwright", "textType": "literal"}, "type_text"),
+        ("selectOption", {"locator": {"role": "combobox", "name": "Region"}, "labels": ["United States"]}, "select_option"),
+        ("hoverOn", {"locator": {"role": "button", "name": "Menu"}}, "hover_on"),
         ("pressKey", {"key": "Enter"}, "press_key"),
-        ("waitFor", {"text": "Results", "timeout_ms": 5000}, "wait_for"),
+        ("waitFor", {"locator": {"role": "main", "name": "Results"}, "timeout_ms": 5000}, "wait_for"),
         ("takeScreenshot", {}, "take_screenshot"),
         ("uiSnapshot", {}, "ui_snapshot"),
-        ("assertVisible", {"target": "Results"}, "assert_visible"),
-        ("assertNotVisible", {"target": "Dialog"}, "assert_not_visible"),
-        ("assertText", {"target": "Results", "text": {"contains": "playwright"}}, "assert_text"),
+        ("assertVisible", {"locator": {"role": "main", "name": "Results"}}, "assert_visible"),
+        ("assertNotVisible", {"locator": {"role": "dialog"}}, "assert_not_visible"),
+        ("assertText", {"locator": {"role": "main", "name": "Results"}, "text": {"contains": "playwright"}}, "assert_text"),
         ("closeBrowser", {}, "close_browser"),
     ]
 
@@ -196,10 +196,11 @@ def test_web_harness_action_space_returns_catalog_backed_schemas() -> None:
     assert schemas["click_on"].metadata["driver_class"] == "FakeWebDriver"
     assert schemas["click_on"].metadata["backend"] == "fake-playwright"
     assert schemas["click_on"].metadata["replay"] == {"kind": "fsq_command", "alias": "clickOn"}
-    assert "target" in schemas["click_on"].params_json_schema["properties"]
-    assert "target or non-empty locator" in schemas["click_on"].params_json_schema["description"]
-    assert "exact snapshot target" in schemas["click_on"].params_json_schema["properties"]["target"]["description"]
-    assert "ref" in click_locator_schema["properties"]
+    assert schemas["click_on"].params_json_schema["required"] == ["locator"]
+    assert "target" not in schemas["click_on"].params_json_schema["properties"]
+    assert "semantic locator" in schemas["click_on"].params_json_schema["description"]
+    assert set(click_locator_schema["properties"]) == {"role", "name", "within", "index"}
+    assert "ref" not in click_locator_schema["properties"]
     assert schemas["ui_snapshot"].driver_method == "ui_snapshot"
     assert schemas["ui_snapshot"].fsq_action_name == "uiSnapshot"
     assert schemas["ui_snapshot"].params_json_schema.get("properties") == {}
@@ -209,7 +210,7 @@ def test_web_harness_validation_failure_does_not_call_driver_method() -> None:
     driver = FakeWebDriver()
     harness = WebHarness(driver=driver)
 
-    result = harness.invoke_action(_step("clickOn", {"locator": {"unknown": "Login"}}), harness.get_context())
+    result = harness.invoke_action(_step("clickOn", {"locator": {"role": "button", "unknown": "Login"}}), harness.get_context())
 
     assert result.status == "failed"
     assert result.failure_category == "configuration_error"

@@ -50,7 +50,7 @@ MacOSOrderDirection: TypeAlias = Literal["vertical", "horizontal"]
 
 TEXT_TYPE_DESCRIPTION = "Use literal for plain text; use runtimeSecret when text names an allowlisted runtime secret."
 ANDROID_TARGET_SCHEMA_DESCRIPTION = "Provide target or non-empty locator. Prefer a semantic target from the current Android UI snapshot; use locator when target text is unavailable."
-WEB_TARGET_SCHEMA_DESCRIPTION = "Provide target or non-empty locator. Prefer an exact snapshot target from the current Web page snapshot; use locator when target text is unavailable."
+WEB_LOCATOR_SCHEMA_DESCRIPTION = "Provide one semantic locator using a role and optional name, within scope, or final-result index."
 WINDOWS_TARGET_SCHEMA_DESCRIPTION = "Provide a non-empty locator. The target field is descriptive only and is not used for Windows control lookup."
 MACOS_TARGET_SCHEMA_DESCRIPTION = "Provide target, non-empty locator, or point. Prefer target or locator for UI elements and point only for coordinate-based actions."
 
@@ -365,45 +365,35 @@ class AndroidAssertWithAIParams(BaseModel):
         raise ValueError("requires non-empty prompt")
 
 
-class WebLocator(BaseModel):
+class WebLocatorScope(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={"description": "Structured Web locator. Provide at least one populated locator field."},
+        json_schema_extra={"description": "One non-recursive semantic parent scope from the Web snapshot."},
     )
 
-    role: str | None = Field(default=None, description="ARIA role to match.")
+    role: str = Field(description="Non-empty ARIA role copied from the Web snapshot.")
     name: str | None = Field(default=None, description="Accessible name to match.")
-    text: str | None = Field(default=None, description="Visible text to match.")
-    label: str | None = Field(default=None, description="Associated label text to match.")
-    placeholder: str | None = Field(default=None, description="Input placeholder text to match.")
-    # Names mirror the authored Web locator payload contract.
-    testId: str | None = Field(default=None, description="Test id attribute to match.")  # noqa: N815
-    css: str | None = Field(default=None, description="CSS selector to match.")
-    xpath: str | None = Field(default=None, description="XPath expression to match.")
-    altText: str | None = Field(default=None, description="Image alt text to match.")  # noqa: N815
-    title: str | None = Field(default=None, description="Element title attribute to match.")
-    ref: str | None = Field(default=None, description="Current Web snapshot reference to match.")
-
-    def has_value(self) -> bool:
-        return any(isinstance(value, str) and value.strip() for value in self.model_dump().values())
-
-
-class _WebTargetParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": WEB_TARGET_SCHEMA_DESCRIPTION})
-
-    target: str | None = Field(default=None, description="Web exact snapshot target from the current page snapshot.")
-    locator: WebLocator | None = Field(default=None, description="Optional structured Web locator. Provide at least one populated locator field.")
 
     @model_validator(mode="after")
-    def _require_target(self) -> "_WebTargetParams":
-        if self._has_target_value():
-            return self
-        raise ValueError("requires target or non-empty locator")
+    def _require_semantic_values(self) -> "WebLocatorScope":
+        if not self.role.strip():
+            raise ValueError("requires non-empty role")
+        if self.name is not None and not self.name.strip():
+            raise ValueError("name must be non-empty when supplied")
+        return self
 
-    def _has_target_value(self) -> bool:
-        if isinstance(self.target, str) and self.target.strip():
-            return True
-        return self.locator is not None and self.locator.has_value()
+
+class WebLocator(WebLocatorScope):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Replayable semantic Web locator from the ref-free ARIA snapshot."})
+
+    within: WebLocatorScope | None = Field(default=None, description="Optional unique semantic parent scope.")
+    index: int | None = Field(default=None, ge=0, description="Optional zero-based index in the final target match set.")
+
+
+class _WebLocatorParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": WEB_LOCATOR_SCHEMA_DESCRIPTION})
+
+    locator: WebLocator = Field(description="Required semantic Web locator copied from the ref-free ARIA snapshot.")
 
 
 class WebStartBrowserParams(BaseModel):
@@ -435,12 +425,12 @@ class WebNavigateBackParams(BaseModel):
     waitUntil: WebWaitUntil | None = Field(default=None, description="Optional page lifecycle state to wait for after back navigation.")  # noqa: N815
 
 
-class WebClickOnParams(_WebTargetParams):
+class WebClickOnParams(_WebLocatorParams):
     button: WebMouseButton | None = Field(default=None, description="Mouse button to click. Defaults to the backend left-button behavior.")
     double: bool | None = Field(default=None, description="When true, perform a double click.")
 
 
-class WebTypeTextParams(_WebTargetParams):
+class WebTypeTextParams(_WebLocatorParams):
     text: str = Field(description="Literal text to type, or a runtime secret name when textType is runtimeSecret.")
     # Name mirrors the authored text-entry payload contract.
     textType: TextSourceType = Field(default="literal", description=TEXT_TYPE_DESCRIPTION)  # noqa: N815
@@ -453,23 +443,19 @@ class WebTypeTextParams(_WebTargetParams):
         raise ValueError("requires text")
 
 
-class WebSelectOptionParams(_WebTargetParams):
-    value: str | None = Field(default=None, description="Option value to select.")
-    label: str | None = Field(default=None, description="Visible option label to select.")
-    index: int | None = Field(default=None, ge=0, description="Zero-based option index to select.")
-    values: list[str] | None = Field(default=None, description="Multiple option values to select.")
+class WebSelectOptionParams(_WebLocatorParams):
+    labels: list[str] = Field(min_length=1, description="Non-empty ordered visible option labels to select exactly.")
 
     @model_validator(mode="after")
-    def _require_option(self) -> "WebSelectOptionParams":
-        has_single = any(isinstance(value, str) and value.strip() for value in [self.value, self.label])
-        has_index = self.index is not None
-        has_values = self.values is not None and any(isinstance(value, str) and value.strip() for value in self.values)
-        if has_single or has_index or has_values:
-            return self
-        raise ValueError("requires value, label, index, or values")
+    def _require_unique_labels(self) -> "WebSelectOptionParams":
+        if any(not label.strip() for label in self.labels):
+            raise ValueError("labels must contain only non-empty strings")
+        if len(set(self.labels)) != len(self.labels):
+            raise ValueError("labels must be unique")
+        return self
 
 
-class WebHoverOnParams(_WebTargetParams):
+class WebHoverOnParams(_WebLocatorParams):
     pass
 
 
@@ -486,28 +472,26 @@ class WebPressKeyParams(BaseModel):
 
 
 class WebWaitForParams(BaseModel):
-    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Wait for target, locator, text, url, or timeout_ms in the active Web page."})
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Wait for exactly one locator or url condition in the active Web page."})
 
-    target: str | None = Field(default=None, description="Exact snapshot target to wait for.")
-    locator: WebLocator | None = Field(default=None, description="Structured Web locator to wait for.")
-    text: str | None = Field(default=None, description="Visible text to wait for.")
-    url: str | None = Field(default=None, description="URL text or pattern to wait for.")
-    state: WebWaitForState | None = Field(default=None, description="Optional element state to wait for when target or locator is used.")
-    timeout_ms: int | None = Field(default=None, ge=1, le=60000, description="Optional bounded wait timeout in milliseconds.")
+    locator: WebLocator | None = Field(default=None, description="Semantic Web locator condition.")
+    url: str | None = Field(default=None, description="Non-empty URL glob condition.")
+    state: WebWaitForState | None = Field(default=None, description="Optional locator state, defaulting to visible.")
+    timeout_ms: int | None = Field(default=None, ge=1, le=60000, description="Optional bounded condition timeout in milliseconds.")
 
     @model_validator(mode="after")
     def _require_wait_condition(self) -> "WebWaitForParams":
-        if isinstance(self.target, str) and self.target.strip():
-            return self
-        if self.locator is not None and self.locator.has_value():
-            return self
-        if isinstance(self.text, str) and self.text.strip():
-            return self
-        if isinstance(self.url, str) and self.url.strip():
-            return self
-        if self.timeout_ms is not None:
-            return self
-        raise ValueError("requires target, locator, text, url, or timeout_ms")
+        has_locator = self.locator is not None
+        has_url = isinstance(self.url, str) and bool(self.url.strip())
+        if has_locator == has_url:
+            raise ValueError("requires exactly one locator or url")
+        if self.url is not None and not has_url:
+            raise ValueError("url must be non-empty when supplied")
+        if has_url and self.state is not None:
+            raise ValueError("state is valid only with locator")
+        if has_locator and self.state in {"hidden", "detached"} and self.locator.index is not None:
+            raise ValueError("index is invalid for hidden or detached waits")
+        return self
 
 
 class WebTakeScreenshotParams(BaseModel):
@@ -522,12 +506,18 @@ class WebUiSnapshotParams(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Read the current Web page snapshot. No parameters are accepted."})
 
 
-class WebAssertVisibleParams(_WebTargetParams):
+class WebAssertVisibleParams(_WebLocatorParams):
     optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
 
 
-class WebAssertNotVisibleParams(_WebTargetParams):
+class WebAssertNotVisibleParams(_WebLocatorParams):
     optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
+
+    @model_validator(mode="after")
+    def _reject_index(self) -> "WebAssertNotVisibleParams":
+        if self.locator.index is not None:
+            raise ValueError("index is invalid for assert_not_visible")
+        return self
 
 
 class WebTextAssertion(BaseModel):
@@ -538,12 +528,15 @@ class WebTextAssertion(BaseModel):
 
     @model_validator(mode="after")
     def _require_text_assertion(self) -> "WebTextAssertion":
-        if isinstance(self.contains, str) or isinstance(self.equals, str):
-            return self
-        raise ValueError("requires contains or equals")
+        if (self.contains is None) == (self.equals is None):
+            raise ValueError("requires exactly one of contains or equals")
+        return self
 
 
-class WebAssertTextParams(_WebTargetParams):
+class WebAssertTextParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Assert one text predicate on a semantic target or the page body."})
+
+    locator: WebLocator | None = Field(default=None, description="Optional semantic Web locator; omit to inspect page body text.")
     text: WebTextAssertion = Field(description="Expected text predicate for the target.")
     optional: bool | None = Field(default=None, description="When true, treat assertion uncertainty as optional.")
 

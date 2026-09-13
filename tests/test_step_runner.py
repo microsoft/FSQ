@@ -589,7 +589,7 @@ def test_step_runner_uses_normalized_ui_snapshot_for_web_driver_steps() -> None:
         step_id="step-1",
         kind="action",
         action_name="clickOn",
-        params={"target": "Search"},
+        params={"locator": {"role": "button", "name": "Search"}},
     )
 
     result = runner.run_step(run_id="run-1", step=step)

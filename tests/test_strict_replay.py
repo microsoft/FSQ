@@ -72,3 +72,27 @@ platform: android
     assert collect_runtime_secret_refs(steps[0].params) == set()
     assert resolved[0].params["text"] == "TEST_ACCOUNT_PASSWORD"
     assert resolved[0].params["textType"] == "literal"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "clickOn: {target: Search}",
+        "clickOn: {locator: {role: button, ref: e1}}",
+        "clickOn: {locator: {css: '#search'}}",
+        "selectOption: {locator: {role: combobox}, label: Newest}",
+        "waitFor: {text: Results}",
+        "waitFor: {timeout_ms: 100}",
+    ],
+)
+def test_strict_web_replay_rejects_incompatible_payloads(tmp_path: Path, command: str) -> None:
+    case_path = tmp_path / "incompatible-web.fsq.yaml"
+    case_path.write_text(
+        f"schemaVersion: fsq.ai-test/v1\nname: Incompatible Web\nplatform: web\n---\n- {command}\n",
+        encoding="utf-8",
+    )
+    case = FsqCaseLoader().load_case(case_path)
+    adapter = FsqExecutableStepAdapter(registry_snapshot=build_capability_registry(platform="web").snapshot())
+
+    with pytest.raises(ConfigurationError, match="Invalid FSQ command parameters"):
+        adapter.to_executable_steps(case)
