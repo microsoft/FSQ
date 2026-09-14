@@ -2,18 +2,19 @@
 
 ## Purpose
 
-Implement Web automation through optional Playwright, including explicit browser lifecycle, semantic page actions, observations, assertions, and safe backend failure normalization.
+Implement Web automation through optional Playwright, including explicit launched-browser and borrowed-browser attachment lifecycle, semantic page actions, observations, assertions, and safe backend failure normalization.
 
 ## Dependencies
 
 - `core.interfaces.WebDriverInterface`, `capabilities`, and Web parameter/result models.
 - Optional Playwright, imported lazily at runtime.
+- Attach mode requires an operator-started Chromium browser exposing the configured CDP endpoint.
 
 ## Public Interface
 
 Instances satisfy `WebDriverInterface`; the concrete backend class is private outside Drivers and composition.
 
-`close()` is the runtime-owner disposal operation. It releases an owned browser/Playwright session and shuts down the owned executor, is safe to repeat after successful disposal, and does not initialize an unopened browser. This is not the recordable `close_browser` capability and produces no Case command or evidence of an authored action.
+`close()` is the runtime-owner disposal operation. In launch mode it releases the owned browser/Playwright session; in attach mode it closes the FSQ-owned page and disconnects Playwright without closing the borrowed browser context, unrelated pages, or operator-owned browser process. It shuts down the owned executor, is safe to repeat after successful disposal, and does not initialize an unopened browser. This is not the recordable `close_browser` capability and produces no Case command or evidence of an authored action.
 
 ## Internal Structure
 
@@ -37,7 +38,11 @@ Page-dependent operations fail clearly when the browser is not started. Semantic
 ## Current Invariants
 
 - Construction and registry discovery do not import Playwright or launch a browser.
-- `start_browser` and `close_browser` remain explicit, idempotent capabilities.
+- `start_browser` and `close_browser` remain explicit, idempotent capabilities without changing `WebDriverInterface`.
+- `attach` defaults to `false`, preserving the existing configured-channel browser launch, context creation, viewport policy, and owned-resource cleanup.
+- With `attach=true`, `start_browser` connects through Playwright CDP to `attach_endpoint`, which defaults to `http://127.0.0.1:9222`, reuses the first available browser context, and creates one FSQ-owned page. It does not launch a browser process or create and own another context.
+- Attach mode retains existing Workspace executable validation for compatibility while ignoring channel, executable, headless, and viewport settings for browser connection. Base-URL resolution continues to apply.
+- Attach-mode disposal closes only the FSQ-owned page and disconnects Playwright. It never closes the borrowed context, unrelated pages, or operator-owned browser process.
 - Element interactions compile model-validated `WebLocator` values directly to Playwright role locators. An optional `within` scope is resolved first and must identify exactly one visible semantic container; the target then resolves by role and optional name, and an optional zero-based index is range-checked and applied to the final result set.
 - Complete accessible names use whole-string case-sensitive Playwright matching. A name ending in literal `...` is matched as an escaped, anchored, case-sensitive prefix after removing the suffix.
 - The driver stores no snapshot reference map, element handle, or observation state needed by a later action. A validated locator executes in a fresh browser session without a preceding `ui_snapshot` call.

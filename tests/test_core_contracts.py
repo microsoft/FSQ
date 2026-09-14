@@ -129,9 +129,13 @@ def test_driver_factory_returns_platform_driver_protocols(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(UiAutomator2AndroidDriver, "_connect", lambda self, serial: object())
     factory = DriverFactory()
+    web_settings = WebHarnessSettings(attach=True, attach_endpoint="http://127.0.0.1:9333")
+    web_driver = factory.create_web_driver(web_settings)
 
     assert isinstance(factory.create_android_driver(AndroidHarnessSettings(), app_id="app"), AndroidDriverInterface)
-    assert isinstance(factory.create_web_driver(WebHarnessSettings()), WebDriverInterface)
+    assert isinstance(web_driver, WebDriverInterface)
+    assert web_driver.attach is True
+    assert web_driver.attach_endpoint == "http://127.0.0.1:9333"
     assert isinstance(factory.create_windows_driver(WindowsHarnessSettings()), WindowsDriverInterface)
     assert isinstance(factory.create_macos_driver(MacOSHarnessSettings()), MacOSDriverInterface)
 

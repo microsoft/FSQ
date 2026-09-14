@@ -37,7 +37,15 @@ class _DriverFactoryImplementation:
     def create_web_driver(self, settings):
         _ensure_backend("web", settings.backend)
         viewport = None if settings.viewport_width is None or settings.viewport_height is None else (settings.viewport_width, settings.viewport_height)
-        return PlaywrightWebDriver(channel=settings.channel, executable_path=settings.browser_executable_path, headless=settings.headless, base_url=settings.base_url, viewport=viewport)
+        return PlaywrightWebDriver(
+            channel=settings.channel,
+            executable_path=settings.browser_executable_path,
+            headless=settings.headless,
+            base_url=settings.base_url,
+            viewport=viewport,
+            attach=settings.attach,
+            attach_endpoint=settings.attach_endpoint,
+        )
 
     def create_windows_driver(self, settings):
         _ensure_backend("windows", settings.backend)

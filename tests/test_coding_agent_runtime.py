@@ -741,6 +741,8 @@ def test_runtime_builds_configured_web_harness(monkeypatch: pytest.MonkeyPatch, 
         "headless": False,
         "base_url": "https://example.test",
         "viewport": (390, 844),
+        "attach": False,
+        "attach_endpoint": "http://127.0.0.1:9222",
     }
     assert payload == {
         "platform": "web",

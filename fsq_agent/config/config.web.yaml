@@ -10,6 +10,8 @@ harness:
     channel: chrome
     headless: false
     base_url: null
+    attach: false
+    attach_endpoint: http://127.0.0.1:9222
 
 execution:
   post_action_delay_seconds:
