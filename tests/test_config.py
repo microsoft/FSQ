@@ -430,6 +430,8 @@ def test_load_platform_settings_loads_committed_platform_preset(tmp_path: Path) 
     assert settings.harness.platform == "web"
     assert settings.harness.web.backend == "playwright"
     assert settings.harness.web.base_url is None
+    assert settings.harness.web.attach is False
+    assert settings.harness.web.attach_endpoint == "http://127.0.0.1:9222"
     assert settings.agent_runtime.max_turns == preset["agent_runtime"]["max_turns"]
     skills = settings.agent_context.knowledge.skills
     assert skills.dir == Path(_loader.__file__).resolve().parents[1] / "resources" / "skills"
@@ -559,6 +561,8 @@ harness:
     base_url: https://www.bing.com
     viewport_width: 1280
     viewport_height: 720
+    attach: true
+    attach_endpoint: http://127.0.0.1:9333
 """,
         ),
         encoding="utf-8",
@@ -577,6 +581,8 @@ harness:
     assert settings.harness.web.base_url == "https://www.bing.com"
     assert settings.harness.web.viewport_width == 1280
     assert settings.harness.web.viewport_height == 720
+    assert settings.harness.web.attach is True
+    assert settings.harness.web.attach_endpoint == "http://127.0.0.1:9333"
 
 
 def test_load_settings_accepts_web_chrome_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -591,6 +597,7 @@ harness:
   web:
     backend: playwright
     channel: chrome
+    attach: true
 """,
         ),
         encoding="utf-8",

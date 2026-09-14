@@ -168,7 +168,7 @@ Platform settings exports:
 - `CaseLifecycleSettings`: Pydantic model selecting config-level strict case lifecycle hooks used by strict execution. It reuses FSQ hook entry models so config-level hooks and case-level hooks share validation and ordering semantics.
 - `HarnessSettings`: Pydantic model selecting the platform harness configuration used by goal-driven task execution. It contains platform-specific harness settings only; runner-owned execution pacing belongs to `ExecutionSettings`.
 - `AndroidHarnessSettings`: preset backend policy, Workspace app target, and transient per-Run serial without environment fallback.
-- `WebHarnessSettings`: preset Playwright policy, Workspace browser channel, and discovered/configured executable path.
+- `WebHarnessSettings`: preset Playwright policy, Workspace browser channel and discovered/configured executable path, and preset `attach` plus `attach_endpoint` values. Attach defaults off, and its endpoint defaults to `http://127.0.0.1:9222`.
 - `WindowsHarnessSettings`: preset backend-kind policy and Workspace application path, title constraint, and launch arguments.
 - `MacOSHarnessSettings`: preset Mac2/snapshot/timeout policy and Workspace bundle/application identity. Only `FSQ_MACOS_APPIUM_SERVER_URL` overrides the preset endpoint; command-idle timeout defaults to 300 seconds independently of action timeout.
 - `AgentContextSettings`: Pydantic model grouping knowledge-root resources used to build agent context.
@@ -232,7 +232,7 @@ Web contracts:
 - Web parameter models include browser lifecycle, locator, navigation, click, text typing, select, hover, key, wait, screenshot, page snapshot, deterministic assertions, and Web AI assertion models.
 - Web settings are grouped under `WebHarnessSettings` and are selected by `HarnessSettings.platform == "web"`.
 - Web explicit observation command is represented as `ui_snapshot`/`uiSnapshot`; automatic runner evidence captures normalized `ui_snapshot` content sourced from Web page/accessibility snapshot data.
-- Web action targets use semantic locators or current snapshot references. Unknown fields, including unsupported `element`, are rejected. Screenshots are evidence/debugging observations, not the normal action-selection substrate; unsafe/opt-in families are not exposed.
+- Web action targets use strict semantic locators. Unknown fields, including removed snapshot-reference fields and unsupported `element`, are rejected. Screenshots are evidence/debugging observations, not the normal action-selection substrate; unsafe/opt-in families are not exposed.
 
 Windows contracts:
 

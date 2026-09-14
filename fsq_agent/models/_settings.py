@@ -121,6 +121,8 @@ class WebHarnessSettings(BaseModel):
     base_url: str | None = None
     viewport_width: int | None = Field(default=None, ge=1)
     viewport_height: int | None = Field(default=None, ge=1)
+    attach: bool = False
+    attach_endpoint: str = "http://127.0.0.1:9222"
     _browser_executable_path: Path | None = PrivateAttr(default=None)
 
     @property
@@ -138,6 +140,14 @@ class WebHarnessSettings(BaseModel):
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("attach_endpoint")
+    @classmethod
+    def normalize_attach_endpoint(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized:
+            return normalized
+        raise ValueError("attach_endpoint must not be blank")
 
     @model_validator(mode="after")
     def _validate_viewport_pair(self) -> "WebHarnessSettings":

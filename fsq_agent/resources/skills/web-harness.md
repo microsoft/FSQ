@@ -4,8 +4,8 @@ Use when `harness.platform` is Web. This skill contains Web-specific stability g
 
 ## Snapshot-First Rules
 
-- Start browser-owned workflows with `start_browser`, then navigate with `navigate_to`. Do not treat navigation as browser startup.
-- Close browser-owned workflows with `close_browser` as the final lifecycle action. For multi-cycle workflows, call `close_browser` before the next `start_browser` cycle.
+- Start Web workflows with `start_browser`, then navigate with `navigate_to`. Do not treat navigation as browser startup.
+- Close Web workflows with `close_browser` as the final lifecycle action. For multi-cycle workflows, call `close_browser` before the next `start_browser` cycle.
 - Use `ui_snapshot` for semantic page inspection. It returns ref-free role/name hierarchy and does not create state required by later actions.
 - Construct element actions only from schema-valid role/name locators. Prefer a unique role/name, then a unique `within` scope, and use `index` only as an order-sensitive last resort.
 - Refresh the snapshot after relevant state changes or when a target is stale or missing. Do not retry an ambiguous locator unchanged.

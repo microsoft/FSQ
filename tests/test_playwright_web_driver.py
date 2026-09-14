@@ -33,6 +33,7 @@ class _FakePage:
     def __init__(self, *, aria_snapshot: str = '- document "Example"') -> None:
         self.url = "about:blank"
         self.viewport_size = {"width": 800, "height": 600}
+        self.closed = False
         self._aria_snapshot = aria_snapshot
         self.thread_ids: list[int] = []
         self.aria_kwargs: dict[str, object] | None = None
@@ -49,6 +50,9 @@ class _FakePage:
         self._record_thread()
         self.aria_kwargs = kwargs
         return self._aria_snapshot
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _ThreadedFakePlaywrightDriver(PlaywrightWebDriver):
@@ -203,6 +207,30 @@ class _LaunchFakeSyncPlaywright:
         return self.playwright
 
 
+class _AttachFakeBrowser:
+    def __init__(self, context: _LaunchFakeContext) -> None:
+        self.contexts = [context]
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _AttachFakeBrowserType:
+    def __init__(self, browser: _AttachFakeBrowser) -> None:
+        self.browser = browser
+        self.endpoint_url: str | None = None
+        self.launch_called = False
+
+    def launch(self, **kwargs: object) -> _AttachFakeBrowser:
+        self.launch_called = True
+        return self.browser
+
+    def connect_over_cdp(self, endpoint_url: str) -> _AttachFakeBrowser:
+        self.endpoint_url = endpoint_url
+        return self.browser
+
+
 def test_playwright_web_driver_runs_page_operations_on_one_worker_thread() -> None:
     driver = _ThreadedFakePlaywrightDriver()
     start = driver.start_browser(WebStartBrowserParams())
@@ -320,6 +348,105 @@ def test_playwright_web_driver_launches_configured_chrome_executable(monkeypatch
     assert browser.context.closed is True
     assert browser.closed is True
     assert playwright.stopped is True
+
+
+def test_playwright_web_driver_attaches_to_existing_browser_and_closes_only_owned_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = _FakePage()
+    context = _LaunchFakeContext(page)
+    browser = _AttachFakeBrowser(context)
+    browser_type = _AttachFakeBrowserType(browser)
+    playwright = _LaunchFakePlaywright(browser_type)
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: _LaunchFakeSyncPlaywright(playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+
+    driver = PlaywrightWebDriver(
+        channel="chrome",
+        executable_path="C:/Chrome/chrome.exe",
+        headless=False,
+        viewport=(1024, 768),
+        attach=True,
+        attach_endpoint="http://127.0.0.1:9333",
+    )
+    first_start = driver.start_browser(WebStartBrowserParams())
+    second_start = driver.start_browser(WebStartBrowserParams())
+    driver_context = driver.context()
+    first_close = driver.close_browser(WebCloseBrowserParams())
+    second_close = driver.close_browser(WebCloseBrowserParams())
+    driver.close()
+
+    assert first_start == {"status": "passed", "output": {"already_started": False, "url": "about:blank"}}
+    assert second_start == {"status": "passed", "output": {"already_started": True, "url": "about:blank"}}
+    assert first_close == {"status": "passed", "output": {"already_closed": False}}
+    assert second_close == {"status": "passed", "output": {"already_closed": True}}
+    assert browser_type.endpoint_url == "http://127.0.0.1:9333"
+    assert browser_type.launch_called is False
+    assert driver_context["screen_size"] == (800, 600)
+    assert driver_context["metadata"]["attach"] is True
+    assert page.closed is True
+    assert context.closed is False
+    assert browser.closed is False
+    assert playwright.stopped is True
+
+
+def test_playwright_web_driver_attach_requires_existing_browser_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    context = _LaunchFakeContext(_FakePage())
+    browser = _AttachFakeBrowser(context)
+    browser.contexts = []
+    browser_type = _AttachFakeBrowserType(browser)
+    playwright = _LaunchFakePlaywright(browser_type)
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: _LaunchFakeSyncPlaywright(playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    driver = PlaywrightWebDriver(attach=True)
+
+    try:
+        with pytest.raises(ConfigurationError, match="no browser context"):
+            driver.start_browser(WebStartBrowserParams())
+    finally:
+        driver.close()
+
+    assert browser.closed is False
+    assert playwright.stopped is True
+
+
+def test_playwright_web_driver_attach_close_failure_does_not_leave_page_started(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _FlakyClosePage(_FakePage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        def close(self) -> None:
+            self.close_calls += 1
+            raise OSError("page close failed")
+
+    first_page = _FlakyClosePage()
+    second_page = _FakePage()
+    pages = iter((first_page, second_page))
+    context = _LaunchFakeContext(first_page)
+    context.new_page = lambda: next(pages)
+    browser = _AttachFakeBrowser(context)
+    browser_type = _AttachFakeBrowserType(browser)
+    playwright = _LaunchFakePlaywright(browser_type)
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: _LaunchFakeSyncPlaywright(playwright)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    driver = PlaywrightWebDriver(attach=True)
+
+    try:
+        assert driver.start_browser(WebStartBrowserParams())["status"] == "passed"
+        with pytest.raises(OSError, match="page close failed"):
+            driver.close_browser(WebCloseBrowserParams())
+        restarted = driver.start_browser(WebStartBrowserParams())
+    finally:
+        driver.close()
+
+    assert restarted == {"status": "passed", "output": {"already_started": False, "url": "about:blank"}}
+    assert first_page.close_calls == 1
+    assert first_page.closed is False
+    assert second_page.closed is True
+    assert context.closed is False
+    assert browser.closed is False
 
 
 @pytest.mark.parametrize("failure_stage", ["launch", "context", "page"])

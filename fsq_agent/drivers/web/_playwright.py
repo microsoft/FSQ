@@ -36,6 +36,7 @@ from fsq_agent.models import (
 )
 
 DEFAULT_WEB_WAIT_TIMEOUT_MS = 10000
+DEFAULT_WEB_ATTACH_ENDPOINT = "http://127.0.0.1:9222"
 SUPPORTED_WEB_CHANNELS = frozenset({"chromium", "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", "msedge-canary"})
 _BROWSER_NOT_STARTED_MESSAGE = "Browser is not started. Call startBrowser before Web page actions."
 _T = TypeVar("_T")
@@ -52,6 +53,8 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         headless: bool = True,
         base_url: str | None = None,
         viewport: tuple[int, int] | None = None,
+        attach: bool = False,
+        attach_endpoint: str = DEFAULT_WEB_ATTACH_ENDPOINT,
         page: object | None = None,
     ) -> None:
         self.channel = channel.strip() if isinstance(channel, str) else channel
@@ -64,9 +67,17 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         self.headless = headless
         self.base_url = base_url.rstrip("/") + "/" if isinstance(base_url, str) and base_url.strip() else None
         self.viewport = viewport
+        self.attach = attach
+        self.attach_endpoint = attach_endpoint.strip() if isinstance(attach_endpoint, str) else ""
+        if not self.attach_endpoint:
+            raise ConfigurationError(
+                "Playwright CDP attach endpoint must not be blank.",
+                context={"config_key": "harness.web.attach_endpoint"},
+            )
         self._playwright: object | None = None
         self._browser: object | None = None
         self._context: object | None = None
+        self._attached_page: object | None = None
         self._executor: ThreadPoolExecutor | None = None
         self.page: object | None = page
 
@@ -74,7 +85,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         return self._run_sync(self._context_payload)
 
     def _context_payload(self) -> dict[str, object]:
-        viewport = self.viewport
+        viewport = None if self.attach else self.viewport
         if viewport is None:
             viewport = self._page_viewport()
         return {
@@ -88,6 +99,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
                 "headless": self.headless,
                 "base_url_configured": self.base_url is not None,
                 "browser_started": self.page is not None,
+                "attach": self.attach,
             },
         }
 
@@ -98,7 +110,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         try:
             return self._run_sync(lambda: self._start_browser(params))
         except BaseException:
-            if self.page is None and all(resource is None for resource in (self._context, self._browser, self._playwright)):
+            if self.page is None and self._attached_page is None and all(resource is None for resource in (self._context, self._browser, self._playwright)):
                 try:
                     self._shutdown_executor()
                 except BaseException as cleanup_error:  # noqa: BLE001 - startup failure retains precedence.
@@ -108,7 +120,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
     def _start_browser(self, params: WebStartBrowserParams) -> dict[str, object]:
         if self.page is not None:
             return self._passed({"already_started": True, "url": self._page_url()})
-        if any(resource is not None for resource in (self._context, self._browser, self._playwright)):
+        if self._attached_page is not None or any(resource is not None for resource in (self._context, self._browser, self._playwright)):
             self._close()
         try:
             self.page = self._create_page()
@@ -125,7 +137,7 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
         return self._run_sync(lambda: self._close_browser(params))
 
     def _close_browser(self, params: WebCloseBrowserParams) -> dict[str, object]:
-        if self.page is None and self._context is None and self._browser is None and self._playwright is None:
+        if self.page is None and self._attached_page is None and self._context is None and self._browser is None and self._playwright is None:
             return self._passed({"already_closed": True})
         self._close()
         return self._passed({"already_closed": False})
@@ -411,7 +423,24 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
 
     def _close(self) -> None:
         failure = None
-        for attribute in ("_context", "_browser", "_playwright"):
+        if self.attach:
+            self.page = None
+            attached_page = self._attached_page
+            if attached_page is not None:
+                try:
+                    close = getattr(attached_page, "close", None)
+                    if callable(close):
+                        close()
+                except BaseException as exc:  # noqa: BLE001 - continue disconnecting after page cleanup failure.
+                    failure = exc
+                finally:
+                    self._attached_page = None
+            self._context = None
+            self._browser = None
+            resource_attributes = ("_playwright",)
+        else:
+            resource_attributes = ("_context", "_browser", "_playwright")
+        for attribute in resource_attributes:
             candidate = getattr(self, attribute)
             try:
                 close = getattr(candidate, "close", None)
@@ -458,6 +487,17 @@ class PlaywrightWebDriver(AIAssertionBackendToolMixin):
                 "Playwright chromium browser type is unavailable.",
                 context={"channel": self.channel},
             )
+        if self.attach:
+            self._browser = browser_factory.connect_over_cdp(self.attach_endpoint)
+            contexts = getattr(self._browser, "contexts", None)
+            if not contexts:
+                raise ConfigurationError(
+                    "The Playwright CDP connection has no browser context.",
+                    context={"endpoint": self.attach_endpoint},
+                )
+            self._context = contexts[0]
+            self._attached_page = self._context.new_page()
+            return self._attached_page
         if self.executable_path is None:
             raise ConfigurationError(
                 "Web browser executable path is required for PlaywrightWebDriver.",
