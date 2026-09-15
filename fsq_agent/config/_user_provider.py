@@ -27,6 +27,7 @@ USER_CONFIG_FILENAME = "config.yaml"
 AUTH_DIRECTORY = "auth"
 OPENAI_AUTH_FILENAME = "openai.json"
 GEMINI_AUTH_FILENAME = "google-gemini.json"
+KIMI_AUTH_FILENAME = "kimi.json"
 AZURE_AUTH_FILENAME = "azure-openai.json"
 GITHUB_AUTH_FILENAME = "github-copilot-token.json"
 GITHUB_PROVIDER_AUTH_FILENAME = "github-copilot-provider-token.json"
@@ -72,6 +73,19 @@ class _GoogleGeminiProviderRecord(_OpenAIProviderRecord):
     type: Literal["google_gemini"]
 
 
+class _KimiProviderRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["kimi"]
+    region: Literal["cn", "global"]
+    model: str
+
+    @field_validator("region", "model")
+    @classmethod
+    def _validate_text(cls, value: str) -> str:
+        return _required_text(value, "Kimi configuration value")
+
+
 class _AzureOpenAIProviderRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -103,7 +117,7 @@ class _GitHubCopilotProviderRecord(BaseModel):
 
 
 _ProviderRecord = Annotated[
-    _OpenAIProviderRecord | _AzureOpenAIProviderRecord | _GoogleGeminiProviderRecord | _GitHubCopilotProviderRecord,
+    _OpenAIProviderRecord | _AzureOpenAIProviderRecord | _GoogleGeminiProviderRecord | _GitHubCopilotProviderRecord | _KimiProviderRecord,
     Field(discriminator="type"),
 ]
 
@@ -245,7 +259,7 @@ def save_openai_provider(
                 auth_dir / OPENAI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
             provider="openai",
         )
         return config
@@ -274,8 +288,45 @@ def save_google_gemini_provider(*, model: str, api_key: str, user_config_root: s
         config._api_key = normalized_api_key
         _commit_replacement(
             {auth_dir / GEMINI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}), config_path: _yaml_bytes(config)},
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
             provider="google_gemini",
+        )
+        return config
+
+
+def save_kimi_provider(
+    *,
+    region: Literal["cn", "global"],
+    model: str,
+    api_key: str,
+    user_config_root: str | Path | None = None,
+) -> UserProviderConfig:
+    try:
+        provider = _KimiProviderRecord(type="kimi", region=region, model=model)
+        normalized_api_key = _gemini_key(api_key)
+    except (ValidationError, ValueError, TypeError):
+        raise ConfigurationError("Invalid Kimi region, model, or API key.", context={"provider": "kimi", "reason": "invalid_candidate"}) from None
+    root = _user_config_root(user_config_root)
+    with _user_config_lock(root, provider="kimi"):
+        try:
+            current, config_path, auth_dir = _load_user_document(root)
+        except ConfigurationError:
+            raise ConfigurationError("Unable to read local Provider configuration.", context={"provider": "kimi", "reason": "storage"}) from None
+        config = current.model_copy(update={"provider": provider})
+        config._api_key = normalized_api_key
+        _commit_replacement(
+            {
+                auth_dir / KIMI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
+                config_path: _yaml_bytes(config),
+            },
+            [
+                auth_dir / OPENAI_AUTH_FILENAME,
+                auth_dir / GEMINI_AUTH_FILENAME,
+                auth_dir / AZURE_AUTH_FILENAME,
+                auth_dir / GITHUB_AUTH_FILENAME,
+                auth_dir / GITHUB_PROVIDER_AUTH_FILENAME,
+            ],
+            provider="kimi",
         )
         return config
 
@@ -306,7 +357,7 @@ def save_azure_openai_provider(
                 auth_dir / AZURE_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
         )
         return _load_complete_user_config(root)
 
@@ -337,7 +388,7 @@ def activate_github_copilot_provider(
                 auth_dir / GITHUB_PROVIDER_AUTH_FILENAME: _json_bytes(provider_payload),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME],
+            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME],
         )
         return _load_complete_user_config(root)
 
@@ -352,6 +403,7 @@ def refresh_provider_settings(
     provider_settings = refreshed.agent_runtime
     provider_settings.provider = config.provider.type if config.provider is not None else None
     provider_settings.model = config.provider.model if config.provider is not None else ""
+    provider_settings.provider_region = config.provider.region if isinstance(config.provider, _KimiProviderRecord) else None
     if isinstance(config.provider, _AzureOpenAIProviderRecord):
         provider_settings.base_url = config.provider.base_url
     elif isinstance(config.provider, _GoogleGeminiProviderRecord):
@@ -496,10 +548,19 @@ def _load_complete_user_config(root: Path) -> UserProviderConfig:
         except (ConfigurationError, ValueError, TypeError):
             raise ConfigurationError("Unable to load valid OpenAI credentials.", context={"provider": "openai", "reason": "invalid_candidate"}) from None
         return config
+    if config.provider.type == "kimi":
+        try:
+            credentials = _read_json_object(auth_dir / KIMI_AUTH_FILENAME, "Kimi credentials")
+            config._api_key = _gemini_key(_credential_text(credentials, "api_key", "Kimi API key"))
+        except (ConfigurationError, ValueError, TypeError):
+            raise ConfigurationError("Unable to load valid Kimi credentials.", context={"provider": "kimi", "reason": "invalid_candidate"}) from None
+        return config
     if config.provider.type == "azure_openai":
         credentials = _read_json_object(auth_dir / AZURE_AUTH_FILENAME, "Azure OpenAI credentials")
         config._api_key = _credential_text(credentials, "api_key", "Azure OpenAI API key")
         return config
+    if config.provider.type != "github_copilot":
+        raise ConfigurationError("Unsupported user Provider configuration.", context={"provider": config.provider.type})
     config._github_token = _read_json_object(auth_dir / GITHUB_AUTH_FILENAME, "GitHub OAuth credentials")
     config._provider_token = _read_json_object(
         auth_dir / GITHUB_PROVIDER_AUTH_FILENAME,

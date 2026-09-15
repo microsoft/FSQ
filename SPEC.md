@@ -129,6 +129,7 @@ Shared platform rules:
 - Entry layers build a platform-selected capability registry: inherited CommonTool capabilities plus only the active platform's PlatformTool capabilities.
 - `StepRunner`, `StepSequenceRunner`, evidence, recording, report generation, and FSQ parsing stay platform-neutral and consume capability metadata rather than platform action-name branches.
 - Repository presets own platform defaults and policy; Workspace owns targets/private runtime secrets/local paths; user configuration owns Provider/model/credentials. Only the documented macOS Appium endpoint has a process-environment override. No other environment or `.env` fallback participates.
+- The single active user Provider may be OpenAI, Azure OpenAI, Google Gemini, GitHub Copilot, or Kimi. Kimi requires an explicit `cn` or `global` region, maps it to the fixed official `https://api.moonshot.cn/v1` or `https://api.moonshot.ai/v1` endpoint, discovers stable K3-or-later models without a positive allowlist, and uses the shared Responses backend without Chat Completions, Messages, model, or cross-region fallback.
 - Platform-specific behavior belongs in platform parameter models, action catalogs, harnesses, drivers, config blocks, and configured skill Markdown.
 
 Android platform block:
@@ -188,7 +189,7 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 | models | fsq_agent/models/SPEC.md | Owns shared domain, Run/frozen-result, evidence-journal, public-report/export, platform-runtime, Case/lifecycle, capability/invocation, replay-reference, and exception contracts. |
 | capabilities | fsq_agent/capabilities/SPEC.md | Owns neutral capability declaration decorators, catalog-backed platform action validation, and metadata discovery helpers used by `core` recordable capabilities. |
 | config | fsq_agent/config/SPEC.md | Loads and validates env/YAML runtime, provider, harness/driver/platform-tool, tracing, execution post-action delay, strict case lifecycle hook settings, strict replay secret, agent context, AgentTool output, CommonTool secret, and workspace configuration. |
-| providers | fsq_agent/providers/SPEC.md | Owns OpenAI/Azure/Gemini/Copilot supplier authentication, token and model-selection policy, connection testing, and configured neutral model access. |
+| providers | fsq_agent/providers/SPEC.md | Owns OpenAI/Azure/Gemini/Kimi/Copilot supplier authentication, token and model-selection policy, connection testing, and configured neutral model access. |
 | agent_engine | fsq_agent/agent_engine/SPEC.md | Owns reusable model/provider/agent protocols, neutral inference contracts, private Responses/Interactions backends, shared local agent execution, and safe tracing export. |
 | ai_services | fsq_agent/ai_services/SPEC.md | Owns visual assertion and completed-Case suggestion business services over neutral model calls. |
 | tools | fsq_agent/tools/SPEC.md | Provides dynamic-only AgentTool providers, scoped file/artifact helpers, and neutral agent-engine tool bindings. |

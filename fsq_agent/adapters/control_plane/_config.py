@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from fsq_agent.application import ApplicationError, configure_google_gemini, configure_openai, list_google_gemini_models, list_openai_models
+from fsq_agent.application import ApplicationError, configure_google_gemini, configure_kimi, configure_openai, list_google_gemini_models, list_kimi_models, list_openai_models
 from fsq_agent.config import load_user_provider_config, save_azure_openai_provider
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import test_model_provider_connection
@@ -50,6 +50,8 @@ def get_config(user_config_root: Path | None) -> dict[str, Any]:
         return {"configured": True, "provider": {"type": "google_gemini", "modelName": provider.model, "apiKey": config.api_key}}
     if provider.type == "openai":
         return {"configured": True, "provider": {"type": "openai", "modelName": provider.model, "apiKey": config.api_key}}
+    if provider.type == "kimi":
+        return {"configured": True, "provider": {"type": "kimi", "region": provider.region, "modelName": provider.model, "apiKey": config.api_key}}
     if provider.type == "azure_openai":
         presentation = {
             "type": "azure_openai",
@@ -90,6 +92,24 @@ def save_google_gemini_config(body: dict[str, Any], user_config_root: Path | Non
     return get_config(user_config_root)
 
 
+def list_kimi_config_models(body: dict[str, Any]) -> dict[str, Any]:
+    _require_exact_fields(body, {"region", "apiKey"})
+    region = body["region"]
+    if not isinstance(region, str) or region not in {"cn", "global"} or not isinstance(body["apiKey"], str) or not body["apiKey"].strip():
+        raise ConfigAPIError(400, "invalid_provider_config", "Kimi region and API key are invalid.", "Select a Kimi region and complete the API key.")
+    models = list_kimi_models(region=region, api_key=body["apiKey"])
+    return {"models": [{"id": model.id, "name": model.name} for model in models]}
+
+
+def save_kimi_config(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
+    _require_exact_fields(body, {"region", "modelName", "apiKey"})
+    region = body["region"]
+    if not isinstance(region, str) or region not in {"cn", "global"} or not all(isinstance(body[name], str) and body[name].strip() for name in ("modelName", "apiKey")):
+        raise ConfigAPIError(400, "invalid_provider_config", "Kimi region, model, and API key are invalid.", "Complete every Kimi field and retry.")
+    configure_kimi(region=region, model=body["modelName"], api_key=body["apiKey"], user_config_root=user_config_root)
+    return get_config(user_config_root)
+
+
 def _require_openai_fields(body: dict[str, Any], fields: set[str], *, provider_name: str = "OpenAI") -> None:
     _require_exact_fields(body, fields)
     if not all(isinstance(body[name], str) and body[name].strip() for name in fields):
@@ -124,11 +144,13 @@ def test_saved_connection(body: dict[str, Any], user_config_root: Path | None) -
 def map_config_exception(exc: BaseException) -> ConfigAPIError:
     if isinstance(exc, ConfigAPIError):
         return exc
-    if isinstance(exc, ApplicationError) and exc.details.get("provider") in {"openai", "google_gemini"}:
-        name = "Google Gemini" if exc.details["provider"] == "google_gemini" else "OpenAI"
+    if isinstance(exc, ApplicationError) and exc.details.get("provider") in {"openai", "google_gemini", "kimi"}:
+        provider = exc.details["provider"]
+        name = {"google_gemini": "Google Gemini", "kimi": "Kimi"}.get(provider, "OpenAI")
         mappings = {
             "invalid_candidate": (400, "invalid_provider_config"),
             "model_not_offered": (400, "provider_model_not_offered"),
+            "no_eligible_models": (400, "provider_no_eligible_models"),
             "authentication": (401, "provider_authorization_failed"),
             "access_denied": (403, "provider_access_denied"),
             "rate_limited": (429, "provider_rate_limited"),

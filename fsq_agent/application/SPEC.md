@@ -15,7 +15,7 @@ The package exports transport-neutral operations and their Request, Result, Even
 - Workspace operations support the shared workspace precondition, platform target resolution, read-only runtime readiness coordination, and workspace initialization needed by adapters.
 - Case operations support creating a Case from a Goal, testing an existing Case with optional suggestions, static formatting, and saving generated recordings.
 - Run operations support Workspace-scoped listing, stable detail, safe logs, historical inference, public evidence projection/comparison, artifact resolution, and offline exports.
-- Provider operations support user-level OpenAI and Google Gemini model discovery/configuration, Azure OpenAI configuration, GitHub Copilot device authorization/model activation, and active-Provider readiness status. Supplier model discovery does not expose a Provider profile inventory.
+- Provider operations support user-level OpenAI, Google Gemini, and region-bound Kimi model discovery/configuration, Azure OpenAI configuration, GitHub Copilot device authorization/model activation, and active-Provider readiness status. Supplier model discovery does not expose a Provider profile inventory.
 - Environment operations support listing and diagnostics.
 - Doctor supports complete read-only Workspace diagnosis and per-platform command readiness.
 
@@ -134,9 +134,13 @@ Control Plane startup diagnoses the exact Android settings copy after applying t
 
 Application normalizes expected operation failures into stable application Errors and preserves safe structured details. It never exposes secrets, hidden model reasoning, backend objects, transport status codes, or tracebacks. Adapters map Application Errors to exit codes, HTTP statuses, and presentation text.
 
+Provider configuration/status results expose optional Kimi region only when the active/configured Provider is Kimi. Region is safe identity; API keys, endpoints, and discovery payloads are not Application result facts.
+
 OpenAI operations preserve `details.provider="openai"` and a validated `details.reason` through the public `ApplicationError` boundary. Invalid candidates and `model_not_offered` use configuration errors; authentication, access denial, rate limiting, timeout, network failure, and malformed supplier responses use Provider-unavailable errors; confirmed no-activation/rollback storage failures use configuration errors. Their reason values are `invalid_candidate`, `model_not_offered`, `authentication`, `access_denied`, `rate_limited`, `timeout`, `network`, `malformed_response`, and `storage`. Unexpected or unconfirmed persistence outcomes use internal errors, with safe reason `internal`. Classification uses owned typed/status facts rather than exception-message parsing. Error details are allowlisted, not copied from backend context, and contain no credentials, upstream bodies, HTTP status, or exception causes. Control Plane owns the corresponding HTTP/code mapping; CLI owns the documented exit mapping. Existing Azure and GitHub classifications retain their behavior.
 
 Google Gemini list/configure operations use the same error codes, categories, and allowlisted reasons with `details.provider="google_gemini"` and Google-specific safe messages/actions. Pagination failures cannot be converted into an empty successful result. Safe error details contain only the provider and reason; SDK values, keys, page tokens, upstream payloads, and unrestricted exception context are not public facts. Lost save responses require current-configuration reconciliation rather than automatic resubmission or assumed rollback.
+
+Kimi list/configure operations require an explicit `cn` or `global` region, preserve `details.provider="kimi"`, safe region, and an allowlisted reason, and use Kimi-specific messages/actions. Discovery and save always use the same submitted region/key pair; save re-discovers and requires exact selected-id membership before Config mutation. Empty eligible results remain complete unsaveable discovery, while malformed or partial supplier data is an error. Application never retries another region, model, or inference protocol.
 
 Doctor component failures do not expose exception messages, arguments, tracebacks, raw subprocess/backend output, env values, or credentials and do not abort independent checks. Only an untrustworthy Workspace identity/inventory or an unrecoverable top-level orchestration failure prevents a complete result.
 
@@ -157,7 +161,7 @@ Doctor component failures do not expose exception messages, arguments, traceback
 - Suggestion-enabled Case testing separates deterministic execution from read-only post-execution AI analysis; the analysis has no UI-action authority and all generated artifacts remain inside the completed Run directory.
 - Doctor is a read-only Application use case; CLI presents its result but does not reproduce diagnostic or command-readiness rules.
 - Provider configuration and status are user-level Application use cases shared in persistence authority with Control Plane, require no Workspace, and never recover Provider state from `.env` or process environment.
-- The Provider boundary has one active Provider and no profile inventory, retained profiles, fallback chain, or transport-specific UI models. OpenAI, Gemini, and GitHub model discovery enumerate eligible model facts only and do not activate a Provider.
+- The Provider boundary has one active Provider and no profile inventory, retained profiles, fallback chain, or transport-specific UI models. OpenAI, Gemini, Kimi, and GitHub model discovery enumerate eligible model facts only and do not activate a Provider. Kimi region is explicit configuration identity rather than a second profile.
 
 ## Static Case Formatting And Generated Save
 

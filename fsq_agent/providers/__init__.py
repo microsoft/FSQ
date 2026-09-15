@@ -19,6 +19,7 @@ from fsq_agent.providers._github_copilot import (
     request_github_copilot_device_code,
 )
 from fsq_agent.providers._google_gemini import GoogleGeminiModel, list_google_gemini_models
+from fsq_agent.providers._kimi import KimiModel, list_kimi_models
 from fsq_agent.providers._openai import OpenAIModel, list_openai_models
 from fsq_agent.providers._session import ModelProviderSession
 
@@ -27,6 +28,7 @@ __all__ = [
     "GitHubCopilotModel",
     "GitHubDeviceCode",
     "GoogleGeminiModel",
+    "KimiModel",
     "ModelProviderFactory",
     "ModelProviderSession",
     "OpenAIModel",
@@ -37,6 +39,7 @@ __all__ = [
     "complete_github_copilot_device_flow",
     "list_github_copilot_models",
     "list_google_gemini_models",
+    "list_kimi_models",
     "list_openai_models",
     "prepare_model_provider_session",
     "refresh_model_provider_session",

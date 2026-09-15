@@ -16,7 +16,7 @@ Adapters may import public APIs from `application`, `execution`, `models`, `conf
 
 The installed scripts target canonical `fsq_agent.adapters.cli:main`. Existing `fsq_agent.cli` and `fsq_agent.control_plane` packages remain compatibility entries for documented public symbols only, and each compatibility symbol references the canonical adapter object. Old private transport submodule imports are unsupported and absent.
 
-Detailed CLI and Control Plane transport contracts remain specified in `fsq_agent/cli/SPEC.md` and `fsq_agent/control_plane/SPEC.md`. Both surfaces configure and use the single `google_gemini` Provider through Application/Providers, and explicitly project its identity instead of falling through to another supplier. Model eligibility, pagination, credentials, and inference remain inward-owned.
+Detailed CLI and Control Plane transport contracts remain specified in `fsq_agent/cli/SPEC.md` and `fsq_agent/control_plane/SPEC.md`. Both surfaces configure and use the single active OpenAI, Azure OpenAI, Google Gemini, GitHub Copilot, or Kimi Provider through Application/Providers and explicitly project supplier identity. Kimi region is decoded and presented by adapters, while fixed endpoint mapping, model eligibility, credentials, and inference remain inward-owned.
 
 ## Internal Structure
 

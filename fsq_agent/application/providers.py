@@ -3,14 +3,16 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal, cast
 
 from fsq_agent.application.contracts import ApplicationError, ApplicationErrorCategory, ApplicationErrorCode, ProviderConfigurationResult, ProviderStatusResult
-from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider, save_google_gemini_provider, save_openai_provider
+from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider, save_google_gemini_provider, save_kimi_provider, save_openai_provider
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import (
     GitHubCopilotModel,
     GitHubDeviceCode,
     GoogleGeminiModel,
+    KimiModel,
     OpenAIModel,
     activate_github_copilot_authorization,
     check_provider_readiness,
@@ -19,6 +21,7 @@ from fsq_agent.providers import (
     request_github_copilot_device_code,
 )
 from fsq_agent.providers import list_google_gemini_models as _discover_google_gemini_models
+from fsq_agent.providers import list_kimi_models as _discover_kimi_models
 from fsq_agent.providers import list_openai_models as _discover_openai_models
 
 _OPENAI_FAILURES = {
@@ -32,6 +35,19 @@ _OPENAI_FAILURES = {
     "malformed_response": ("OpenAI returned an invalid model response.", "Retry model discovery later."),
     "storage": ("OpenAI configuration could not be stored.", "Check local configuration permissions and retry."),
     "internal": ("OpenAI configuration could not be completed.", "Reload the current configuration before retrying."),
+}
+_KIMI_FAILURES = {
+    "invalid_candidate": ("Kimi region, model, or API key is invalid.", "Complete the region, model, and API key fields and retry."),
+    "model_not_offered": ("The selected Kimi model is not available.", "Reload models for this region and API key, then select an offered model."),
+    "no_eligible_models": ("No eligible Kimi models are available.", "Check model access for the selected region or use another Provider."),
+    "authentication": ("Kimi rejected the API key for the selected region.", "Check that the candidate API key belongs to the selected Kimi region."),
+    "access_denied": ("Kimi model access was denied.", "Check the key's permissions and model access."),
+    "rate_limited": ("Kimi model discovery was rate limited.", "Check quota or wait before retrying model discovery."),
+    "timeout": ("Kimi model discovery timed out.", "Check network access and retry loading or saving the model."),
+    "network": ("Kimi model discovery is unavailable.", "Check network access and retry."),
+    "malformed_response": ("Kimi returned an invalid model response.", "Retry model discovery later."),
+    "storage": ("Kimi configuration could not be stored.", "Check local configuration permissions and retry."),
+    "internal": ("Kimi configuration could not be completed.", "Reload the current configuration before retrying."),
 }
 
 
@@ -124,6 +140,60 @@ def configure_google_gemini(*, model: str, api_key: str, user_config_root: str |
     return ProviderConfigurationResult(provider="google_gemini", model=normalized_model)
 
 
+def _kimi_error(reason: object, *, region: object = None) -> ApplicationError:
+    normalized_reason = reason if isinstance(reason, str) and reason in _KIMI_FAILURES else "internal"
+    if normalized_reason in {"invalid_candidate", "model_not_offered", "no_eligible_models", "storage"}:
+        code, category = ApplicationErrorCode.CONFIGURATION_INVALID, ApplicationErrorCategory.CONFIGURATION
+    elif normalized_reason == "internal":
+        code, category = ApplicationErrorCode.INTERNAL_ERROR, ApplicationErrorCategory.INTERNAL
+    else:
+        code, category = ApplicationErrorCode.PROVIDER_UNAVAILABLE, ApplicationErrorCategory.UNAVAILABLE
+    message, action = _KIMI_FAILURES[normalized_reason]
+    details = {"provider": "kimi", "reason": normalized_reason}
+    if isinstance(region, str) and region in {"cn", "global"}:
+        details["region"] = region
+    return ApplicationError(code=code, category=category, message=message, action=action, details=details)
+
+
+def list_kimi_models(*, region: str, api_key: str) -> tuple[KimiModel, ...]:
+    if not isinstance(region, str) or region not in {"cn", "global"}:
+        raise _kimi_error("invalid_candidate", region=region)
+    normalized_region = cast("Literal['cn', 'global']", region)
+    try:
+        return _discover_kimi_models(region=normalized_region, api_key=api_key)
+    except ConfigurationError as error:
+        if error.context.get("provider") == "kimi":
+            raise _kimi_error(error.context.get("reason"), region=error.context.get("region", region)) from None
+        raise _kimi_error("internal", region=region) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _kimi_error("internal", region=region) from None
+
+
+def configure_kimi(*, region: str, model: str, api_key: str, user_config_root: str | Path | None = None) -> ProviderConfigurationResult:
+    if not isinstance(region, str) or region not in {"cn", "global"} or not isinstance(model, str) or not model.strip():
+        raise _kimi_error("invalid_candidate", region=region)
+    normalized_region = cast("Literal['cn', 'global']", region)
+    normalized_model = model.strip()
+    models = list_kimi_models(region=normalized_region, api_key=api_key)
+    if not models:
+        raise _kimi_error("no_eligible_models", region=region)
+    if normalized_model not in {item.id for item in models}:
+        raise _kimi_error("model_not_offered", region=region)
+    try:
+        save_kimi_provider(region=normalized_region, model=normalized_model, api_key=api_key, user_config_root=user_config_root)
+    except ConfigurationError as error:
+        if error.context.get("provider") == "kimi":
+            raise _kimi_error(error.context.get("reason"), region=region) from None
+        raise _kimi_error("internal", region=region) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _kimi_error("internal", region=region) from None
+    return ProviderConfigurationResult(provider="kimi", region=normalized_region, model=normalized_model)
+
+
 def request_github_device_code() -> GitHubDeviceCode:
     try:
         return request_github_copilot_device_code()
@@ -152,7 +222,14 @@ def provider_status(*, user_config_root: str | Path | None = None) -> ProviderSt
             return ProviderStatusResult(status="unavailable", configured=False, authenticated=False, message="No model Provider is configured.", action="Run fsq providers configure.")
         ready, message, action = check_provider_readiness(refresh_provider_settings(Settings(), user_config_root))
         return ProviderStatusResult(
-            status="ready" if ready else "unavailable", configured=True, provider=configured.provider.type, model=configured.provider.model, authenticated=ready, message=message, action=action or None
+            status="ready" if ready else "unavailable",
+            configured=True,
+            provider=configured.provider.type,
+            model=configured.provider.model,
+            region=getattr(configured.provider, "region", None),
+            authenticated=ready,
+            message=message,
+            action=action or None,
         )
     except Exception as exc:
         raise _provider_error("Provider status could not be read.", "Repair the user Provider configuration and retry.", configuration=True) from exc
@@ -176,8 +253,10 @@ __all__ = [
     "complete_github_configuration",
     "configure_azure_openai",
     "configure_google_gemini",
+    "configure_kimi",
     "configure_openai",
     "list_google_gemini_models",
+    "list_kimi_models",
     "list_openai_models",
     "provider_status",
     "request_github_device_code",

@@ -41,6 +41,125 @@ function client(config: ConfigResponse = unconfigured, overrides: Partial<Contro
 
 const openai: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'candidate-key' } };
 const openaiModels = { models: [{ id: 'gpt-5', name: 'gpt-5' }, { id: 'gpt-5.4', name: 'gpt-5.4' }] };
+const kimi: ConfigResponse = { configured: true, provider: { type: 'kimi', region: 'cn', modelName: 'kimi-k3', apiKey: 'china-key' } };
+
+it('configures Kimi only after explicit region, discovery, and model selection', async () => {
+  const saved: ConfigResponse = { configured: true, provider: { type: 'kimi', region: 'global', modelName: 'kimi-k3', apiKey: 'global-key' } };
+  const api = client(unconfigured, {
+    kimiModels: vi.fn().mockResolvedValue({ models: [{ id: 'kimi-k3', name: 'kimi-k3' }] }),
+    saveKimiConfig: vi.fn().mockResolvedValue(saved),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: /Kimi/ }));
+  expect(screen.getByRole('heading', { name: 'Kimi configuration' })).toBeVisible();
+  const region = screen.getByRole('combobox', { name: 'Region' });
+  expect(region).toHaveValue('');
+  expect(screen.getByRole('button', { name: 'Load models' })).toBeDisabled();
+  await user.selectOptions(region, 'global');
+  await user.type(screen.getByLabelText('API key'), 'global-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+
+  expect(api.kimiModels).toHaveBeenCalledWith({ region: 'global', apiKey: 'global-key' }, expect.any(AbortSignal));
+  const model = await screen.findByRole('combobox', { name: 'Model' });
+  expect(model).toHaveValue('');
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  await user.selectOptions(model, 'kimi-k3');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(api.saveKimiConfig).toHaveBeenCalledWith(
+    { region: 'global', modelName: 'kimi-k3', apiKey: 'global-key' },
+    expect.any(AbortSignal),
+  );
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled());
+});
+
+it('invalidates Kimi candidates when region or key changes', async () => {
+  const api = client(unconfigured, {
+    kimiModels: vi.fn().mockResolvedValue({ models: [{ id: 'kimi-k3', name: 'kimi-k3' }] }),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: /Kimi/ }));
+  const region = screen.getByRole('combobox', { name: 'Region' });
+  const key = screen.getByLabelText('API key');
+  await user.selectOptions(region, 'cn');
+  await user.type(key, 'china-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'kimi-k3');
+
+  await user.selectOptions(region, 'global');
+  expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'kimi-k3');
+  await user.type(key, '-changed');
+  expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
+});
+
+it('restores complete saved Kimi values and keeps them out of provider replacements', async () => {
+  const api = client(kimi, {
+    testConnection: vi.fn().mockResolvedValue({ success: true, provider: 'kimi', modelName: 'kimi-k3', durationMs: 17 }),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  expect(await screen.findByRole('combobox', { name: 'Region' })).toHaveValue('cn');
+  expect(screen.getByLabelText('API key')).toHaveValue('china-key');
+  expect(screen.getByText('kimi-k3')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: 'Test connection' }));
+  expect(await screen.findByRole('dialog', { name: 'Connection successful' })).toHaveTextContent('Kimi');
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+
+  await user.click(screen.getByRole('button', { name: 'Change provider' }));
+  await user.click(screen.getByRole('button', { name: /^OpenAI / }));
+  expect(screen.getByLabelText('API key')).toHaveValue('');
+});
+
+it('clears an unsaved Kimi draft when switching providers', async () => {
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const user = userEvent.setup();
+  render(<ConfigPage client={client()} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: /Kimi/ }));
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Region' }), 'cn');
+  await user.type(screen.getByLabelText('API key'), 'candidate-key');
+  await user.click(screen.getByRole('button', { name: 'Change provider' }));
+  expect(confirm).toHaveBeenCalledWith('Discard unsaved Provider changes?');
+  await user.click(screen.getByRole('button', { name: /^OpenAI / }));
+  await user.click(screen.getByRole('button', { name: 'Change provider' }));
+  await user.click(screen.getByRole('button', { name: /Kimi/ }));
+  expect(screen.getByRole('combobox', { name: 'Region' })).toHaveValue('');
+  expect(screen.getByLabelText('API key')).toHaveValue('');
+});
+
+it('does not show a rejected Kimi save error after changing provider', async () => {
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  const api = client(unconfigured, {
+    kimiModels: vi.fn().mockResolvedValue({ models: [{ id: 'kimi-k3', name: 'kimi-k3' }] }),
+    saveKimiConfig: vi.fn().mockRejectedValue(new ControlPlaneApiError(400, {
+      code: 'provider_model_not_offered',
+      message: 'Kimi selection expired.',
+      action: 'Reload Kimi models.',
+    })),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: /Kimi/ }));
+  await user.selectOptions(screen.getByRole('combobox', { name: 'Region' }), 'cn');
+  await user.type(screen.getByLabelText('API key'), 'candidate-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Model' }), 'kimi-k3');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(await screen.findByText('Kimi selection expired.')).toBeVisible();
+
+  await user.click(screen.getByRole('button', { name: 'Change provider' }));
+  await user.click(screen.getByRole('button', { name: /^OpenAI / }));
+
+  expect(screen.queryByText('Kimi selection expired.')).not.toBeInTheDocument();
+});
 
 it('configures Gemini using explicit discovery and tests the saved provider', async () => {
   const saved: ConfigResponse = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'google-key' } };

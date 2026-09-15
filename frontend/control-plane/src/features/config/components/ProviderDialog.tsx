@@ -11,6 +11,7 @@ interface ProviderDialogProps {
   onSelectAzure: () => void;
   onSelectOpenAI: () => void;
   onSelectGemini: () => void;
+  onSelectKimi: () => void;
   onStartGithub: () => Promise<unknown>;
   onRetryModels: () => Promise<unknown>;
   onSaveModel: (modelName: string) => Promise<unknown>;
@@ -58,6 +59,9 @@ export function ProviderDialog(props: ProviderDialogProps) {
       </button>
       <button type="button" className="provider-option" onClick={props.onSelectGemini}>
         <strong>Google Gemini</strong><span>Gemini Developer API</span>
+      </button>
+      <button type="button" className="provider-option" onClick={props.onSelectKimi}>
+        <strong>Kimi</strong><span>Official China or Global API access with an API key.</span>
       </button>
       <button type="button" className="provider-option" onClick={startGithub}>
         <strong>GitHub Copilot GPT</strong><span>Authenticate this computer through GitHub device flow.</span>
