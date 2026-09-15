@@ -21,6 +21,7 @@ from fsq_agent.config._user_provider import (
     refresh_provider_settings,
     save_azure_openai_provider,
     save_google_gemini_provider,
+    save_kimi_provider,
     save_openai_provider,
 )
 from fsq_agent.config._workspace import (
@@ -73,6 +74,7 @@ __all__ = [
     "resolve_runtime_paths",
     "save_azure_openai_provider",
     "save_google_gemini_provider",
+    "save_kimi_provider",
     "save_openai_provider",
     "update_workspace_platform",
     "validate_provider_settings",

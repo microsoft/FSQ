@@ -9,6 +9,7 @@ from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
 JsonValue: TypeAlias = str | int | float | bool | list["JsonValue"] | dict[str, "JsonValue"] | None
 ReasoningEffort: TypeAlias = Literal["low", "mid", "high"]
+ResponsesCompatibilityProfile: TypeAlias = Literal["openai", "kimi"]
 OutputT = TypeVar("OutputT")
 
 

@@ -37,6 +37,27 @@ function client(overrides: Partial<ControlPlaneClient> = {}) {
 
 const openaiConfig: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'saved-openai-key' } };
 
+it('keeps only the latest Kimi region and key discovery result', async () => {
+  let finishChina!: (value: { models: { id: string; name: string }[] }) => void;
+  const api = client({
+    kimiModels: vi.fn()
+      .mockReturnValueOnce(new Promise(resolve => { finishChina = resolve; }))
+      .mockResolvedValueOnce({ models: [{ id: 'kimi-k3', name: 'Global K3' }] }),
+  });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+
+  act(() => { void result.current.loadKimiModels('cn', 'china-key'); });
+  const firstSignal = vi.mocked(api.kimiModels).mock.calls[0][1];
+  await act(async () => result.current.loadKimiModels('global', 'global-key'));
+  expect(firstSignal?.aborted).toBe(true);
+  expect(result.current.kimiModels.data?.models[0].name).toBe('Global K3');
+  await act(async () => finishChina({ models: [{ id: 'kimi-k3', name: 'China K3' }] }));
+  expect(result.current.kimiModels.data?.models[0].name).toBe('Global K3');
+  expect(api.kimiModels).toHaveBeenNthCalledWith(1, { region: 'cn', apiKey: 'china-key' }, expect.any(AbortSignal));
+  expect(api.kimiModels).toHaveBeenNthCalledWith(2, { region: 'global', apiKey: 'global-key' }, expect.any(AbortSignal));
+});
+
 it('invalidates Gemini discovery without touching OpenAI discovery', async () => {
   let finish!: (value: { models: { id: string; name: string }[] }) => void;
   const api = client({ googleGeminiModels: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });
@@ -51,7 +72,7 @@ it('invalidates Gemini discovery without touching OpenAI discovery', async () =>
 });
 
 it('blocks every provider replacement after an unknown Gemini save until readback', async () => {
-  const api = client({ config: vi.fn().mockResolvedValueOnce(openaiConfig).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(openaiConfig), saveGoogleGeminiConfig: vi.fn().mockRejectedValue(new TypeError('lost response')), saveOpenAIConfig: vi.fn() });
+  const api = client({ config: vi.fn().mockResolvedValueOnce(openaiConfig).mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(openaiConfig), saveGoogleGeminiConfig: vi.fn().mockRejectedValue(new TypeError('lost response')), saveOpenAIConfig: vi.fn(), saveKimiConfig: vi.fn() });
   const { result } = renderHook(() => useProviderConfig(api));
   await waitFor(() => expect(result.current.config.state).toBe('ready'));
   await act(async () => { await result.current.saveGemini({ modelName: 'gemini-3.8-flash', apiKey: 'google-key' }); });
@@ -59,14 +80,16 @@ it('blocks every provider replacement after an unknown Gemini save until readbac
   await act(async () => {
     await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'other-key' });
     await result.current.saveGemini({ modelName: 'gemini-3.8-flash', apiKey: 'google-key' });
+    await result.current.saveKimi({ region: 'cn', modelName: 'kimi-k3', apiKey: 'china-key' });
     await result.current.saveAzure({ baseUrl: 'https://example.test', modelName: 'deployment', apiKey: 'other-key' });
     await result.current.startGithub();
   });
   expect(api.saveOpenAIConfig).not.toHaveBeenCalled();
   expect(api.saveAzureConfig).not.toHaveBeenCalled();
+  expect(api.saveKimiConfig).not.toHaveBeenCalled();
   expect(api.startGithubDeviceFlow).not.toHaveBeenCalled();
   expect(api.saveGoogleGeminiConfig).toHaveBeenCalledTimes(1);
-  await act(async () => { await result.current.reconcileOpenAI(); });
+  await act(async () => { await result.current.reconcileConfig(); });
   expect(result.current.saveRecovery).toBe('reconciled');
   expect(result.current.config.data).toEqual(openaiConfig);
 });
@@ -105,7 +128,7 @@ it('keeps OpenAI save recovery unavailable until an explicit configuration read 
   await act(async () => { await result.current.saveOpenAI({ modelName: 'gpt-5', apiKey: 'candidate-key' }); });
   expect(result.current.saveRecovery).toBe('unavailable');
   expect(result.current.config.data).toBeNull();
-  await act(async () => { await result.current.reconcileOpenAI(); });
+  await act(async () => { await result.current.reconcileConfig(); });
   expect(result.current.saveRecovery).toBe('reconciled');
   expect(result.current.config.data).toEqual(azure);
   expect(api.saveOpenAIConfig).toHaveBeenCalledTimes(1);

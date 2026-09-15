@@ -4,6 +4,8 @@ import type {
   AzureConfigPayload,
   OpenAIConfigPayload,
   GoogleGeminiConfigPayload,
+  KimiConfigPayload,
+  KimiModelsPayload,
   OpenAIModelsResponse,
   BootstrapResponse,
   CasesResponse,
@@ -56,7 +58,8 @@ const modes = new Set(['explore', 'strict']);
 const statuses = new Set(['preparing', 'running', 'finalizing', 'success', 'failed', 'inconclusive', 'cancelled', 'error']);
 const readinessStatuses = new Set(['ready', 'unavailable', 'error']);
 const deviceFlowStatuses = new Set(['waiting', 'loading_models', 'ready', 'model_error', 'success', 'failed', 'expired', 'cancelled']);
-const providerTypes = new Set(['openai', 'azure_openai', 'google_gemini', 'github_copilot']);
+const providerTypes = new Set(['openai', 'azure_openai', 'google_gemini', 'kimi', 'github_copilot']);
+const kimiRegions = new Set(['cn', 'global']);
 
 export class ControlPlaneApiError extends Error {
   readonly status: number;
@@ -240,6 +243,12 @@ function validateConfig(value: unknown): ConfigResponse {
   }
   if (provider.type === 'openai' || provider.type === 'google_gemini') {
     if (!hasOnlyKeys(provider, ['type', 'modelName', 'apiKey']) || !string(provider.apiKey) || !provider.apiKey.trim()) invalidResponse('config', 'Invalid API-key Provider fields.');
+  } else if (provider.type === 'kimi') {
+    if (!hasOnlyKeys(provider, ['type', 'region', 'modelName', 'apiKey'])
+      || !string(provider.region) || !kimiRegions.has(provider.region)
+      || !provider.modelName.trim() || !string(provider.apiKey) || !provider.apiKey.trim()) {
+      invalidResponse('config', 'Invalid Kimi Provider fields.');
+    }
   } else if (provider.type === 'azure_openai') {
     if (!hasOnlyKeys(provider, ['type', 'modelName', 'baseUrl', 'apiKey']) || !string(provider.baseUrl) || !provider.baseUrl
       || !string(provider.apiKey) || !provider.apiKey) invalidResponse('config', 'Invalid Azure Provider fields.');
@@ -500,8 +509,12 @@ export const controlPlaneClient = {
     jsonRequest('/config/openai/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
   googleGeminiModels: (apiKey: string, signal?: AbortSignal) =>
     jsonRequest('/config/google-gemini/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
+  kimiModels: (payload: KimiModelsPayload, signal?: AbortSignal) =>
+    jsonRequest('/config/kimi/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify(payload), signal }),
   saveGoogleGeminiConfig: (payload: GoogleGeminiConfigPayload, signal?: AbortSignal) =>
     jsonRequest('/config/google-gemini', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
+  saveKimiConfig: (payload: KimiConfigPayload, signal?: AbortSignal) =>
+    jsonRequest('/config/kimi', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   saveOpenAIConfig: (payload: OpenAIConfigPayload, signal?: AbortSignal) =>
     jsonRequest('/config/openai', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   saveAzureConfig: (payload: AzureConfigPayload, signal?: AbortSignal) =>

@@ -91,6 +91,8 @@ export function ControlPlaneApp() {
         setOverviewProvider({ status: 'configured', provider: 'OpenAI', modelName: response.provider.modelName });
       } else if (response.provider.type === 'google_gemini') {
         setOverviewProvider({ status: 'configured', provider: 'Google Gemini', modelName: response.provider.modelName });
+      } else if (response.provider.type === 'kimi') {
+        setOverviewProvider({ status: 'configured', provider: 'Kimi', modelName: response.provider.modelName, region: response.provider.region === 'cn' ? 'China' : 'Global' });
       } else {
         setOverviewProvider({ status: 'configured', provider: 'Azure OpenAI', modelName: response.provider.modelName });
       }

@@ -244,7 +244,7 @@ class AgentPromptConfig(BaseModel):
 class AgentRuntimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["openai", "azure_openai", "google_gemini", "github_copilot"] | None = None
+    provider: Literal["openai", "azure_openai", "google_gemini", "github_copilot", "kimi"] | None = None
     max_turns: int = Field(default=50, ge=1)
     reasoning_effort: Literal["low", "mid", "high"] = "mid"
     tracing_enabled: bool = True
@@ -252,6 +252,7 @@ class AgentRuntimeSettings(BaseModel):
     _base_url: str = PrivateAttr(default="")
     _model: str = PrivateAttr(default="")
     _api_key: str = PrivateAttr(default="")
+    _provider_region: Literal["cn", "global"] | None = PrivateAttr(default=None)
     _github_token: dict[str, Any] | None = PrivateAttr(default=None)
     _provider_token: dict[str, Any] | None = PrivateAttr(default=None)
     _user_config_root: Path | None = PrivateAttr(default=None)
@@ -272,6 +273,14 @@ class AgentRuntimeSettings(BaseModel):
     @api_key.setter
     def api_key(self, value: str) -> None:
         self._api_key = value
+
+    @property
+    def provider_region(self) -> Literal["cn", "global"] | None:
+        return self._provider_region
+
+    @provider_region.setter
+    def provider_region(self, value: Literal["cn", "global"] | None) -> None:
+        self._provider_region = value
 
     @property
     def model(self) -> str:

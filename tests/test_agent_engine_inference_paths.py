@@ -51,7 +51,7 @@ async def _run_main(runtime, task, run_id):
 
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
 @pytest.mark.parametrize("failure_kind", [None, "incomplete", "failed", "refusal"])
-@pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini", "github_copilot"])
+@pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini", "github_copilot", "kimi"])
 @pytest.mark.parametrize("effort", ["low", "high"])
 async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str, effort: str) -> None:
     settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False, reasoning_effort=effort))
@@ -59,8 +59,11 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     if provider == "google_gemini":
         settings.agent_runtime.base_url = "https://generativelanguage.googleapis.com/v1beta/"
     settings.agent_runtime.api_key = "synthetic-model-key"
-    model_name = "gemini-3.6-flash" if provider == "google_gemini" else "gpt-5.2-pro"
+    model_name = "gemini-3.6-flash" if provider == "google_gemini" else "kimi-k3" if provider == "kimi" else "gpt-5.2-pro"
     settings.agent_runtime.model = model_name
+    if provider == "kimi":
+        settings.agent_runtime.base_url = ""
+        settings.agent_runtime.provider_region = "global"
     settings.output.runs_dir = tmp_path
     if provider == "github_copilot":
         settings.agent_runtime.base_url = "https://api.enterprise.githubcopilot.com/"
@@ -97,7 +100,8 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
                 event = {"event_type": "interaction.completed", "interaction": response}
                 return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=f"event: interaction.completed\ndata: {json.dumps(event)}\n\n")
             return httpx.Response(200, json=response)
-        assert str(request.url) == settings.agent_runtime.base_url + "responses"
+        expected_url = "https://api.moonshot.ai/v1/responses" if provider == "kimi" else settings.agent_runtime.base_url + "responses"
+        assert str(request.url) == expected_url
         assert request.headers["authorization"] == "Bearer synthetic-model-key"
         if provider == "github_copilot":
             assert request.headers["copilot-integration-id"] == "vscode-chat"
@@ -206,13 +210,16 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     assert len(payloads) == 1
     assert payloads[0]["model"] == model_name
     effective_effort = "low" if path == "connection" else effort
-    minimum = "minimal" if provider == "google_gemini" else "low" if provider == "azure_openai" else "medium"
-    native_effort = minimum if effective_effort == "low" else "high"
+    minimum = "minimal" if provider == "google_gemini" else "low" if provider in {"azure_openai", "kimi"} else "medium"
+    native_effort = minimum if effective_effort == "low" else "max" if provider == "kimi" else "high"
     if provider == "google_gemini":
         assert payloads[0]["store"] is False
         assert payloads[0]["generation_config"] == {"thinking_level": native_effort}
     else:
         assert payloads[0]["reasoning"] == {"effort": native_effort}
+        if provider == "kimi":
+            assert "include" not in payloads[0]
+            assert "verbosity" not in payloads[0].get("text", {})
     if path in {"assertion", "connection", "suggestion"}:
         assert not payloads[0].get("tools")
         assert not payloads[0].get("stream")

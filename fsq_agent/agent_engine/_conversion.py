@@ -18,7 +18,7 @@ from ._schema import ensure_strict_json_schema
 if TYPE_CHECKING:
     from openai.types.responses import Response
 
-    from ._contracts import Message, OutputContract, OutputT, ToolBinding
+    from ._contracts import Message, OutputContract, OutputT, ResponsesCompatibilityProfile, ToolBinding
 
 
 def model_input(value: str | tuple[Message, ...]) -> list[dict]:
@@ -96,9 +96,13 @@ def model_result(response: Response, output: OutputContract[OutputT] | None = No
     return ModelResult(text=text, usage=token_usage(response.usage), parsed_output=parsed)
 
 
-def _reasoning_effort(model_name: str, effort: str, *, model_name_is_deployment: bool) -> str:
+def _reasoning_effort(model_name: str, effort: str, *, model_name_is_deployment: bool, responses_profile: ResponsesCompatibilityProfile = "openai") -> str:
     if not isinstance(effort, str) or effort not in ("low", "mid", "high"):
         raise EngineError("configuration", "Reasoning effort must be low, mid, or high.")
+    if responses_profile == "kimi":
+        return {"low": "low", "mid": "high", "high": "max"}[effort]
+    if responses_profile != "openai":
+        raise EngineError("configuration", "Responses compatibility profile is unsupported.")
     native = {"low": "low", "mid": "medium", "high": "high"}[effort]
     if model_name_is_deployment:
         return native
@@ -127,26 +131,38 @@ def response_parameters(
     agent: bool = False,
     reasoning_effort: str = "mid",
     model_name_is_deployment: bool = False,
+    responses_profile: ResponsesCompatibilityProfile = "openai",
 ) -> dict:
     parameters = {
         "model": model_name,
-        "reasoning": {"effort": _reasoning_effort(model_name, reasoning_effort, model_name_is_deployment=model_name_is_deployment)},
+        "reasoning": {
+            "effort": _reasoning_effort(
+                model_name,
+                reasoning_effort,
+                model_name_is_deployment=model_name_is_deployment,
+                responses_profile=responses_profile,
+            )
+        },
         "input": input_items,
-        "include": [],
-        "tools": [
-            {
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": ensure_strict_json_schema(tool.parameters_schema) if tool.strict else deepcopy(tool.parameters_schema),
-                "strict": tool.strict,
-            }
-            for tool in tools
-        ],
     }
+    converted_tools = [
+        {
+            "type": "function",
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": ensure_strict_json_schema(tool.parameters_schema) if tool.strict else deepcopy(tool.parameters_schema),
+            "strict": tool.strict,
+        }
+        for tool in tools
+    ]
+    if responses_profile == "openai":
+        parameters["include"] = []
+        parameters["tools"] = converted_tools
+    elif converted_tools:
+        parameters["tools"] = converted_tools
     if instructions is not None:
         parameters["instructions"] = instructions
-    if agent:
+    if agent and responses_profile == "openai":
         parameters["text"] = {"verbosity": "medium"}
     if output is not None:
         parameters.setdefault("text", {})["format"] = {

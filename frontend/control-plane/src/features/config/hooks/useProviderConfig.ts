@@ -6,6 +6,8 @@ import type {
   OpenAIConfigPayload,
   OpenAIModelsResponse,
   GoogleGeminiConfigPayload,
+  KimiConfigPayload,
+  KimiRegion,
   ConfigResponse,
   ConnectionTestResponse,
   GitHubDeviceFlowResponse,
@@ -15,14 +17,14 @@ import type {
 export type DeviceFlowPending = 'starting' | 'waiting' | 'loading_models' | 'retrying_models' | 'saving' | 'cancelling' | null;
 export type OpenAIModelsState = { state: 'idle' | 'loading' | 'ready' | 'error'; data: OpenAIModelsResponse | null; error: ApiErrorBody | null };
 export type SaveRecovery = 'none' | 'loading' | 'unavailable' | 'reconciled';
-const rejectedOpenAISaves: Record<string, number> = {
-  invalid_request: 400, invalid_provider_config: 400, provider_model_not_offered: 400,
+const rejectedApiKeySaves: Record<string, number> = {
+  invalid_request: 400, invalid_provider_config: 400, provider_model_not_offered: 400, provider_no_eligible_models: 400,
   provider_authorization_failed: 401, provider_access_denied: 403, config_unavailable: 403, cross_origin_forbidden: 403,
   provider_rate_limited: 429, provider_timeout: 504, provider_unavailable: 503, provider_response_invalid: 502, provider_storage_unavailable: 503,
 };
 
-function openaiRequestError(error: unknown): ApiErrorBody {
-  return error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: 'The OpenAI configuration request could not be completed.', action: 'Check the local server and retry.' };
+function providerRequestError(error: unknown, providerName: string): ApiErrorBody {
+  return error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: `The ${providerName} configuration request could not be completed.`, action: 'Check the local server and retry.' };
 }
 export type ConnectionResult =
   | { success: true; data: ConnectionTestResponse }
@@ -44,9 +46,13 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   const [config, setConfig] = useState<RequestResource<ConfigResponse>>({ state: 'loading', data: null, error: null });
   const [savePending, setSavePending] = useState(false);
   const [saveError, setSaveError] = useState<ApiErrorBody | null>(null);
+  const clearSaveError = useCallback(() => setSaveError(null), []);
   const [openaiModels, setOpenAIModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
   const [geminiModels, setGeminiModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
   const geminiModelsControllerRef = useRef<AbortController | null>(null);
+  const [kimiModels, setKimiModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const kimiModelsControllerRef = useRef<AbortController | null>(null);
+  const kimiModelsIdentityRef = useRef('');
   const [saveRecovery, setSaveRecovery] = useState<SaveRecovery>('none');
   const recoveryBlocked = saveRecovery === 'loading' || saveRecovery === 'unavailable';
   const modelsControllerRef = useRef<AbortController | null>(null);
@@ -112,7 +118,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       return data;
     } catch (error) {
       if (mountedRef.current && modelsControllerRef.current === controller && !controller.signal.aborted) {
-        setOpenAIModels({ state: 'error', data: null, error: openaiRequestError(error) });
+        setOpenAIModels({ state: 'error', data: null, error: providerRequestError(error, 'OpenAI') });
       }
       return null;
     }
@@ -136,13 +142,41 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       return data;
     } catch (error) {
       if (mountedRef.current && geminiModelsControllerRef.current === controller && !controller.signal.aborted) {
-        setGeminiModels({ state: 'error', data: null, error: error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: 'The Google Gemini configuration request could not be completed.', action: 'Check the local server and retry.' } });
+        setGeminiModels({ state: 'error', data: null, error: providerRequestError(error, 'Google Gemini') });
       }
       return null;
     }
   }, [client]);
 
-  const reconcileOpenAI = useCallback(async () => {
+  const clearKimiModels = useCallback(() => {
+    kimiModelsControllerRef.current?.abort();
+    kimiModelsControllerRef.current = null;
+    kimiModelsIdentityRef.current = '';
+    setKimiModels({ state: 'idle', data: null, error: null });
+  }, []);
+
+  const loadKimiModels = useCallback(async (region: KimiRegion, apiKey: string) => {
+    kimiModelsControllerRef.current?.abort();
+    const controller = new AbortController();
+    const normalizedKey = apiKey.trim();
+    const identity = `${region}\0${normalizedKey}`;
+    kimiModelsControllerRef.current = controller;
+    kimiModelsIdentityRef.current = identity;
+    setKimiModels({ state: 'loading', data: null, error: null });
+    try {
+      const data = await client.kimiModels({ region, apiKey: normalizedKey }, controller.signal);
+      if (!mountedRef.current || kimiModelsControllerRef.current !== controller || kimiModelsIdentityRef.current !== identity || controller.signal.aborted) return null;
+      setKimiModels({ state: 'ready', data, error: null });
+      return data;
+    } catch (error) {
+      if (mountedRef.current && kimiModelsControllerRef.current === controller && kimiModelsIdentityRef.current === identity && !controller.signal.aborted) {
+        setKimiModels({ state: 'error', data: null, error: providerRequestError(error, 'Kimi') });
+      }
+      return null;
+    }
+  }, [client]);
+
+  const reconcileConfig = useCallback(async () => {
     recoveryControllerRef.current?.abort();
     configControllerRef.current?.abort();
     const controller = new AbortController();
@@ -161,7 +195,10 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     }
   }, [client]);
 
-  const saveOpenAI = useCallback(async (payload: OpenAIConfigPayload, kind: 'openai' | 'google_gemini' = 'openai') => {
+  const saveApiKeyProvider = useCallback(async (
+    payload: OpenAIConfigPayload | GoogleGeminiConfigPayload | KimiConfigPayload,
+    kind: 'openai' | 'google_gemini' | 'kimi',
+  ) => {
     if (saveControllerRef.current || saveRecovery === 'loading' || saveRecovery === 'unavailable') return null;
     const controller = new AbortController();
     saveControllerRef.current = controller;
@@ -169,17 +206,21 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     setSaveError(null);
     setSaveRecovery('none');
     try {
-      const save = kind === 'google_gemini' ? client.saveGoogleGeminiConfig : client.saveOpenAIConfig;
-      const data = await save({ modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() }, controller.signal);
+      const common = { modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() };
+      const data = kind === 'kimi'
+        ? await client.saveKimiConfig({ ...common, region: (payload as KimiConfigPayload).region }, controller.signal)
+        : kind === 'google_gemini'
+          ? await client.saveGoogleGeminiConfig(common, controller.signal)
+          : await client.saveOpenAIConfig(common, controller.signal);
       if (!mountedRef.current || saveControllerRef.current !== controller || controller.signal.aborted) return null;
       setConfig({ state: 'ready', data, error: null });
       return data;
     } catch (error) {
       if (!mountedRef.current || saveControllerRef.current !== controller) return null;
-      if (error instanceof ControlPlaneApiError && rejectedOpenAISaves[error.body.code] === error.status) {
+      if (error instanceof ControlPlaneApiError && rejectedApiKeySaves[error.body.code] === error.status) {
         setSaveError(error.body);
       } else {
-        await reconcileOpenAI();
+        await reconcileConfig();
       }
       return null;
     } finally {
@@ -188,9 +229,11 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
         if (mountedRef.current) setSavePending(false);
       }
     }
-  }, [client, reconcileOpenAI, saveRecovery]);
+  }, [client, reconcileConfig, saveRecovery]);
 
-  const saveGemini = useCallback((payload: GoogleGeminiConfigPayload) => saveOpenAI(payload, 'google_gemini'), [saveOpenAI]);
+  const saveOpenAI = useCallback((payload: OpenAIConfigPayload) => saveApiKeyProvider(payload, 'openai'), [saveApiKeyProvider]);
+  const saveGemini = useCallback((payload: GoogleGeminiConfigPayload) => saveApiKeyProvider(payload, 'google_gemini'), [saveApiKeyProvider]);
+  const saveKimi = useCallback((payload: KimiConfigPayload) => saveApiKeyProvider(payload, 'kimi'), [saveApiKeyProvider]);
 
   const schedulePoll = useCallback((flow: GitHubDeviceFlowResponse, generation: number) => {
     if (!isPolling(flow)) return;
@@ -408,6 +451,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       saveControllerRef.current?.abort();
       modelsControllerRef.current?.abort();
       geminiModelsControllerRef.current?.abort();
+      kimiModelsControllerRef.current?.abort();
       recoveryControllerRef.current?.abort();
       testControllerRef.current?.abort();
       clearPoll();
@@ -421,17 +465,22 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     reload: loadConfig,
     openaiModels,
     geminiModels,
+    kimiModels,
     loadGeminiModels,
     clearGeminiModels,
+    loadKimiModels,
+    clearKimiModels,
     saveGemini,
+    saveKimi,
     loadOpenAIModels,
     clearOpenAIModels,
     saveOpenAI,
     saveRecovery,
-    reconcileOpenAI,
+    reconcileConfig,
     saveAzure,
     savePending,
     saveError,
+    clearSaveError,
     deviceFlow,
     deviceFlowPending,
     deviceFlowError,

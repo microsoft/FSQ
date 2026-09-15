@@ -204,6 +204,11 @@ export interface OpenAIModelsResponse { models: { id: string; name: string }[] }
 export interface GoogleGeminiConfigPayload { modelName: string; apiKey: string }
 export interface GoogleGeminiProviderConfig extends GoogleGeminiConfigPayload { type: 'google_gemini' }
 export interface GoogleGeminiModelsResponse { models: { id: string; name: string }[] }
+export type KimiRegion = 'cn' | 'global';
+export interface KimiModelsPayload { region: KimiRegion; apiKey: string }
+export interface KimiConfigPayload extends KimiModelsPayload { modelName: string }
+export interface KimiProviderConfig extends KimiConfigPayload { type: 'kimi' }
+export interface KimiModelsResponse { models: { id: string; name: string }[] }
 export interface AzureProviderConfig {
   type: 'azure_openai';
   modelName: string;
@@ -215,7 +220,7 @@ export interface GitHubProviderConfig {
   modelName: string;
   authenticated: true;
 }
-export type ProviderConfig = OpenAIProviderConfig | AzureProviderConfig | GoogleGeminiProviderConfig | GitHubProviderConfig;
+export type ProviderConfig = OpenAIProviderConfig | AzureProviderConfig | GoogleGeminiProviderConfig | KimiProviderConfig | GitHubProviderConfig;
 export type ConfigResponse =
   | { configured: false; provider: null }
   | { configured: true; provider: ProviderConfig };
@@ -229,7 +234,7 @@ export type GitHubDeviceFlowResponse =
   | { authRequestId: string; status: 'success' | 'failed' | 'expired' | 'cancelled'; message?: string };
 export interface ConnectionTestResponse {
   success: true;
-  provider: 'openai' | 'azure_openai' | 'google_gemini' | 'github_copilot';
+  provider: 'openai' | 'azure_openai' | 'google_gemini' | 'kimi' | 'github_copilot';
   modelName: string;
   durationMs: number;
 }

@@ -56,6 +56,8 @@ class ModelProviderSession:
             if self.client_config.backend == "google_interactions":
                 return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url)
             options = {"model_name_is_deployment": True} if self.client_config.model_name_is_deployment else {}
+            if self.client_config.backend == "kimi_responses":
+                options["responses_profile"] = "kimi"
             return self._provider_factory(api_key=self.client_config.api_key, base_url=self.client_config.base_url, headers=self.client_config.default_headers or None, **options)
         except EngineError as error:
             if error.category == "configuration":

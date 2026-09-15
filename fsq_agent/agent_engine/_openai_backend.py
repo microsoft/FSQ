@@ -21,7 +21,7 @@ from ._runner import _close_stream, run_agent
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping
 
-    from ._contracts import AgentEventSink, AgentRequest, Model, ModelRequest, ModelResult, OutputT
+    from ._contracts import AgentEventSink, AgentRequest, Model, ModelRequest, ModelResult, OutputT, ResponsesCompatibilityProfile
 
 _safe_model_logging: ContextVar[bool] = ContextVar("agent_engine_safe_model_logging", default=False)
 
@@ -43,13 +43,24 @@ logging.getLogger("openai._base_client").addFilter(_SafeModelLogFilter())
 
 
 class OpenAIModelProvider:
-    def __init__(self, *, base_url: str, api_key: str, headers: Mapping[str, str] | None = None, model_name_is_deployment: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        headers: Mapping[str, str] | None = None,
+        model_name_is_deployment: bool = False,
+        responses_profile: ResponsesCompatibilityProfile = "openai",
+    ) -> None:
         if not base_url.strip() or not api_key.strip():
             raise EngineError("configuration", "Model endpoint and credential are required.")
+        if responses_profile not in {"openai", "kimi"}:
+            raise EngineError("configuration", "Responses compatibility profile is unsupported.")
         self._base_url = base_url
         self._api_key = api_key
         self._headers = dict(headers or {})
         self._model_name_is_deployment = model_name_is_deployment
+        self._responses_profile = responses_profile
         self._client: AsyncOpenAI | None = None
         self._models: dict[str, _OpenAIModel] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -130,6 +141,7 @@ class _OpenAIModel(BackendModel):
                 output=request.output,
                 reasoning_effort=request.reasoning_effort,
                 model_name_is_deployment=self._provider._model_name_is_deployment,
+                responses_profile=self._provider._responses_profile,
             )
             async with self._provider._use_client() as client:
                 response = await client.responses.create(**parameters)
@@ -162,7 +174,17 @@ class OpenAIAgentEngine:
         self._busy = True
         try:
             async with model._provider._use_client() as client:
-                return await run_agent(OpenAIConversation(client, model._name, request, model_name_is_deployment=model._provider._model_name_is_deployment), request, on_event)
+                return await run_agent(
+                    OpenAIConversation(
+                        client,
+                        model._name,
+                        request,
+                        model_name_is_deployment=model._provider._model_name_is_deployment,
+                        responses_profile=model._provider._responses_profile,
+                    ),
+                    request,
+                    on_event,
+                )
         except EngineError:
             raise
         except Exception as error:
@@ -173,7 +195,15 @@ class OpenAIAgentEngine:
 
 
 class OpenAIConversation:
-    def __init__(self, client: AsyncOpenAI, model_name: str, request: AgentRequest, *, model_name_is_deployment: bool = False) -> None:
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        model_name: str,
+        request: AgentRequest,
+        *,
+        model_name_is_deployment: bool = False,
+        responses_profile: ResponsesCompatibilityProfile = "openai",
+    ) -> None:
         self.client = client
         self.history = model_input(request.input)
         self.stream = request.stream
@@ -186,6 +216,7 @@ class OpenAIConversation:
             agent=True,
             reasoning_effort=request.reasoning_effort,
             model_name_is_deployment=model_name_is_deployment,
+            responses_profile=responses_profile,
         )
 
     def tool_outputs(self) -> tuple[ToolOutputEntry, ...]:
