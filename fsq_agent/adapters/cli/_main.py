@@ -29,6 +29,7 @@ from fsq_agent.application import (
     WorkspaceRequest,
     complete_github_configuration,
     configure_azure_openai,
+    configure_deepseek,
     configure_google_gemini,
     configure_openai,
     create_case,
@@ -38,6 +39,7 @@ from fsq_agent.application import (
     format_case,
     generate_run_html,
     initialize_workspace,
+    list_deepseek_models,
     list_google_gemini_models,
     list_openai_models,
     list_runs,
@@ -380,7 +382,7 @@ def providers() -> None:
 
 
 @providers.command(name="configure")
-@click.argument("name", type=click.Choice(["github_copilot", "azure_openai", "openai", "google_gemini"]))
+@click.argument("name", type=click.Choice(["github_copilot", "azure_openai", "openai", "deepseek", "google_gemini"]))
 @click.option("--base-url", default=None)
 @click.option("--model", default=None)
 @click.option("--api-key", default=None)
@@ -407,10 +409,10 @@ def providers_configure(context: click.Context, name: str, base_url: str | None,
             return choices[click.prompt("Select model", type=click.Choice(list(choices)))]
 
         result = complete_github_configuration(device, model=model, select_model=select_model, cancel_requested=lambda: False)
-    elif name in {"openai", "google_gemini"}:
-        provider_name = "Google Gemini" if name == "google_gemini" else "OpenAI"
-        discover = list_google_gemini_models if name == "google_gemini" else list_openai_models
-        configure = configure_google_gemini if name == "google_gemini" else configure_openai
+    elif name in {"openai", "deepseek", "google_gemini"}:
+        provider_name = {"openai": "OpenAI", "deepseek": "DeepSeek", "google_gemini": "Google Gemini"}[name]
+        discover = {"openai": list_openai_models, "deepseek": list_deepseek_models, "google_gemini": list_google_gemini_models}[name]
+        configure = {"openai": configure_openai, "deepseek": configure_deepseek, "google_gemini": configure_google_gemini}[name]
         if base_url is not None:
             raise click.UsageError(f"--base-url applies only to azure_openai; {provider_name} uses the official endpoint")
         if (machine or context.obj["non_interactive"]) and (not model or not api_key):

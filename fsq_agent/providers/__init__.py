@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 from fsq_agent.providers._connection_test import ProviderConnectionTestResult, test_model_provider_connection
+from fsq_agent.providers._deepseek import DeepSeekModel, list_deepseek_models
 from fsq_agent.providers._factory import (
     ModelProviderFactory,
     build_model_provider_session,
@@ -23,6 +24,7 @@ from fsq_agent.providers._openai import OpenAIModel, list_openai_models
 from fsq_agent.providers._session import ModelProviderSession
 
 __all__ = [
+    "DeepSeekModel",
     "GitHubCopilotAuthorization",
     "GitHubCopilotModel",
     "GitHubDeviceCode",
@@ -35,6 +37,7 @@ __all__ = [
     "build_model_provider_session",
     "check_provider_readiness",
     "complete_github_copilot_device_flow",
+    "list_deepseek_models",
     "list_github_copilot_models",
     "list_google_gemini_models",
     "list_openai_models",

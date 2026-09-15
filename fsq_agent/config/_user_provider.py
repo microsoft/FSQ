@@ -26,6 +26,7 @@ USER_CONFIG_VERSION = 3
 USER_CONFIG_FILENAME = "config.yaml"
 AUTH_DIRECTORY = "auth"
 OPENAI_AUTH_FILENAME = "openai.json"
+DEEPSEEK_AUTH_FILENAME = "deepseek.json"
 GEMINI_AUTH_FILENAME = "google-gemini.json"
 AZURE_AUTH_FILENAME = "azure-openai.json"
 GITHUB_AUTH_FILENAME = "github-copilot-token.json"
@@ -72,6 +73,10 @@ class _GoogleGeminiProviderRecord(_OpenAIProviderRecord):
     type: Literal["google_gemini"]
 
 
+class _DeepSeekProviderRecord(_OpenAIProviderRecord):
+    type: Literal["deepseek"]
+
+
 class _AzureOpenAIProviderRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -103,7 +108,7 @@ class _GitHubCopilotProviderRecord(BaseModel):
 
 
 _ProviderRecord = Annotated[
-    _OpenAIProviderRecord | _AzureOpenAIProviderRecord | _GoogleGeminiProviderRecord | _GitHubCopilotProviderRecord,
+    _OpenAIProviderRecord | _AzureOpenAIProviderRecord | _DeepSeekProviderRecord | _GoogleGeminiProviderRecord | _GitHubCopilotProviderRecord,
     Field(discriminator="type"),
 ]
 
@@ -245,7 +250,7 @@ def save_openai_provider(
                 auth_dir / OPENAI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
             provider="openai",
         )
         return config
@@ -256,6 +261,35 @@ def _gemini_key(value: str) -> str:
     if len(normalized) > 1024 or any(ord(character) < 33 or ord(character) > 126 for character in normalized):
         raise ValueError("Invalid API key")
     return normalized
+
+
+def _deepseek_key(value: str) -> str:
+    normalized = _openai_key(value)
+    if len(normalized) > 1024 or any(ord(character) < 33 or ord(character) > 126 for character in normalized):
+        raise ValueError("Invalid API key")
+    return normalized
+
+
+def save_deepseek_provider(*, model: str, api_key: str, user_config_root: str | Path | None = None) -> UserProviderConfig:
+    try:
+        provider = _DeepSeekProviderRecord(type="deepseek", model=model)
+        normalized_api_key = _deepseek_key(api_key)
+    except (ValidationError, ValueError, TypeError):
+        raise ConfigurationError("Invalid DeepSeek model or API key.", context={"provider": "deepseek", "reason": "invalid_candidate"}) from None
+    root = _user_config_root(user_config_root)
+    with _user_config_lock(root, provider="deepseek"):
+        try:
+            current, config_path, auth_dir = _load_user_document(root)
+        except ConfigurationError:
+            raise ConfigurationError("Unable to read local Provider configuration.", context={"provider": "deepseek", "reason": "storage"}) from None
+        config = current.model_copy(update={"provider": provider})
+        config._api_key = normalized_api_key
+        _commit_replacement(
+            {auth_dir / DEEPSEEK_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}), config_path: _yaml_bytes(config)},
+            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            provider="deepseek",
+        )
+        return config
 
 
 def save_google_gemini_provider(*, model: str, api_key: str, user_config_root: str | Path | None = None) -> UserProviderConfig:
@@ -274,7 +308,7 @@ def save_google_gemini_provider(*, model: str, api_key: str, user_config_root: s
         config._api_key = normalized_api_key
         _commit_replacement(
             {auth_dir / GEMINI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}), config_path: _yaml_bytes(config)},
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
             provider="google_gemini",
         )
         return config
@@ -306,7 +340,7 @@ def save_azure_openai_provider(
                 auth_dir / AZURE_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
         )
         return _load_complete_user_config(root)
 
@@ -337,7 +371,7 @@ def activate_github_copilot_provider(
                 auth_dir / GITHUB_PROVIDER_AUTH_FILENAME: _json_bytes(provider_payload),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / OPENAI_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME],
+            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / OPENAI_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME],
         )
         return _load_complete_user_config(root)
 
@@ -354,6 +388,8 @@ def refresh_provider_settings(
     provider_settings.model = config.provider.model if config.provider is not None else ""
     if isinstance(config.provider, _AzureOpenAIProviderRecord):
         provider_settings.base_url = config.provider.base_url
+    elif isinstance(config.provider, _DeepSeekProviderRecord):
+        provider_settings.base_url = "https://api.deepseek.com/"
     elif isinstance(config.provider, _GoogleGeminiProviderRecord):
         provider_settings.base_url = "https://generativelanguage.googleapis.com/v1beta/"
     elif isinstance(config.provider, _OpenAIProviderRecord):
@@ -488,6 +524,13 @@ def _load_complete_user_config(root: Path) -> UserProviderConfig:
             config._api_key = _gemini_key(_credential_text(credentials, "api_key", "Google Gemini API key"))
         except (ConfigurationError, ValueError, TypeError):
             raise ConfigurationError("Unable to load valid Google Gemini credentials.", context={"provider": "google_gemini", "reason": "invalid_candidate"}) from None
+        return config
+    if config.provider.type == "deepseek":
+        try:
+            credentials = _read_json_object(auth_dir / DEEPSEEK_AUTH_FILENAME, "DeepSeek credentials")
+            config._api_key = _deepseek_key(_credential_text(credentials, "api_key", "DeepSeek API key"))
+        except (ConfigurationError, ValueError, TypeError):
+            raise ConfigurationError("Unable to load valid DeepSeek credentials.", context={"provider": "deepseek", "reason": "invalid_candidate"}) from None
         return config
     if config.provider.type == "openai":
         try:

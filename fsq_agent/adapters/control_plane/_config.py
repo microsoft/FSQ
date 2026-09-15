@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from fsq_agent.application import ApplicationError, configure_google_gemini, configure_openai, list_google_gemini_models, list_openai_models
+from fsq_agent.application import ApplicationError, configure_deepseek, configure_google_gemini, configure_openai, list_deepseek_models, list_google_gemini_models, list_openai_models
 from fsq_agent.config import load_user_provider_config, save_azure_openai_provider
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import test_model_provider_connection
@@ -48,6 +48,8 @@ def get_config(user_config_root: Path | None) -> dict[str, Any]:
         return {"configured": False, "provider": None}
     if provider.type == "google_gemini":
         return {"configured": True, "provider": {"type": "google_gemini", "modelName": provider.model, "apiKey": config.api_key}}
+    if provider.type == "deepseek":
+        return {"configured": True, "provider": {"type": "deepseek", "modelName": provider.model, "apiKey": config.api_key}}
     if provider.type == "openai":
         return {"configured": True, "provider": {"type": "openai", "modelName": provider.model, "apiKey": config.api_key}}
     if provider.type == "azure_openai":
@@ -75,6 +77,18 @@ def list_openai_config_models(body: dict[str, Any]) -> dict[str, Any]:
 def save_openai_config(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
     _require_openai_fields(body, {"modelName", "apiKey"})
     configure_openai(model=body["modelName"], api_key=body["apiKey"], user_config_root=user_config_root)
+    return get_config(user_config_root)
+
+
+def list_deepseek_config_models(body: dict[str, Any]) -> dict[str, Any]:
+    _require_openai_fields(body, {"apiKey"}, provider_name="DeepSeek")
+    models = list_deepseek_models(api_key=body["apiKey"])
+    return {"models": [{"id": model.id, "name": model.name} for model in models]}
+
+
+def save_deepseek_config(body: dict[str, Any], user_config_root: Path | None) -> dict[str, Any]:
+    _require_openai_fields(body, {"modelName", "apiKey"}, provider_name="DeepSeek")
+    configure_deepseek(model=body["modelName"], api_key=body["apiKey"], user_config_root=user_config_root)
     return get_config(user_config_root)
 
 
@@ -124,8 +138,8 @@ def test_saved_connection(body: dict[str, Any], user_config_root: Path | None) -
 def map_config_exception(exc: BaseException) -> ConfigAPIError:
     if isinstance(exc, ConfigAPIError):
         return exc
-    if isinstance(exc, ApplicationError) and exc.details.get("provider") in {"openai", "google_gemini"}:
-        name = "Google Gemini" if exc.details["provider"] == "google_gemini" else "OpenAI"
+    if isinstance(exc, ApplicationError) and exc.details.get("provider") in {"openai", "deepseek", "google_gemini"}:
+        name = {"openai": "OpenAI", "deepseek": "DeepSeek", "google_gemini": "Google Gemini"}[exc.details["provider"]]
         mappings = {
             "invalid_candidate": (400, "invalid_provider_config"),
             "model_not_offered": (400, "provider_model_not_offered"),

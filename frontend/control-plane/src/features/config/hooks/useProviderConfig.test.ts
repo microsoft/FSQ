@@ -37,6 +37,21 @@ function client(overrides: Partial<ControlPlaneClient> = {}) {
 
 const openaiConfig: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'saved-openai-key' } };
 
+it('invalidates DeepSeek discovery without touching OpenAI or Gemini discovery', async () => {
+  let finish!: (value: { models: { id: string; name: string }[] }) => void;
+  const api = client({ deepseekModels: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });
+  const { result } = renderHook(() => useProviderConfig(api));
+  await waitFor(() => expect(result.current.config.state).toBe('ready'));
+  act(() => { void result.current.loadDeepSeekModels('deepseek-key'); });
+  expect(result.current.deepseekModels.state).toBe('loading');
+  act(() => result.current.clearDeepSeekModels());
+  await act(async () => finish({ models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }] }));
+  expect(result.current.deepseekModels.state).toBe('idle');
+  expect(result.current.openaiModels.state).toBe('idle');
+  expect(result.current.geminiModels.state).toBe('idle');
+  expect(vi.mocked(api.deepseekModels).mock.calls[0][1]?.aborted).toBe(true);
+});
+
 it('invalidates Gemini discovery without touching OpenAI discovery', async () => {
   let finish!: (value: { models: { id: string; name: string }[] }) => void;
   const api = client({ googleGeminiModels: vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; })) });

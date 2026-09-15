@@ -55,7 +55,7 @@ def _bind_package_skill_resources(settings: Settings) -> None:
 
 
 PLATFORM_CONFIG_PATHS = {platform: _package_config_root() / filename for platform, filename in _PLATFORM_CONFIG_FILENAMES.items()}
-SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai", "openai", "google_gemini")
+SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai", "openai", "deepseek", "google_gemini")
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -309,6 +309,15 @@ def _validate_model_provider_settings(settings: Settings) -> None:
             context={"base_url": settings.agent_runtime.base_url},
         )
     api_key = settings.agent_runtime.api_key
+    if settings.agent_runtime.provider == "deepseek":
+        from ._user_provider import _deepseek_key
+
+        if settings.agent_runtime.base_url != "https://api.deepseek.com/":
+            raise ConfigurationError("DeepSeek requires the official endpoint.", context={"provider": "deepseek", "reason": "invalid_candidate"})
+        try:
+            _deepseek_key(api_key)
+        except (ValueError, TypeError):
+            raise ConfigurationError("DeepSeek endpoint or API key is invalid.", context={"provider": "deepseek", "reason": "invalid_candidate"}) from None
     if settings.agent_runtime.provider == "google_gemini":
         from ._user_provider import _gemini_key
 

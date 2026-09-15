@@ -198,6 +198,24 @@ it('accepts empty OpenAI model discovery', async () => {
   await expect(controlPlaneClient.openaiModels('local-key')).resolves.toEqual({ models: [] });
 });
 
+it('validates DeepSeek config, discovery, and connection results with exact fields', async () => {
+  const config = { configured: true, provider: { type: 'deepseek', modelName: 'deepseek-flash', apiKey: 'local-key' } };
+  const fetch = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify(config)))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, provider: 'deepseek', modelName: 'deepseek-flash', durationMs: 11 })));
+  await expect(controlPlaneClient.deepseekModels('local-key')).resolves.toEqual({ models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }] });
+  await expect(controlPlaneClient.saveDeepSeekConfig({ apiKey: 'local-key', modelName: 'deepseek-flash' })).resolves.toEqual(config);
+  await expect(controlPlaneClient.testConnection()).resolves.toMatchObject({ provider: 'deepseek' });
+  expect(fetch).toHaveBeenNthCalledWith(1, '/api/control-plane/config/deepseek/models', expect.objectContaining({ method: 'POST', body: JSON.stringify({ apiKey: 'local-key' }) }));
+  expect(fetch).toHaveBeenNthCalledWith(2, '/api/control-plane/config/deepseek', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ apiKey: 'local-key', modelName: 'deepseek-flash' }) }));
+});
+
+it('rejects a DeepSeek configuration with an endpoint field', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ configured: true, provider: { type: 'deepseek', modelName: 'deepseek-flash', apiKey: 'local-key', baseUrl: 'https://untrusted.example' } })));
+  await expect(controlPlaneClient.config()).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
 it('validates Gemini config and discovery with exact fields', async () => {
   const config = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'local-key' } };
   vi.spyOn(globalThis, 'fetch')

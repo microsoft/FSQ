@@ -3,6 +3,7 @@ import { ControlPlaneApiError, controlPlaneClient, toApiError, type ControlPlane
 import type {
   ApiErrorBody,
   AzureConfigPayload,
+  DeepSeekConfigPayload,
   OpenAIConfigPayload,
   OpenAIModelsResponse,
   GoogleGeminiConfigPayload,
@@ -21,8 +22,8 @@ const rejectedOpenAISaves: Record<string, number> = {
   provider_rate_limited: 429, provider_timeout: 504, provider_unavailable: 503, provider_response_invalid: 502, provider_storage_unavailable: 503,
 };
 
-function openaiRequestError(error: unknown): ApiErrorBody {
-  return error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: 'The OpenAI configuration request could not be completed.', action: 'Check the local server and retry.' };
+function apiKeyProviderRequestError(error: unknown, provider: string): ApiErrorBody {
+  return error instanceof ControlPlaneApiError ? error.body : { code: 'network_error', message: `The ${provider} configuration request could not be completed.`, action: 'Check the local server and retry.' };
 }
 export type ConnectionResult =
   | { success: true; data: ConnectionTestResponse }
@@ -45,7 +46,9 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   const [savePending, setSavePending] = useState(false);
   const [saveError, setSaveError] = useState<ApiErrorBody | null>(null);
   const [openaiModels, setOpenAIModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const [deepseekModels, setDeepSeekModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
   const [geminiModels, setGeminiModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const deepseekModelsControllerRef = useRef<AbortController | null>(null);
   const geminiModelsControllerRef = useRef<AbortController | null>(null);
   const [saveRecovery, setSaveRecovery] = useState<SaveRecovery>('none');
   const recoveryBlocked = saveRecovery === 'loading' || saveRecovery === 'unavailable';
@@ -112,7 +115,31 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       return data;
     } catch (error) {
       if (mountedRef.current && modelsControllerRef.current === controller && !controller.signal.aborted) {
-        setOpenAIModels({ state: 'error', data: null, error: openaiRequestError(error) });
+        setOpenAIModels({ state: 'error', data: null, error: apiKeyProviderRequestError(error, 'OpenAI') });
+      }
+      return null;
+    }
+  }, [client]);
+
+  const clearDeepSeekModels = useCallback(() => {
+    deepseekModelsControllerRef.current?.abort();
+    deepseekModelsControllerRef.current = null;
+    setDeepSeekModels({ state: 'idle', data: null, error: null });
+  }, []);
+
+  const loadDeepSeekModels = useCallback(async (apiKey: string) => {
+    deepseekModelsControllerRef.current?.abort();
+    const controller = new AbortController();
+    deepseekModelsControllerRef.current = controller;
+    setDeepSeekModels({ state: 'loading', data: null, error: null });
+    try {
+      const data = await client.deepseekModels(apiKey.trim(), controller.signal);
+      if (!mountedRef.current || deepseekModelsControllerRef.current !== controller || controller.signal.aborted) return null;
+      setDeepSeekModels({ state: 'ready', data, error: null });
+      return data;
+    } catch (error) {
+      if (mountedRef.current && deepseekModelsControllerRef.current === controller && !controller.signal.aborted) {
+        setDeepSeekModels({ state: 'error', data: null, error: apiKeyProviderRequestError(error, 'DeepSeek') });
       }
       return null;
     }
@@ -161,7 +188,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     }
   }, [client]);
 
-  const saveOpenAI = useCallback(async (payload: OpenAIConfigPayload, kind: 'openai' | 'google_gemini' = 'openai') => {
+  const saveOpenAI = useCallback(async (payload: OpenAIConfigPayload, kind: 'openai' | 'deepseek' | 'google_gemini' = 'openai') => {
     if (saveControllerRef.current || saveRecovery === 'loading' || saveRecovery === 'unavailable') return null;
     const controller = new AbortController();
     saveControllerRef.current = controller;
@@ -169,7 +196,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     setSaveError(null);
     setSaveRecovery('none');
     try {
-      const save = kind === 'google_gemini' ? client.saveGoogleGeminiConfig : client.saveOpenAIConfig;
+      const save = kind === 'google_gemini' ? client.saveGoogleGeminiConfig : kind === 'deepseek' ? client.saveDeepSeekConfig : client.saveOpenAIConfig;
       const data = await save({ modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() }, controller.signal);
       if (!mountedRef.current || saveControllerRef.current !== controller || controller.signal.aborted) return null;
       setConfig({ state: 'ready', data, error: null });
@@ -190,6 +217,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     }
   }, [client, reconcileOpenAI, saveRecovery]);
 
+  const saveDeepSeek = useCallback((payload: DeepSeekConfigPayload) => saveOpenAI(payload, 'deepseek'), [saveOpenAI]);
   const saveGemini = useCallback((payload: GoogleGeminiConfigPayload) => saveOpenAI(payload, 'google_gemini'), [saveOpenAI]);
 
   const schedulePoll = useCallback((flow: GitHubDeviceFlowResponse, generation: number) => {
@@ -407,6 +435,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       configControllerRef.current?.abort();
       saveControllerRef.current?.abort();
       modelsControllerRef.current?.abort();
+      deepseekModelsControllerRef.current?.abort();
       geminiModelsControllerRef.current?.abort();
       recoveryControllerRef.current?.abort();
       testControllerRef.current?.abort();
@@ -420,7 +449,11 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     config,
     reload: loadConfig,
     openaiModels,
+    deepseekModels,
     geminiModels,
+    loadDeepSeekModels,
+    clearDeepSeekModels,
+    saveDeepSeek,
     loadGeminiModels,
     clearGeminiModels,
     saveGemini,

@@ -244,7 +244,7 @@ class AgentPromptConfig(BaseModel):
 class AgentRuntimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["openai", "azure_openai", "google_gemini", "github_copilot"] | None = None
+    provider: Literal["openai", "azure_openai", "deepseek", "google_gemini", "github_copilot"] | None = None
     max_turns: int = Field(default=50, ge=1)
     reasoning_effort: Literal["low", "mid", "high"] = "mid"
     tracing_enabled: bool = True
