@@ -45,6 +45,7 @@ fsq providers configure openai [--model MODEL] [--api-key KEY]
 fsq providers configure azure_openai [--base-url URL] [--model DEPLOYMENT] [--api-key KEY]
 fsq providers configure deepseek [--model MODEL] [--api-key KEY]
 fsq providers configure google_gemini [--model MODEL] [--api-key KEY]
+fsq providers configure kimi [--region cn|global] [--model MODEL] [--api-key KEY]
 fsq providers configure github_copilot [--model MODEL]
 fsq providers status
 ```
@@ -56,6 +57,8 @@ OpenAI non-interactive/JSON/JSONL modes require both `--model` and `--api-key`. 
 DeepSeek follows the same hidden-key prompt, explicit discovered-model selection, machine-mode requirements, save-time revalidation, and exit categories as OpenAI. It rejects `--base-url` and uses only `https://api.deepseek.com/`. Eligible ids are `deepseek-flash`, exact versioned Flash ids from 4.1 onward, and exact versioned Pro ids from 4.0 onward; matching later versions have no upper bound. Keys are stored only in `~/.fsq/auth/deepseek.json`.
 
 Google Gemini uses the same hidden-key prompt, explicit discovered-model selection, machine-mode option requirements, and exit categories as OpenAI. It rejects `--base-url`. The complete paginated model list is filtered to stable Gemini 3-or-later general-purpose Flash/Pro; even an explicit `--model` must be offered to the candidate key at save time. Vertex AI and Preview/specialized models are not supported. Keys are stored only in `~/.fsq/auth/google-gemini.json`, not Workspace configuration or environment fallbacks.
+
+Kimi requires an explicit region: `cn` uses `https://api.moonshot.cn/v1`, while `global` uses `https://api.moonshot.ai/v1`. Keys are region-specific and are never retried against the other endpoint. Human mode prompts for region with no default, hides the key, loads stable K3-or-later models, and requires explicit selection even when only one model is returned. JSON, JSONL, and `--non-interactive` require `--region`, `--model`, and `--api-key`. Kimi rejects `--base-url`, uses Responses only, and never falls back to Chat Completions, Messages, another model, or another region. The selected region/model are stored in version-3 user configuration and the key in `~/.fsq/auth/kimi.json`.
 
 All Provider commands are user-level and share the one active configuration under `~/.fsq` with Settings. Status does not discover models or send inference. Use Settings **Test connection** for an explicit saved-model request. A disconnected save is not a guaranteed cancellation and is never automatically retried. See the [setup guide](getting-started.md#configure-ai-exploration).
 

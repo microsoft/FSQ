@@ -8,7 +8,7 @@
 - 已安装受支持的 Chromium 系浏览器。示例使用稳定版 Chrome。
 - 一个可用作本地 FSQ Workspace 的空目录。
 
-AI 探索和 suggestion 分析还需要 OpenAI、Google Gemini、GitHub Copilot 或 Azure OpenAI。确定性 Case 重放不需要规划 LLM，除非已编写的 Case 包含 AI assertion。
+AI 探索和 suggestion 分析还需要 OpenAI、DeepSeek、Google Gemini、Kimi、GitHub Copilot 或 Azure OpenAI。确定性 Case 重放不需要规划 LLM，除非已编写的 Case 包含 AI assertion。
 
 ## 安装
 
@@ -51,12 +51,12 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
-也可以运行 `fsq providers configure openai` 连接 OpenAI 官方 API，运行 `fsq providers configure deepseek` 连接 DeepSeek 官方 Responses API，或运行 `fsq providers configure azure_openai` 连接 Azure 部署。配置保存在用户级 `~/.fsq` 下，由 CLI 和 Control Plane 共享。API Key Provider 会隐藏 Key 输入并提供可选模型；即使只有一个模型也需要显式选择。
+也可以运行 `fsq providers configure openai` 连接 OpenAI 官方 API，运行 `fsq providers configure deepseek` 连接 DeepSeek 官方 Responses API，运行 `fsq providers configure kimi` 连接中国区或国际区 Kimi 官方 API，或运行 `fsq providers configure azure_openai` 连接 Azure 部署。配置保存在用户级 `~/.fsq` 下，由 CLI 和 Control Plane 共享。API Key Provider 会隐藏 Key 输入并提供可选模型；即使只有一个模型也需要显式选择。
 
 浏览器配置流程：运行 `fsq ui`，打开 **Settings**。
 
-1. 点击 **Add configuration** 或 **Change provider**，选择 **OpenAI**、**DeepSeek** 或 **Google Gemini**。
-2. 输入 API Key，点击 **Load models**，选择模型，再点击 **Save changes**。
+1. 点击 **Add configuration** 或 **Change provider**，选择 **OpenAI**、**DeepSeek**、**Google Gemini** 或 **Kimi**。
+2. 使用 Kimi 时先显式选择 **China** 或 **Global**。输入 API Key，点击 **Load models**，选择模型，再点击 **Save changes**。
 3. 点击 **Test connection**，使用已保存配置发送最小请求。
 4. 回到 **Home** 查看 Provider 摘要，再到 **Test Runner** 选择 Workspace、平台和目标，显式启动 Explore。
 
@@ -67,6 +67,10 @@ DeepSeek 固定使用 `https://api.deepseek.com/` 和 Responses API。模型列�
 Gemini 的 API Key 从 [Google AI Studio](https://aistudio.google.com/apikey) 获取。可使用上述页面流程，或运行 `fsq providers configure google_gemini`，在隐藏提示中输入 Key 后显式选模型。列表读完所有有界分页，只提供支持内容生成的稳定 Gemini 3 或更高版本通用 Flash/Pro；排除 Preview、Latest、Experimental、Lite、图像/音频/Embedding 等专用变体。分页不完整会报错，不会提供部分候选列表。固定 Developer API 使用原生 Interactions、`store=false` 和本地会话历史，不支持 Vertex AI、ADC/服务账号或自定义端点。
 
 Gemini 元数据保存在 version 3 用户配置中，明文 Key 位于 `~/.fsq/auth/google-gemini.json`。预规划、主执行、最终验证、AI 视觉断言、Case 建议和连接测试均使用同一已保存 Provider。**Test connection** 只验证最小推理请求，不保证所有工具/Schema 或 Case 都可执行。显式启动 Explore 后按正常流程检查证据并保存 Case；Strict Replay 只在 Case 需要 AI 断言时使用 Gemini。
+
+Kimi API Key 可在[中国区平台](https://platform.kimi.com/console/api-keys)或[国际区平台](https://platform.kimi.ai/console/api-keys)创建。中国区 Key 只发送到 `https://api.moonshot.cn/v1`，国际区 Key 只发送到 `https://api.moonshot.ai/v1`，两区不会自动重试。模型列表接受稳定的 `kimi-k3` 或更高版本，并排除 preview、beta、alpha、experimental、release candidate、latest 和日期快照；它不维护固定正向白名单。未来模型即使通过筛选也只提供尽力兼容，不代表能力保证。FSQ 只使用 Responses API，并把中立推理强度映射为 Kimi 的 `low`、`high`、`max`，不会回退到 Chat Completions、Messages、其他模型或其他区域。
+
+图片能力不作为 Kimi 模型筛选条件。若所选模型拒绝图片、Schema、工具或 Responses 请求，FSQ 会返回普通安全模型/AI assertion 错误。动态执行可在后续轮次自行选择其他可用工具；已编写的静态 AI assertion 仍是带证据的失败步骤。Kimi 元数据保存在 version 3 用户配置中，明文 Key 位于 `~/.fsq/auth/kimi.json`。
 
 保存只复核模型可见性，不发送推理请求；status/readiness 也不等于连接测试。API Key 以明文保存在本地，Settings 默认掩码显示，但受 loopback 限制的 Config API 会完整返回。只有一个活动 Provider，替换成功后清理其他 Provider 凭据；不从环境变量或其他 Provider 回退。
 

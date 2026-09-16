@@ -55,7 +55,7 @@ def _bind_package_skill_resources(settings: Settings) -> None:
 
 
 PLATFORM_CONFIG_PATHS = {platform: _package_config_root() / filename for platform, filename in _PLATFORM_CONFIG_FILENAMES.items()}
-SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai", "openai", "deepseek", "google_gemini")
+SUPPORTED_LLM_PROVIDERS = ("github_copilot", "azure_openai", "openai", "deepseek", "google_gemini", "kimi")
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -332,6 +332,17 @@ def _validate_model_provider_settings(settings: Settings) -> None:
             raise ConfigurationError("OpenAI requires the official API endpoint.", context={"provider": "openai", "reason": "invalid_candidate"})
         if not api_key.strip() or api_key.strip().lower().startswith("replace-with"):
             raise ConfigurationError("OpenAI API key is missing or contains a placeholder.", context={"provider": "openai", "reason": "invalid_candidate"})
+    if settings.agent_runtime.provider == "kimi":
+        from ._user_provider import _gemini_key
+
+        if settings.agent_runtime.provider_region not in {"cn", "global"}:
+            raise ConfigurationError("Kimi region is invalid.", context={"provider": "kimi", "reason": "invalid_candidate"})
+        if settings.agent_runtime.base_url:
+            raise ConfigurationError("Kimi uses a fixed official regional endpoint.", context={"provider": "kimi", "reason": "invalid_candidate"})
+        try:
+            _gemini_key(api_key)
+        except (ValueError, TypeError):
+            raise ConfigurationError("Kimi API key is invalid.", context={"provider": "kimi", "reason": "invalid_candidate"}) from None
     if settings.agent_runtime.provider == "azure_openai" and not api_key:
         raise ConfigurationError("Azure OpenAI API key is not configured.")
     if settings.agent_runtime.provider == "azure_openai" and api_key and api_key.lower().startswith("replace-with"):

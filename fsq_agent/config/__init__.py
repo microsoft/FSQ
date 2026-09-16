@@ -22,6 +22,7 @@ from fsq_agent.config._user_provider import (
     save_azure_openai_provider,
     save_deepseek_provider,
     save_google_gemini_provider,
+    save_kimi_provider,
     save_openai_provider,
 )
 from fsq_agent.config._workspace import (
@@ -75,6 +76,7 @@ __all__ = [
     "save_azure_openai_provider",
     "save_deepseek_provider",
     "save_google_gemini_provider",
+    "save_kimi_provider",
     "save_openai_provider",
     "update_workspace_platform",
     "validate_provider_settings",

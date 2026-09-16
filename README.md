@@ -131,7 +131,7 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
-For direct official OpenAI access, run `fsq providers configure openai` and enter the API key at the hidden prompt, then select an offered GPT-5-or-later model. DeepSeek uses `fsq providers configure deepseek` with its official Responses API and an explicitly selected eligible Flash/Pro model. Google Gemini uses `fsq providers configure google_gemini` with a [Google AI Studio API key](https://aistudio.google.com/apikey) and an explicitly selected stable Gemini 3-or-later Flash/Pro model. Azure deployments use `fsq providers configure azure_openai`. The browser's Settings page offers the same five Providers; see [the setup guide](docs/getting-started.md#configure-ai-exploration).
+For direct official OpenAI access, run `fsq providers configure openai` and enter the API key at the hidden prompt, then select an offered GPT-5-or-later model. DeepSeek uses `fsq providers configure deepseek` with its official Responses API and an explicitly selected eligible Flash/Pro model. Google Gemini uses `fsq providers configure google_gemini` with a [Google AI Studio API key](https://aistudio.google.com/apikey) and an explicitly selected stable Gemini 3-or-later Flash/Pro model. Kimi uses `fsq providers configure kimi` with an explicit China or Global region and an eligible K3-or-later model. Azure deployments use `fsq providers configure azure_openai`. The browser's Settings page offers the same six Providers; see [the setup guide](docs/getting-started.md#configure-ai-exploration).
 
 Then return to the Workspace:
 

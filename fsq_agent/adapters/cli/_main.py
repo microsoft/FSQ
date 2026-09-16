@@ -31,6 +31,7 @@ from fsq_agent.application import (
     configure_azure_openai,
     configure_deepseek,
     configure_google_gemini,
+    configure_kimi,
     configure_openai,
     create_case,
     diagnose_workspace,
@@ -41,6 +42,7 @@ from fsq_agent.application import (
     initialize_workspace,
     list_deepseek_models,
     list_google_gemini_models,
+    list_kimi_models,
     list_openai_models,
     list_runs,
     normalize_application_error,
@@ -382,16 +384,17 @@ def providers() -> None:
 
 
 @providers.command(name="configure")
-@click.argument("name", type=click.Choice(["github_copilot", "azure_openai", "openai", "deepseek", "google_gemini"]))
+@click.argument("name", type=click.Choice(["github_copilot", "azure_openai", "openai", "deepseek", "google_gemini", "kimi"]))
 @click.option("--base-url", default=None)
 @click.option("--model", default=None)
 @click.option("--api-key", default=None)
+@click.option("--region", type=click.Choice(["cn", "global"]), default=None)
 @click.pass_context
-def providers_configure(context: click.Context, name: str, base_url: str | None, model: str | None, api_key: str | None) -> None:
+def providers_configure(context: click.Context, name: str, base_url: str | None, model: str | None, api_key: str | None, region: str | None) -> None:
     machine = context.obj["output"] != "human"
     if name == "github_copilot":
-        if base_url is not None or api_key is not None:
-            raise click.UsageError("--base-url and --api-key do not apply to github_copilot")
+        if base_url is not None or api_key is not None or region is not None:
+            raise click.UsageError("--base-url, --api-key, and --region do not apply to github_copilot")
         if machine or context.obj["non_interactive"]:
             raise click.UsageError("GitHub Copilot configuration requires Human interactive mode")
         device = request_github_device_code()
@@ -409,7 +412,32 @@ def providers_configure(context: click.Context, name: str, base_url: str | None,
             return choices[click.prompt("Select model", type=click.Choice(list(choices)))]
 
         result = complete_github_configuration(device, model=model, select_model=select_model, cancel_requested=lambda: False)
+    elif name == "kimi":
+        if base_url is not None:
+            raise click.UsageError("--base-url applies only to azure_openai; Kimi uses fixed official regional endpoints")
+        if (machine or context.obj["non_interactive"]) and (not region or not model or not api_key):
+            raise click.UsageError("--region, --model, and --api-key are required")
+        if not region:
+            region = click.prompt("Kimi region", type=click.Choice(["cn", "global"]))
+        if not api_key:
+            api_key = click.prompt("Kimi API key", hide_input=True)
+        if not model:
+            models = list_kimi_models(region=region, api_key=api_key)
+            if not models:
+                raise ApplicationError(
+                    code=ApplicationErrorCode.PROVIDER_UNAVAILABLE,
+                    category=ApplicationErrorCategory.UNAVAILABLE,
+                    message="No eligible Kimi models are available.",
+                    action="Check model access for the selected region or use another Provider.",
+                )
+            choices = {str(index): item.id for index, item in enumerate(models, start=1)}
+            for index, item in enumerate(models, start=1):
+                click.echo(f"{index}. {item.name}")
+            model = choices[click.prompt("Select model", type=click.Choice(list(choices)))]
+        result = configure_kimi(region=region, model=model, api_key=api_key)
     elif name in {"openai", "deepseek", "google_gemini"}:
+        if region is not None:
+            raise click.UsageError("--region applies only to kimi")
         provider_name = {"openai": "OpenAI", "deepseek": "DeepSeek", "google_gemini": "Google Gemini"}[name]
         discover = {"openai": list_openai_models, "deepseek": list_deepseek_models, "google_gemini": list_google_gemini_models}[name]
         configure = {"openai": configure_openai, "deepseek": configure_deepseek, "google_gemini": configure_google_gemini}[name]
@@ -434,6 +462,8 @@ def providers_configure(context: click.Context, name: str, base_url: str | None,
             model = choices[click.prompt("Select model", type=click.Choice(list(choices)))]
         result = configure(model=model, api_key=api_key)
     else:
+        if region is not None:
+            raise click.UsageError("--region applies only to kimi")
         if not base_url:
             if machine or context.obj["non_interactive"]:
                 raise click.UsageError("--base-url, --model, and --api-key are required")
@@ -457,6 +487,8 @@ def providers_status(context: click.Context) -> None:
     value = result.model_dump(mode="json")
     if context.obj["output"] == "human":
         click.echo(f"Provider: {result.provider or 'not configured'}")
+        if result.region:
+            click.echo(f"Region: {result.region}")
         click.echo(f"Model: {result.model or 'not configured'}")
         click.echo(f"Status: {result.status}")
         click.echo(result.message)

@@ -8,7 +8,7 @@ This guide takes a new user from installation to a deterministic Web run against
 - A supported installed Chromium-family browser. The examples use stable Chrome.
 - An empty directory you can use as a local FSQ Workspace.
 
-AI exploration and suggestion analysis also require OpenAI, Google Gemini, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
+AI exploration and suggestion analysis also require OpenAI, DeepSeek, Google Gemini, Kimi, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
 
 ## Install
 
@@ -51,12 +51,12 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
-Alternatively run `fsq providers configure openai` for the official OpenAI API, `fsq providers configure deepseek` for the official DeepSeek Responses API, or `fsq providers configure azure_openai` for an Azure deployment. Provider configuration is user-level, stored below `~/.fsq`, and shared with the local Control Plane. API-key providers prompt privately and offer eligible models; even a single model requires explicit selection.
+Alternatively run `fsq providers configure openai` for the official OpenAI API, `fsq providers configure deepseek` for the official DeepSeek Responses API, `fsq providers configure kimi` for the official China or Global Kimi API, or `fsq providers configure azure_openai` for an Azure deployment. Provider configuration is user-level, stored below `~/.fsq`, and shared with the local Control Plane. API-key Providers prompt privately for a key and offer eligible models; even a single model requires explicit selection.
 
 For browser configuration, run `fsq ui` and open **Settings**:
 
-1. Choose **Add configuration** or **Change provider**, then **OpenAI**, **DeepSeek**, or **Google Gemini**.
-2. Enter an API key and select **Load models**. Select one offered model, then **Save changes**.
+1. Choose **Add configuration** or **Change provider**, then **OpenAI**, **DeepSeek**, **Google Gemini**, or **Kimi**.
+2. For Kimi, explicitly choose **China** or **Global**. Enter an API key and select **Load models**. Select one offered model, then **Save changes**.
 3. Select **Test connection** to send a minimal request using the saved configuration.
 4. Return to **Home** to see the Provider summary, then open **Test Runner**, choose a Workspace/platform/target, and start an Explore task explicitly.
 
@@ -67,6 +67,10 @@ DeepSeek always uses `https://api.deepseek.com/` and the Responses API. Its pick
 For Gemini, obtain an API key from [Google AI Studio](https://aistudio.google.com/apikey). Use the browser flow above or run `fsq providers configure google_gemini`; the interactive command hides the key and requires an explicit model selection. The picker loads all bounded model-list pages and offers only stable Gemini 3-or-later general-purpose Flash/Pro ids with content-generation support. Preview, Latest, Experimental, Lite, image/audio/embedding and other specialized variants are excluded. An incomplete discovery is an error, not a partial selectable list. The fixed Developer API uses native Interactions with `store=false` and local conversation history; Vertex AI, ADC/service accounts, and custom endpoints are not supported.
 
 Gemini metadata lives in the version-3 user configuration and its plaintext key in `~/.fsq/auth/google-gemini.json`. The same saved Provider serves pre-planning, execution, final verification, AI visual assertions, suggestions, and connection tests. **Test connection** proves a minimal saved-model request, not every tool/schema feature or Case. Start Explore explicitly, inspect its evidence, and save the generated Case using the normal flow; Strict Replay uses Gemini only when its Case requires AI assertions.
+
+For Kimi, create a key in the [China platform](https://platform.kimi.com/console/api-keys) or [Global platform](https://platform.kimi.ai/console/api-keys). China keys use only `https://api.moonshot.cn/v1`; Global keys use only `https://api.moonshot.ai/v1`. The picker accepts stable `kimi-k3` or later versioned models and rejects preview, beta, alpha, experimental, release-candidate, latest, and dated snapshot ids without maintaining a fixed positive allowlist. A future model passing this filter is best-effort rather than guaranteed compatible. FSQ uses the Responses API only, maps neutral reasoning effort to Kimi `low`, `high`, or `max`, and does not fall back to Chat Completions, Messages, another model, or another region.
+
+Kimi image capability is not a picker requirement. If the selected model rejects an image, schema, tool, or Responses request, FSQ returns the normal safe model/AI assertion error. Dynamic execution can choose another available tool on a later turn; an authored static AI assertion remains a failed step with its evidence. Kimi metadata lives in the version-3 user configuration and its plaintext key in `~/.fsq/auth/kimi.json`.
 
 Saving rechecks model visibility but does not run inference. Readiness/status is a local configuration check, not a connection test. API keys are plaintext local credentials, masked in Settings by default but returned in full by the trusted-loopback Config API. Successful Provider replacement removes inactive credentials. Neither configuration nor execution falls back to environment variables or another Provider.
 

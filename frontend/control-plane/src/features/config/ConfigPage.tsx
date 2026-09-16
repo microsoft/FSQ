@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ControlPlaneClient } from '../../api/controlPlaneClient';
-import type { AzureConfigPayload, ConfigResponse, DeepSeekConfigPayload, GoogleGeminiConfigPayload, OpenAIConfigPayload } from '../../api/types';
+import type { AzureConfigPayload, ConfigResponse, DeepSeekConfigPayload, GoogleGeminiConfigPayload, KimiConfigPayload, OpenAIConfigPayload } from '../../api/types';
 import { AzureConfigForm } from './components/AzureConfigForm';
 import { DeepSeekConfigForm } from './components/DeepSeekConfigForm';
 import { OpenAIConfigForm } from './components/OpenAIConfigForm';
 import { GoogleGeminiConfigForm } from './components/GoogleGeminiConfigForm';
+import { KimiConfigForm, type KimiDraftPayload } from './components/KimiConfigForm';
 import { ConnectionResultDialog } from './components/ConnectionResultDialog';
 import { ProviderDialog } from './components/ProviderDialog';
 import { useProviderConfig } from './hooks/useProviderConfig';
@@ -16,53 +17,58 @@ interface ConfigPageProps {
   onSaveUncertainChange?: (uncertain: boolean) => void;
 }
 
+type ConfigDraft =
+  | { type: 'openai'; payload: OpenAIConfigPayload }
+  | { type: 'azure_openai'; payload: AzureConfigPayload }
+  | { type: 'deepseek'; payload: DeepSeekConfigPayload }
+  | { type: 'google_gemini'; payload: GoogleGeminiConfigPayload }
+  | { type: 'kimi'; payload: KimiDraftPayload };
+
 const emptyAzure: AzureConfigPayload = { baseUrl: '', modelName: '', apiKey: '' };
 
-function persistedAzure(config: ConfigResponse | null): AzureConfigPayload | null {
-  if (!config?.configured || config.provider.type !== 'azure_openai') return null;
-  return { baseUrl: config.provider.baseUrl, modelName: config.provider.modelName, apiKey: config.provider.apiKey };
+function persistedDraft(config: ConfigResponse | null): ConfigDraft | null {
+  if (!config?.configured) return null;
+  const provider = config.provider;
+  if (provider.type === 'openai') return { type: 'openai', payload: { modelName: provider.modelName, apiKey: provider.apiKey } };
+  if (provider.type === 'azure_openai') return { type: 'azure_openai', payload: { baseUrl: provider.baseUrl, modelName: provider.modelName, apiKey: provider.apiKey } };
+  if (provider.type === 'deepseek') return { type: 'deepseek', payload: { modelName: provider.modelName, apiKey: provider.apiKey } };
+  if (provider.type === 'google_gemini') return { type: 'google_gemini', payload: { modelName: provider.modelName, apiKey: provider.apiKey } };
+  if (provider.type === 'kimi') return { type: 'kimi', payload: { region: provider.region, modelName: provider.modelName, apiKey: provider.apiKey } };
+  return null;
 }
 
-function normalized(value: AzureConfigPayload): AzureConfigPayload {
-  return { baseUrl: value.baseUrl.trim(), modelName: value.modelName.trim(), apiKey: value.apiKey.trim() };
+function normalizedDraft(draft: ConfigDraft): ConfigDraft {
+  if (draft.type === 'azure_openai') {
+    return { type: draft.type, payload: { baseUrl: draft.payload.baseUrl.trim(), modelName: draft.payload.modelName.trim(), apiKey: draft.payload.apiKey.trim() } };
+  }
+  if (draft.type === 'kimi') {
+    return { type: draft.type, payload: { region: draft.payload.region, modelName: draft.payload.modelName.trim(), apiKey: draft.payload.apiKey.trim() } };
+  }
+  return { type: draft.type, payload: { modelName: draft.payload.modelName.trim(), apiKey: draft.payload.apiKey.trim() } };
 }
 
-function sameAzure(left: AzureConfigPayload, right: AzureConfigPayload): boolean {
-  const a = normalized(left);
-  const b = normalized(right);
-  return a.baseUrl === b.baseUrl && a.modelName === b.modelName && a.apiKey === b.apiKey;
+function sameDraft(left: ConfigDraft, right: ConfigDraft): boolean {
+  return left.type === right.type && JSON.stringify(normalizedDraft(left)) === JSON.stringify(normalizedDraft(right));
+}
+
+function draftHasValue(draft: ConfigDraft): boolean {
+  return Object.values(normalizedDraft(draft).payload).some(Boolean);
+}
+
+function copyDraft(draft: ConfigDraft | null): ConfigDraft | null {
+  return draft ? { ...draft, payload: { ...draft.payload } } as ConfigDraft : null;
 }
 
 export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveUncertainChange }: ConfigPageProps) {
   const provider = useProviderConfig(client);
   const connectionOpener = useRef<HTMLElement | null>(null);
-  const testConnection = () => {
-    connectionOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    void provider.testSavedConnection();
-  };
-  const [azureDraft, setAzureDraft] = useState<AzureConfigPayload | null>(null);
-  const [deepseekDraft, setDeepSeekDraft] = useState<DeepSeekConfigPayload | null>(null);
-  const [openaiDraft, setOpenAIDraft] = useState<OpenAIConfigPayload | null>(null);
-  const [geminiDraft, setGeminiDraft] = useState<GoogleGeminiConfigPayload | null>(null);
+  const [draft, setDraft] = useState<ConfigDraft | null>(null);
   const appliedConfig = useRef<ConfigResponse | null>(null);
   const [providerDialogOpen, setProviderDialogOpen] = useState(false);
-  const loadedAzure = useMemo(() => persistedAzure(provider.config.data), [provider.config.data]);
-  const loadedOpenAI = useMemo(() => {
-    const config = provider.config.data;
-    return config?.configured && config.provider.type === 'openai' ? { modelName: config.provider.modelName, apiKey: config.provider.apiKey } : null;
-  }, [provider.config.data]);
   const loadedProvider = provider.config.data?.configured ? provider.config.data.provider : null;
-  const loadedDeepSeek = useMemo(() => loadedProvider?.type === 'deepseek' ? { modelName: loadedProvider.modelName, apiKey: loadedProvider.apiKey } : null, [loadedProvider]);
-  const loadedGemini = useMemo(() => loadedProvider?.type === 'google_gemini' ? { modelName: loadedProvider.modelName, apiKey: loadedProvider.apiKey } : null, [loadedProvider]);
-  const dirty = geminiDraft !== null
-    ? loadedGemini ? geminiDraft.modelName.trim() !== loadedGemini.modelName || geminiDraft.apiKey.trim() !== loadedGemini.apiKey : Boolean(geminiDraft.modelName.trim() || geminiDraft.apiKey.trim())
-    : deepseekDraft !== null
-    ? loadedDeepSeek ? deepseekDraft.modelName.trim() !== loadedDeepSeek.modelName || deepseekDraft.apiKey.trim() !== loadedDeepSeek.apiKey : Boolean(deepseekDraft.modelName.trim() || deepseekDraft.apiKey.trim())
-    : openaiDraft !== null
-    ? loadedOpenAI ? openaiDraft.modelName.trim() !== loadedOpenAI.modelName || openaiDraft.apiKey.trim() !== loadedOpenAI.apiKey : Boolean(openaiDraft.modelName.trim() || openaiDraft.apiKey.trim())
-    : azureDraft !== null && (loadedAzure ? !sameAzure(azureDraft, loadedAzure) : Object.values(normalized(azureDraft)).some(Boolean));
-  const draftType = geminiDraft ? 'google_gemini' : deepseekDraft ? 'deepseek' : openaiDraft ? 'openai' : azureDraft ? 'azure_openai' : null;
-  const replacementDraft = draftType !== null && loadedProvider !== null && loadedProvider.type !== draftType;
+  const loadedDraft = useMemo(() => persistedDraft(provider.config.data), [provider.config.data]);
+  const dirty = draft !== null && (loadedDraft?.type === draft.type ? !sameDraft(draft, loadedDraft) : draftHasValue(draft));
+  const replacementDraft = draft !== null && loadedProvider !== null && loadedProvider.type !== draft.type;
   const recoveryBlocked = provider.saveRecovery === 'loading' || provider.saveRecovery === 'unavailable';
   const saveUncertain = provider.saveRecovery !== 'none';
   const deviceBusy = provider.deviceFlowPending !== null;
@@ -71,133 +77,111 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     if (!provider.config.data || appliedConfig.current === provider.config.data) return;
     appliedConfig.current = provider.config.data;
     if (provider.saveRecovery !== 'none') return;
-    if (loadedAzure) { setAzureDraft(loadedAzure); setOpenAIDraft(null); setDeepSeekDraft(null); setGeminiDraft(null); }
-    else if (loadedOpenAI) { setOpenAIDraft(loadedOpenAI); setAzureDraft(null); setDeepSeekDraft(null); setGeminiDraft(null); }
-    else if (loadedDeepSeek) { setDeepSeekDraft(loadedDeepSeek); setAzureDraft(null); setOpenAIDraft(null); setGeminiDraft(null); }
-    else if (loadedGemini) { setGeminiDraft(loadedGemini); setAzureDraft(null); setOpenAIDraft(null); setDeepSeekDraft(null); }
-  }, [loadedAzure, loadedOpenAI, loadedDeepSeek, loadedGemini, provider.config.data, provider.saveRecovery]);
+    setDraft(copyDraft(loadedDraft));
+  }, [loadedDraft, provider.config.data, provider.saveRecovery]);
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => { onSavePendingChange?.(provider.savePending); return () => onSavePendingChange?.(false); }, [provider.savePending, onSavePendingChange]);
   useEffect(() => { onSaveUncertainChange?.(saveUncertain); return () => onSaveUncertainChange?.(false); }, [saveUncertain, onSaveUncertainChange]);
   useEffect(() => {
     if (provider.deviceFlow?.status !== 'success' || !provider.config.data?.configured || provider.config.data.provider.type !== 'github_copilot') return;
-    setAzureDraft(null);
-    setOpenAIDraft(null);
-    setDeepSeekDraft(null);
-    setGeminiDraft(null);
+    setDraft(null);
     setProviderDialogOpen(false);
     void provider.clearDeviceFlow();
   }, [provider.config.data, provider.deviceFlow?.status, provider.clearDeviceFlow]);
 
-  const discardDraft = () => {
-    setAzureDraft(loadedAzure ? { ...loadedAzure } : null);
-    setOpenAIDraft(loadedOpenAI ? { ...loadedOpenAI } : null);
-    setDeepSeekDraft(loadedDeepSeek ? { ...loadedDeepSeek } : null);
-    setGeminiDraft(loadedGemini ? { ...loadedGemini } : null);
+  const clearDiscoveries = () => {
     provider.clearOpenAIModels();
     provider.clearDeepSeekModels();
     provider.clearGeminiModels();
+    provider.clearKimiModels();
   };
-  const confirmDiscard = () => !provider.savePending && (!saveUncertain || window.confirm('The save result is unknown. Leaving does not cancel it. Continue?')) && (!dirty || window.confirm('Discard unsaved Provider changes?'));
+  const discardDraft = () => {
+    setDraft(copyDraft(loadedDraft));
+    clearDiscoveries();
+    provider.clearSaveError();
+  };
+  const confirmDiscard = () => !provider.savePending
+    && (!saveUncertain || window.confirm('The save result is unknown. Leaving does not cancel it. Continue?'))
+    && (!dirty || window.confirm('Discard unsaved Provider changes?'));
   const openProviderDialog = () => {
-    if (recoveryBlocked) return;
-    if (!confirmDiscard()) return;
+    if (recoveryBlocked || !confirmDiscard()) return;
     discardDraft();
     void provider.clearDeviceFlow();
     setProviderDialogOpen(true);
   };
-  const cancelAzure = () => {
-    if (!confirmDiscard()) return;
-    discardDraft();
+  const cancelDraft = () => {
+    if (confirmDiscard()) discardDraft();
   };
-  const selectAzure = () => {
-    setGeminiDraft(null);
-    provider.clearGeminiModels();
-    setOpenAIDraft(null);
-    provider.clearOpenAIModels();
-    setDeepSeekDraft(null);
-    provider.clearDeepSeekModels();
-    setAzureDraft(loadedAzure ? { ...loadedAzure } : { ...emptyAzure });
+  const selectProvider = (next: ConfigDraft) => {
+    clearDiscoveries();
+    setDraft(next);
     setProviderDialogOpen(false);
     void provider.clearDeviceFlow();
   };
-  const selectOpenAI = () => {
-    setGeminiDraft(null);
-    provider.clearGeminiModels();
-    setAzureDraft(null);
-    setDeepSeekDraft(null);
-    provider.clearDeepSeekModels();
-    setOpenAIDraft(loadedOpenAI ? { ...loadedOpenAI } : { modelName: '', apiKey: '' });
-    provider.clearOpenAIModels();
-    setProviderDialogOpen(false);
-    void provider.clearDeviceFlow();
-  };
-  const changeOpenAI = (draft: OpenAIConfigPayload) => {
-    if (draft.apiKey !== openaiDraft?.apiKey) provider.clearOpenAIModels();
-    setOpenAIDraft(draft);
-  };
+
   const loadOpenAIModels = async () => {
-    if (!openaiDraft) return;
-    const key = openaiDraft.apiKey;
+    if (draft?.type !== 'openai') return;
+    const key = draft.payload.apiKey;
     const data = await provider.loadOpenAIModels(key);
     if (!data) return;
-    setOpenAIDraft(current => current?.apiKey === key ? {
-      ...current,
-      modelName: data.models.some(model => model.id === current.modelName) ? current.modelName
-        : loadedOpenAI?.apiKey === key.trim() && data.models.some(model => model.id === loadedOpenAI.modelName) ? loadedOpenAI.modelName : '',
+    setDraft(current => current?.type === 'openai' && current.payload.apiKey === key ? {
+      type: 'openai',
+      payload: {
+        ...current.payload,
+        modelName: data.models.some(model => model.id === current.payload.modelName) ? current.payload.modelName
+          : loadedProvider?.type === 'openai' && loadedProvider.apiKey === key.trim() && data.models.some(model => model.id === loadedProvider.modelName) ? loadedProvider.modelName : '',
+      },
     } : current);
-  };
-  const selectDeepSeek = () => {
-    setOpenAIDraft(null);
-    setAzureDraft(null);
-    setGeminiDraft(null);
-    setDeepSeekDraft(loadedDeepSeek ? { ...loadedDeepSeek } : { modelName: '', apiKey: '' });
-    provider.clearOpenAIModels();
-    provider.clearGeminiModels();
-    provider.clearDeepSeekModels();
-    setProviderDialogOpen(false);
-    void provider.clearDeviceFlow();
-  };
-  const changeDeepSeek = (draft: DeepSeekConfigPayload) => {
-    if (draft.apiKey !== deepseekDraft?.apiKey) provider.clearDeepSeekModels();
-    setDeepSeekDraft(draft);
   };
   const loadDeepSeekModels = async () => {
-    if (!deepseekDraft) return;
-    const key = deepseekDraft.apiKey;
+    if (draft?.type !== 'deepseek') return;
+    const key = draft.payload.apiKey;
     const data = await provider.loadDeepSeekModels(key);
     if (!data) return;
-    setDeepSeekDraft(current => current?.apiKey === key ? {
-      ...current,
-      modelName: data.models.some(model => model.id === current.modelName) ? current.modelName
-        : loadedDeepSeek?.apiKey === key.trim() && data.models.some(model => model.id === loadedDeepSeek.modelName) ? loadedDeepSeek.modelName : '',
+    setDraft(current => current?.type === 'deepseek' && current.payload.apiKey === key ? {
+      type: 'deepseek',
+      payload: {
+        ...current.payload,
+        modelName: data.models.some(model => model.id === current.payload.modelName) ? current.payload.modelName
+          : loadedProvider?.type === 'deepseek' && loadedProvider.apiKey === key.trim() && data.models.some(model => model.id === loadedProvider.modelName) ? loadedProvider.modelName : '',
+      },
     } : current);
-  };
-  const selectGemini = () => {
-    setOpenAIDraft(null);
-    setAzureDraft(null);
-    setDeepSeekDraft(null);
-    setGeminiDraft(loadedGemini ? { ...loadedGemini } : { modelName: '', apiKey: '' });
-    provider.clearOpenAIModels();
-    provider.clearDeepSeekModels();
-    provider.clearGeminiModels();
-    setProviderDialogOpen(false);
-    void provider.clearDeviceFlow();
-  };
-  const changeGemini = (draft: GoogleGeminiConfigPayload) => {
-    if (draft.apiKey !== geminiDraft?.apiKey) provider.clearGeminiModels();
-    setGeminiDraft(draft);
   };
   const loadGeminiModels = async () => {
-    if (!geminiDraft) return;
-    const key = geminiDraft.apiKey;
+    if (draft?.type !== 'google_gemini') return;
+    const key = draft.payload.apiKey;
     const data = await provider.loadGeminiModels(key);
     if (!data) return;
-    setGeminiDraft(current => current?.apiKey === key ? {
-      ...current,
-      modelName: data.models.some(model => model.id === current.modelName) ? current.modelName
-        : loadedGemini?.apiKey === key.trim() && data.models.some(model => model.id === loadedGemini.modelName) ? loadedGemini.modelName : '',
+    setDraft(current => current?.type === 'google_gemini' && current.payload.apiKey === key ? {
+      type: 'google_gemini',
+      payload: {
+        ...current.payload,
+        modelName: data.models.some(model => model.id === current.payload.modelName) ? current.payload.modelName
+          : loadedProvider?.type === 'google_gemini' && loadedProvider.apiKey === key.trim() && data.models.some(model => model.id === loadedProvider.modelName) ? loadedProvider.modelName : '',
+      },
     } : current);
+  };
+  const loadKimiModels = async () => {
+    if (draft?.type !== 'kimi' || !draft.payload.region) return;
+    const region = draft.payload.region;
+    const key = draft.payload.apiKey;
+    const identity = `${region}\0${key.trim()}`;
+    const data = await provider.loadKimiModels(region, key);
+    if (!data) return;
+    setDraft(current => current?.type === 'kimi' && `${current.payload.region}\0${current.payload.apiKey.trim()}` === identity ? {
+      type: 'kimi',
+      payload: {
+        ...current.payload,
+        modelName: data.models.some(model => model.id === current.payload.modelName) ? current.payload.modelName
+          : loadedProvider?.type === 'kimi' && loadedProvider.region === region && loadedProvider.apiKey === key.trim()
+            && data.models.some(model => model.id === loadedProvider.modelName) ? loadedProvider.modelName : '',
+      },
+    } : current);
+  };
+
+  const testConnection = () => {
+    connectionOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    void provider.testSavedConnection();
   };
   const closeProviderDialog = async () => {
     await provider.clearDeviceFlow();
@@ -221,30 +205,59 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
   }
 
   const configured = provider.config.data?.configured === true;
-  const canTest = configured && !dirty && !replacementDraft && !provider.savePending && !deviceBusy && !provider.testPending && !recoveryBlocked && provider.openaiModels.state !== 'loading' && provider.deepseekModels.state !== 'loading' && provider.geminiModels.state !== 'loading';
+  const discoveryLoading = provider.openaiModels.state === 'loading' || provider.deepseekModels.state === 'loading' || provider.geminiModels.state === 'loading' || provider.kimiModels.state === 'loading';
+  const canTest = configured && !dirty && !replacementDraft && !provider.savePending && !deviceBusy && !provider.testPending && !recoveryBlocked && !discoveryLoading;
   return <div className="config-page">
     {saveUncertain && <div className="config-recovery" role="status">
       <strong>The save result could not be confirmed.</strong>
       <p>{provider.saveRecovery === 'loading' ? 'Reading current configuration...' : provider.saveRecovery === 'unavailable' ? 'Current configuration is unavailable. Changes remain blocked.' : 'Current configuration reloaded. The earlier request may still complete. Remaining changes are unsaved.'}</p>
-      <button className="button" type="button" disabled={provider.savePending || provider.saveRecovery === 'loading'} onClick={() => void provider.reconcileOpenAI()}>Reload configuration</button>
+      <button className="button" type="button" disabled={provider.savePending || provider.saveRecovery === 'loading'} onClick={() => void provider.reconcileConfig()}>Reload configuration</button>
     </div>}
     {provider.config.error && <div className="config-error" role="alert"><strong>{provider.config.error.message}</strong><span>{provider.config.error.action}</span></div>}
-    {geminiDraft ? <GoogleGeminiConfigForm draft={geminiDraft} configured={loadedProvider?.type === 'google_gemini'} dirty={dirty}
+    {draft?.type === 'kimi' ? <KimiConfigForm draft={draft.payload} configured={loadedProvider?.type === 'kimi'} dirty={dirty}
+      models={provider.kimiModels} blocked={recoveryBlocked} savePending={provider.savePending} saveError={provider.saveError}
+      testPending={provider.testPending} canTest={canTest}
+      onChange={payload => {
+        if (payload.region !== draft.payload.region || payload.apiKey !== draft.payload.apiKey) provider.clearKimiModels();
+        setDraft({ type: 'kimi', payload });
+      }}
+      onLoadModels={() => void loadKimiModels()}
+      onSave={() => {
+        if (!draft.payload.region) return;
+        void provider.saveKimi({ ...draft.payload, region: draft.payload.region } satisfies KimiConfigPayload);
+      }}
+      onCancel={cancelDraft} onChangeProvider={openProviderDialog} onTest={testConnection}
+    /> : draft?.type === 'google_gemini' ? <GoogleGeminiConfigForm draft={draft.payload} configured={loadedProvider?.type === 'google_gemini'} dirty={dirty}
       models={provider.geminiModels} blocked={recoveryBlocked} savePending={provider.savePending} saveError={provider.saveError}
-      testPending={provider.testPending} canTest={canTest} onChange={changeGemini} onLoadModels={() => void loadGeminiModels()}
-      onSave={() => void provider.saveGemini(geminiDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog} onTest={testConnection}
-    /> : deepseekDraft ? <DeepSeekConfigForm draft={deepseekDraft} configured={loadedProvider?.type === 'deepseek'} dirty={dirty}
+      testPending={provider.testPending} canTest={canTest}
+      onChange={payload => {
+        if (payload.apiKey !== draft.payload.apiKey) provider.clearGeminiModels();
+        setDraft({ type: 'google_gemini', payload });
+      }}
+      onLoadModels={() => void loadGeminiModels()} onSave={() => void provider.saveGemini(draft.payload)}
+      onCancel={cancelDraft} onChangeProvider={openProviderDialog} onTest={testConnection}
+    /> : draft?.type === 'deepseek' ? <DeepSeekConfigForm draft={draft.payload} configured={loadedProvider?.type === 'deepseek'} dirty={dirty}
       models={provider.deepseekModels} blocked={recoveryBlocked} savePending={provider.savePending} saveError={provider.saveError}
-      testPending={provider.testPending} canTest={canTest} onChange={changeDeepSeek} onLoadModels={() => void loadDeepSeekModels()}
-      onSave={() => void provider.saveDeepSeek(deepseekDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog} onTest={testConnection}
-    /> : openaiDraft ? <OpenAIConfigForm draft={openaiDraft} configured={loadedProvider?.type === 'openai'} dirty={dirty}
+      testPending={provider.testPending} canTest={canTest}
+      onChange={payload => {
+        if (payload.apiKey !== draft.payload.apiKey) provider.clearDeepSeekModels();
+        setDraft({ type: 'deepseek', payload });
+      }}
+      onLoadModels={() => void loadDeepSeekModels()} onSave={() => void provider.saveDeepSeek(draft.payload)}
+      onCancel={cancelDraft} onChangeProvider={openProviderDialog} onTest={testConnection}
+    /> : draft?.type === 'openai' ? <OpenAIConfigForm draft={draft.payload} configured={loadedProvider?.type === 'openai'} dirty={dirty}
       models={provider.openaiModels} blocked={recoveryBlocked} savePending={provider.savePending} saveError={provider.saveError}
-      testPending={provider.testPending} canTest={canTest} onChange={changeOpenAI} onLoadModels={() => void loadOpenAIModels()}
-      onSave={() => void provider.saveOpenAI(openaiDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog} onTest={testConnection}
-    /> : azureDraft ? <AzureConfigForm
-      draft={azureDraft} configured={loadedProvider?.type === 'azure_openai'} dirty={dirty} savePending={provider.savePending} blocked={recoveryBlocked}
-      saveError={provider.saveError} testPending={provider.testPending} canTest={canTest} onChange={setAzureDraft}
-      onSave={() => void provider.saveAzure(azureDraft)} onCancel={cancelAzure} onChangeProvider={openProviderDialog}
+      testPending={provider.testPending} canTest={canTest}
+      onChange={payload => {
+        if (payload.apiKey !== draft.payload.apiKey) provider.clearOpenAIModels();
+        setDraft({ type: 'openai', payload });
+      }}
+      onLoadModels={() => void loadOpenAIModels()} onSave={() => void provider.saveOpenAI(draft.payload)}
+      onCancel={cancelDraft} onChangeProvider={openProviderDialog} onTest={testConnection}
+    /> : draft?.type === 'azure_openai' ? <AzureConfigForm
+      draft={draft.payload} configured={loadedProvider?.type === 'azure_openai'} dirty={dirty} savePending={provider.savePending} blocked={recoveryBlocked}
+      saveError={provider.saveError} testPending={provider.testPending} canTest={canTest} onChange={payload => setDraft({ type: 'azure_openai', payload })}
+      onSave={() => void provider.saveAzure(draft.payload)} onCancel={cancelDraft} onChangeProvider={openProviderDialog}
       onTest={testConnection}
     /> : loadedProvider?.type === 'github_copilot' ? <section className="config-provider" aria-labelledby="github-provider-title">
       <div className="config-section-heading">
@@ -260,7 +273,12 @@ export function ConfigPage({ client, onDirtyChange, onSavePendingChange, onSaveU
     </section>}
     {providerDialogOpen && <ProviderDialog
       deviceFlow={provider.deviceFlow} deviceFlowPending={provider.deviceFlowPending} deviceFlowError={provider.deviceFlowError}
-      onSelectOpenAI={selectOpenAI} onSelectAzure={selectAzure} onSelectDeepSeek={selectDeepSeek} onSelectGemini={selectGemini} onStartGithub={provider.startGithub} onRetryModels={provider.retryGithubModels}
+      onSelectOpenAI={() => selectProvider(loadedProvider?.type === 'openai' && loadedDraft?.type === 'openai' ? copyDraft(loadedDraft)! : { type: 'openai', payload: { modelName: '', apiKey: '' } })}
+      onSelectAzure={() => selectProvider(loadedProvider?.type === 'azure_openai' && loadedDraft?.type === 'azure_openai' ? copyDraft(loadedDraft)! : { type: 'azure_openai', payload: { ...emptyAzure } })}
+      onSelectDeepSeek={() => selectProvider(loadedProvider?.type === 'deepseek' && loadedDraft?.type === 'deepseek' ? copyDraft(loadedDraft)! : { type: 'deepseek', payload: { modelName: '', apiKey: '' } })}
+      onSelectGemini={() => selectProvider(loadedProvider?.type === 'google_gemini' && loadedDraft?.type === 'google_gemini' ? copyDraft(loadedDraft)! : { type: 'google_gemini', payload: { modelName: '', apiKey: '' } })}
+      onSelectKimi={() => selectProvider(loadedProvider?.type === 'kimi' && loadedDraft?.type === 'kimi' ? copyDraft(loadedDraft)! : { type: 'kimi', payload: { region: '', modelName: '', apiKey: '' } })}
+      onStartGithub={provider.startGithub} onRetryModels={provider.retryGithubModels}
       onSaveModel={provider.saveGithubModel} onCancelAuthentication={cancelAuthentication}
       onClose={() => void closeProviderDialog()}
     />}

@@ -31,6 +31,7 @@ from ._config import (
     get_config,
     list_deepseek_config_models,
     list_google_gemini_config_models,
+    list_kimi_config_models,
     list_openai_config_models,
     map_config_exception,
     require_config_access,
@@ -38,6 +39,7 @@ from ._config import (
     save_azure_config,
     save_deepseek_config,
     save_google_gemini_config,
+    save_kimi_config,
     save_openai_config,
     test_saved_connection,
 )
@@ -581,8 +583,12 @@ class ControlPlaneServer:
                 return 200, list_deepseek_config_models(body)
             if method == "POST" and path == f"{_API_PREFIX}/config/google-gemini/models":
                 return 200, list_google_gemini_config_models(body)
+            if method == "POST" and path == f"{_API_PREFIX}/config/kimi/models":
+                return 200, list_kimi_config_models(body)
             if method == "PUT" and path == f"{_API_PREFIX}/config/google-gemini":
                 return 200, save_google_gemini_config(body, self.options.user_config_root)
+            if method == "PUT" and path == f"{_API_PREFIX}/config/kimi":
+                return 200, save_kimi_config(body, self.options.user_config_root)
             if method == "PUT" and path == f"{_API_PREFIX}/config/openai":
                 return 200, save_openai_config(body, self.options.user_config_root)
             if method == "PUT" and path == f"{_API_PREFIX}/config/deepseek":

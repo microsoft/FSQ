@@ -227,6 +227,38 @@ it('validates Gemini config and discovery with exact fields', async () => {
   await expect(controlPlaneClient.testConnection()).rejects.toMatchObject({ body: { code: 'invalid_response' } });
 });
 
+it('loads, saves, and tests Kimi with exact region-aware transports', async () => {
+  const signal = new AbortController().signal;
+  const config = { configured: true, provider: { type: 'kimi', region: 'global', modelName: 'kimi-k3', apiKey: 'global-key' } };
+  const fetch = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ id: 'kimi-k3', name: 'kimi-k3' }] })))
+    .mockResolvedValueOnce(new Response(JSON.stringify(config)))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, provider: 'kimi', modelName: 'kimi-k3', durationMs: 14 })));
+
+  await expect(controlPlaneClient.kimiModels({ region: 'global', apiKey: 'global-key' }, signal)).resolves.toEqual({ models: [{ id: 'kimi-k3', name: 'kimi-k3' }] });
+  await expect(controlPlaneClient.saveKimiConfig({ region: 'global', modelName: 'kimi-k3', apiKey: 'global-key' }, signal)).resolves.toEqual(config);
+  await expect(controlPlaneClient.testConnection(signal)).resolves.toMatchObject({ provider: 'kimi' });
+
+  expect(fetch).toHaveBeenNthCalledWith(1, '/api/control-plane/config/kimi/models', expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ region: 'global', apiKey: 'global-key' }), signal,
+  }));
+  expect(fetch).toHaveBeenNthCalledWith(2, '/api/control-plane/config/kimi', expect.objectContaining({
+    method: 'PUT', body: JSON.stringify({ region: 'global', modelName: 'kimi-k3', apiKey: 'global-key' }), signal,
+  }));
+});
+
+it.each([
+  { type: 'kimi', modelName: 'kimi-k3', apiKey: 'key' },
+  { type: 'kimi', region: '', modelName: 'kimi-k3', apiKey: 'key' },
+  { type: 'kimi', region: 'us', modelName: 'kimi-k3', apiKey: 'key' },
+  { type: 'kimi', region: 'cn', modelName: '', apiKey: 'key' },
+  { type: 'kimi', region: 'cn', modelName: 'kimi-k3', apiKey: ' ' },
+  { type: 'kimi', region: 'cn', modelName: 'kimi-k3', apiKey: 'key', endpoint: 'https://example.test' },
+])('rejects malformed Kimi Config projections', async provider => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ configured: true, provider })));
+  await expect(controlPlaneClient.config()).rejects.toMatchObject({ body: { code: 'invalid_response' } });
+});
+
 it('rejects an OpenAI configuration with a custom endpoint', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'local-key', baseUrl: 'https://untrusted.example' } })));
   await expect(controlPlaneClient.config()).rejects.toMatchObject({ body: { code: 'invalid_response' } });
