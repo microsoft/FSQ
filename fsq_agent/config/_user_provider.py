@@ -264,7 +264,14 @@ def save_openai_provider(
                 auth_dir / OPENAI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / AZURE_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [
+                auth_dir / AZURE_AUTH_FILENAME,
+                auth_dir / DEEPSEEK_AUTH_FILENAME,
+                auth_dir / GEMINI_AUTH_FILENAME,
+                auth_dir / KIMI_AUTH_FILENAME,
+                auth_dir / GITHUB_AUTH_FILENAME,
+                auth_dir / GITHUB_PROVIDER_AUTH_FILENAME,
+            ],
             provider="openai",
         )
         return config
@@ -300,7 +307,14 @@ def save_deepseek_provider(*, model: str, api_key: str, user_config_root: str | 
         config._api_key = normalized_api_key
         _commit_replacement(
             {auth_dir / DEEPSEEK_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}), config_path: _yaml_bytes(config)},
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [
+                auth_dir / OPENAI_AUTH_FILENAME,
+                auth_dir / AZURE_AUTH_FILENAME,
+                auth_dir / GEMINI_AUTH_FILENAME,
+                auth_dir / KIMI_AUTH_FILENAME,
+                auth_dir / GITHUB_AUTH_FILENAME,
+                auth_dir / GITHUB_PROVIDER_AUTH_FILENAME,
+            ],
             provider="deepseek",
         )
         return config
@@ -322,7 +336,14 @@ def save_google_gemini_provider(*, model: str, api_key: str, user_config_root: s
         config._api_key = normalized_api_key
         _commit_replacement(
             {auth_dir / GEMINI_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}), config_path: _yaml_bytes(config)},
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / AZURE_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [
+                auth_dir / OPENAI_AUTH_FILENAME,
+                auth_dir / AZURE_AUTH_FILENAME,
+                auth_dir / DEEPSEEK_AUTH_FILENAME,
+                auth_dir / KIMI_AUTH_FILENAME,
+                auth_dir / GITHUB_AUTH_FILENAME,
+                auth_dir / GITHUB_PROVIDER_AUTH_FILENAME,
+            ],
             provider="google_gemini",
         )
         return config
@@ -392,7 +413,14 @@ def save_azure_openai_provider(
                 auth_dir / AZURE_AUTH_FILENAME: _json_bytes({"api_key": normalized_api_key}),
                 config_path: _yaml_bytes(config),
             },
-            [auth_dir / OPENAI_AUTH_FILENAME, auth_dir / DEEPSEEK_AUTH_FILENAME, auth_dir / GEMINI_AUTH_FILENAME, auth_dir / KIMI_AUTH_FILENAME, auth_dir / GITHUB_AUTH_FILENAME, auth_dir / GITHUB_PROVIDER_AUTH_FILENAME],
+            [
+                auth_dir / OPENAI_AUTH_FILENAME,
+                auth_dir / DEEPSEEK_AUTH_FILENAME,
+                auth_dir / GEMINI_AUTH_FILENAME,
+                auth_dir / KIMI_AUTH_FILENAME,
+                auth_dir / GITHUB_AUTH_FILENAME,
+                auth_dir / GITHUB_PROVIDER_AUTH_FILENAME,
+            ],
         )
         return _load_complete_user_config(root)
 
