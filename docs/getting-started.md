@@ -8,7 +8,7 @@ This guide takes a new user from installation to a deterministic Web run against
 - A supported installed Chromium-family browser. The examples use stable Chrome.
 - An empty directory you can use as a local FSQ Workspace.
 
-AI exploration and suggestion analysis also require OpenAI, Google Gemini, Kimi, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
+AI exploration and suggestion analysis also require OpenAI, DeepSeek, Google Gemini, Kimi, GitHub Copilot, or Azure OpenAI. Deterministic Case replay does not require a planning LLM unless the authored Case contains an AI assertion.
 
 ## Install
 
@@ -51,16 +51,18 @@ fsq providers configure github_copilot
 fsq providers status
 ```
 
-Alternatively run `fsq providers configure openai` for the official OpenAI API, `fsq providers configure kimi` for the official China or Global Kimi API, or `fsq providers configure azure_openai` for an Azure deployment. Provider configuration is user-level, stored below `~/.fsq`, and shared with the local Control Plane. API-key Providers prompt privately for a key and offer eligible models; even a single model requires explicit selection.
+Alternatively run `fsq providers configure openai` for the official OpenAI API, `fsq providers configure deepseek` for the official DeepSeek Responses API, `fsq providers configure kimi` for the official China or Global Kimi API, or `fsq providers configure azure_openai` for an Azure deployment. Provider configuration is user-level, stored below `~/.fsq`, and shared with the local Control Plane. API-key Providers prompt privately for a key and offer eligible models; even a single model requires explicit selection.
 
 For browser configuration, run `fsq ui` and open **Settings**:
 
-1. Choose **Add configuration** or **Change provider**, then **OpenAI**, **Google Gemini**, or **Kimi**.
+1. Choose **Add configuration** or **Change provider**, then **OpenAI**, **DeepSeek**, **Google Gemini**, or **Kimi**.
 2. For Kimi, explicitly choose **China** or **Global**. Enter an API key and select **Load models**. Select one offered model, then **Save changes**.
 3. Select **Test connection** to send a minimal request using the saved configuration.
 4. Return to **Home** to see the Provider summary, then open **Test Runner**, choose a Workspace/platform/target, and start an Explore task explicitly.
 
 OpenAI always uses `https://api.openai.com/v1/` and the Responses API. Its picker offers general-purpose GPT major version 5 or later, excluding mini, nano, Codex, embedding, audio, realtime, image, search, transcription, and TTS variants. An empty list cannot be saved. Changing the key invalidates the list and selection; reload before saving. Azure instead requires a resource endpoint, **deployment name** (not necessarily an OpenAI model id), and API key.
+
+DeepSeek always uses `https://api.deepseek.com/` and the Responses API. Its picker accepts `deepseek-flash`, exact versioned Flash ids from 4.1 onward, and exact versioned Pro ids from 4.0 onward, with no upper version bound. Other families and extra suffixes are excluded. Discovery is not a capability or image-support probe; unsupported input fails normally without automatic retry, model substitution, or Provider fallback.
 
 For Gemini, obtain an API key from [Google AI Studio](https://aistudio.google.com/apikey). Use the browser flow above or run `fsq providers configure google_gemini`; the interactive command hides the key and requires an explicit model selection. The picker loads all bounded model-list pages and offers only stable Gemini 3-or-later general-purpose Flash/Pro ids with content-generation support. Preview, Latest, Experimental, Lite, image/audio/embedding and other specialized variants are excluded. An incomplete discovery is an error, not a partial selectable list. The fixed Developer API uses native Interactions with `store=false` and local conversation history; Vertex AI, ADC/service accounts, and custom endpoints are not supported.
 

@@ -6,9 +6,19 @@ from pathlib import Path
 from typing import Literal, cast
 
 from fsq_agent.application.contracts import ApplicationError, ApplicationErrorCategory, ApplicationErrorCode, ProviderConfigurationResult, ProviderStatusResult
-from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_azure_openai_provider, save_google_gemini_provider, save_kimi_provider, save_openai_provider
+from fsq_agent.config import (
+    Settings,
+    load_user_provider_config,
+    refresh_provider_settings,
+    save_azure_openai_provider,
+    save_deepseek_provider,
+    save_google_gemini_provider,
+    save_kimi_provider,
+    save_openai_provider,
+)
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import (
+    DeepSeekModel,
     GitHubCopilotModel,
     GitHubDeviceCode,
     GoogleGeminiModel,
@@ -20,6 +30,7 @@ from fsq_agent.providers import (
     list_github_copilot_models,
     request_github_copilot_device_code,
 )
+from fsq_agent.providers import list_deepseek_models as _discover_deepseek_models
 from fsq_agent.providers import list_google_gemini_models as _discover_google_gemini_models
 from fsq_agent.providers import list_kimi_models as _discover_kimi_models
 from fsq_agent.providers import list_openai_models as _discover_openai_models
@@ -90,6 +101,46 @@ def configure_openai(*, model: str, api_key: str, user_config_root: str | Path |
             raise
         raise _openai_error("internal") from None
     return ProviderConfigurationResult(provider="openai", model=normalized_model)
+
+
+def _deepseek_error(reason: object) -> ApplicationError:
+    error = _openai_error(reason)
+    return ApplicationError(
+        code=error.code,
+        category=error.category,
+        message=error.message.replace("OpenAI", "DeepSeek"),
+        action=(error.action or "").replace("OpenAI", "DeepSeek"),
+        details={"provider": "deepseek", "reason": error.details["reason"]},
+    )
+
+
+def list_deepseek_models(*, api_key: str) -> tuple[DeepSeekModel, ...]:
+    try:
+        return _discover_deepseek_models(api_key=api_key)
+    except ConfigurationError as error:
+        raise _deepseek_error(error.context.get("reason") if error.context.get("provider") == "deepseek" else None) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _deepseek_error("internal") from None
+
+
+def configure_deepseek(*, model: str, api_key: str, user_config_root: str | Path | None = None) -> ProviderConfigurationResult:
+    if not isinstance(model, str) or not model.strip():
+        raise _deepseek_error("invalid_candidate")
+    normalized_model = model.strip()
+    models = list_deepseek_models(api_key=api_key)
+    if normalized_model not in {item.id for item in models}:
+        raise _deepseek_error("model_not_offered")
+    try:
+        save_deepseek_provider(model=normalized_model, api_key=api_key, user_config_root=user_config_root)
+    except ConfigurationError as error:
+        raise _deepseek_error(error.context.get("reason") if error.context.get("provider") == "deepseek" else None) from None
+    except Exception as error:
+        if isinstance(error, ApplicationError):
+            raise
+        raise _deepseek_error("internal") from None
+    return ProviderConfigurationResult(provider="deepseek", model=normalized_model)
 
 
 def configure_azure_openai(*, base_url: str, model: str, api_key: str, user_config_root: str | Path | None = None) -> ProviderConfigurationResult:
@@ -252,9 +303,11 @@ def _validate_selected_model(selected: str, models: tuple[GitHubCopilotModel, ..
 __all__ = [
     "complete_github_configuration",
     "configure_azure_openai",
+    "configure_deepseek",
     "configure_google_gemini",
     "configure_kimi",
     "configure_openai",
+    "list_deepseek_models",
     "list_google_gemini_models",
     "list_kimi_models",
     "list_openai_models",

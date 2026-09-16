@@ -7,6 +7,7 @@ All notable changes are documented here. FSQ follows Semantic Versioning after p
 ### Added
 
 - Initial open-source release preparation.
+- DeepSeek Provider configuration through the CLI and Control Plane, with official Responses API inference and forward-compatible Flash/Pro model discovery.
 
 ### Changed
 

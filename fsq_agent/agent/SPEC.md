@@ -8,7 +8,7 @@ Provide SDK-neutral dynamic Goal/reference orchestration used by `execution`: lo
 
 - `models`: Uses all task, plan, structured agent IO, result, tool, report, event, and exception models.
 - `config`: Uses runtime settings.
-- `providers`: Prepares shared OpenAI, Azure OpenAI, Google Gemini, or GitHub Copilot access and refreshes provider-local runtime credentials at dynamic task startup.
+- `providers`: Prepares shared OpenAI, Azure OpenAI, DeepSeek, Google Gemini, or GitHub Copilot access and refreshes provider-local runtime credentials at dynamic task startup.
 - `core`: Uses `CapabilityRegistry`, `StepRunner`, `HarnessInterface` implementations, platform CommonTool providers, backend drivers, and shared harness behavior through public core exports supplied by entry/runtime construction.
 - `tools`: Builds dynamic-only AgentTool providers/executors and neutral tool bindings.
 - `observation`: Captures evidence after steps.
@@ -107,7 +107,7 @@ During `FsqAgent.run_in_context`, provider-local runtime credentials are refresh
 
 - The orchestration module depends on all leaf modules, but leaf modules never depend on `agent`.
 - `agent_engine` supplies neutral model and agent-execution protocols; its private backends own OpenAI Responses and Google Interactions requests and use shared local tool continuation.
-- OpenAI, Azure OpenAI, Google Gemini, and GitHub Copilot configured access is delegated to `providers`. `agent` asks for provider-local credential refresh once at dynamic task startup; the injected runtime consumes selected neutral models. Authentication, model discovery, endpoint selection, token caching, plan detection, and concrete inference-client construction are not implemented in `agent`. OpenAI and Gemini task preparation use saved configuration without a model-list request, and active tasks retain their prepared Provider snapshot.
+- OpenAI, Azure OpenAI, DeepSeek, Google Gemini, and GitHub Copilot configured access is delegated to `providers`. `agent` asks for provider-local credential refresh once at dynamic task startup; the injected runtime consumes selected neutral models. Authentication, model discovery, endpoint selection, token caching, plan detection, and concrete inference-client construction are not implemented in `agent`. OpenAI, DeepSeek, and Gemini task preparation use saved configuration without a model-list request, and active tasks retain their prepared Provider snapshot.
 - Task execution requires an available engine backend and provider authentication through `providers`, without an OpenAI Agents SDK runtime dependency. There is no offline fallback execution path.
 - The private engine owns the sole function-tool dispatcher and turn-continuation loop; Agent and its adapters do not duplicate that loop.
 - Neutral tool bindings are generated from validated AgentTool definitions plus active platform CommonTool/PlatformTool `action_space()` schemas. The FSQ runtime preserves canonical names, parameter schemas, descriptions, and default strictness; private engine backends convert bindings into native protocol definitions and the shared loop dispatches their callbacks. Per-capability schema strictness is not capability metadata, and unimplemented backend methods must not appear in `action_space()`. Runtime requests contain no external platform tool servers. `assert_with_ai` is a driver-backed PlatformTool with an injected `ai_services` evaluator, not an AgentTool or concrete harness method.

@@ -9,6 +9,7 @@ interface ProviderDialogProps {
   deviceFlowPending: DeviceFlowPending;
   deviceFlowError: ApiErrorBody | null;
   onSelectAzure: () => void;
+  onSelectDeepSeek: () => void;
   onSelectOpenAI: () => void;
   onSelectGemini: () => void;
   onSelectKimi: () => void;
@@ -56,6 +57,9 @@ export function ProviderDialog(props: ProviderDialogProps) {
       </button>
       <button type="button" className="provider-option" onClick={props.onSelectAzure}>
         <strong>Azure OpenAI</strong><span>Azure resource endpoint, deployment, and API key.</span>
+      </button>
+      <button type="button" className="provider-option" onClick={props.onSelectDeepSeek}>
+        <strong>DeepSeek</strong><span>Official Responses API access with an API key.</span>
       </button>
       <button type="button" className="provider-option" onClick={props.onSelectGemini}>
         <strong>Google Gemini</strong><span>Gemini Developer API</span>

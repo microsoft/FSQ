@@ -3,6 +3,7 @@ import { ControlPlaneApiError, controlPlaneClient, toApiError, type ControlPlane
 import type {
   ApiErrorBody,
   AzureConfigPayload,
+  DeepSeekConfigPayload,
   OpenAIConfigPayload,
   OpenAIModelsResponse,
   GoogleGeminiConfigPayload,
@@ -48,7 +49,9 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   const [saveError, setSaveError] = useState<ApiErrorBody | null>(null);
   const clearSaveError = useCallback(() => setSaveError(null), []);
   const [openaiModels, setOpenAIModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const [deepseekModels, setDeepSeekModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
   const [geminiModels, setGeminiModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
+  const deepseekModelsControllerRef = useRef<AbortController | null>(null);
   const geminiModelsControllerRef = useRef<AbortController | null>(null);
   const [kimiModels, setKimiModels] = useState<OpenAIModelsState>({ state: 'idle', data: null, error: null });
   const kimiModelsControllerRef = useRef<AbortController | null>(null);
@@ -119,6 +122,30 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     } catch (error) {
       if (mountedRef.current && modelsControllerRef.current === controller && !controller.signal.aborted) {
         setOpenAIModels({ state: 'error', data: null, error: providerRequestError(error, 'OpenAI') });
+      }
+      return null;
+    }
+  }, [client]);
+
+  const clearDeepSeekModels = useCallback(() => {
+    deepseekModelsControllerRef.current?.abort();
+    deepseekModelsControllerRef.current = null;
+    setDeepSeekModels({ state: 'idle', data: null, error: null });
+  }, []);
+
+  const loadDeepSeekModels = useCallback(async (apiKey: string) => {
+    deepseekModelsControllerRef.current?.abort();
+    const controller = new AbortController();
+    deepseekModelsControllerRef.current = controller;
+    setDeepSeekModels({ state: 'loading', data: null, error: null });
+    try {
+      const data = await client.deepseekModels(apiKey.trim(), controller.signal);
+      if (!mountedRef.current || deepseekModelsControllerRef.current !== controller || controller.signal.aborted) return null;
+      setDeepSeekModels({ state: 'ready', data, error: null });
+      return data;
+    } catch (error) {
+      if (mountedRef.current && deepseekModelsControllerRef.current === controller && !controller.signal.aborted) {
+        setDeepSeekModels({ state: 'error', data: null, error: providerRequestError(error, 'DeepSeek') });
       }
       return null;
     }
@@ -196,8 +223,8 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   }, [client]);
 
   const saveApiKeyProvider = useCallback(async (
-    payload: OpenAIConfigPayload | GoogleGeminiConfigPayload | KimiConfigPayload,
-    kind: 'openai' | 'google_gemini' | 'kimi',
+    payload: OpenAIConfigPayload | DeepSeekConfigPayload | GoogleGeminiConfigPayload | KimiConfigPayload,
+    kind: 'openai' | 'deepseek' | 'google_gemini' | 'kimi',
   ) => {
     if (saveControllerRef.current || saveRecovery === 'loading' || saveRecovery === 'unavailable') return null;
     const controller = new AbortController();
@@ -209,6 +236,8 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       const common = { modelName: payload.modelName.trim(), apiKey: payload.apiKey.trim() };
       const data = kind === 'kimi'
         ? await client.saveKimiConfig({ ...common, region: (payload as KimiConfigPayload).region }, controller.signal)
+        : kind === 'deepseek'
+          ? await client.saveDeepSeekConfig(common, controller.signal)
         : kind === 'google_gemini'
           ? await client.saveGoogleGeminiConfig(common, controller.signal)
           : await client.saveOpenAIConfig(common, controller.signal);
@@ -232,6 +261,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
   }, [client, reconcileConfig, saveRecovery]);
 
   const saveOpenAI = useCallback((payload: OpenAIConfigPayload) => saveApiKeyProvider(payload, 'openai'), [saveApiKeyProvider]);
+  const saveDeepSeek = useCallback((payload: DeepSeekConfigPayload) => saveApiKeyProvider(payload, 'deepseek'), [saveApiKeyProvider]);
   const saveGemini = useCallback((payload: GoogleGeminiConfigPayload) => saveApiKeyProvider(payload, 'google_gemini'), [saveApiKeyProvider]);
   const saveKimi = useCallback((payload: KimiConfigPayload) => saveApiKeyProvider(payload, 'kimi'), [saveApiKeyProvider]);
 
@@ -450,6 +480,7 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
       configControllerRef.current?.abort();
       saveControllerRef.current?.abort();
       modelsControllerRef.current?.abort();
+      deepseekModelsControllerRef.current?.abort();
       geminiModelsControllerRef.current?.abort();
       kimiModelsControllerRef.current?.abort();
       recoveryControllerRef.current?.abort();
@@ -464,8 +495,12 @@ export function useProviderConfig(client: ControlPlaneClient = controlPlaneClien
     config,
     reload: loadConfig,
     openaiModels,
+    deepseekModels,
     geminiModels,
     kimiModels,
+    loadDeepSeekModels,
+    clearDeepSeekModels,
+    saveDeepSeek,
     loadGeminiModels,
     clearGeminiModels,
     loadKimiModels,

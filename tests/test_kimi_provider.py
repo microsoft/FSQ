@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from fsq_agent.adapters.cli import main
 from fsq_agent.agent_engine import ModelRequest, ModelResult, OutputContract, ToolBinding
 from fsq_agent.application import ProviderConfigurationResult, ProviderStatusResult
-from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_kimi_provider, save_openai_provider, validate_provider_settings
+from fsq_agent.config import Settings, load_user_provider_config, refresh_provider_settings, save_deepseek_provider, save_kimi_provider, save_openai_provider, validate_provider_settings
 from fsq_agent.control_plane import ControlPlaneServer, ControlPlaneServerOptions
 from fsq_agent.models import ConfigurationError
 from fsq_agent.providers import KimiModel, build_model_provider_session, list_kimi_models
@@ -70,6 +70,7 @@ def test_kimi_discovery_uses_region_endpoint_and_stable_k3_floor(monkeypatch: py
         "kimi-k4-alpha",
         "kimi-k4-experimental",
         "kimi-k4-rc1",
+        "kimi-k4-release-candidate",
         "kimi-k4-latest",
         "kimi-k3-20260915",
         "kimi-k3-2026-09-15",
@@ -228,6 +229,15 @@ def test_kimi_and_other_provider_replacements_cleanup_only_inactive_credentials(
 
     save_openai_provider(model="gpt-5", api_key="new-openai-key", user_config_root=tmp_path)
     assert {path.name for path in (tmp_path / "auth").iterdir()} == {"openai.json"}
+
+
+def test_kimi_and_deepseek_replacements_remove_reciprocal_credentials(tmp_path: Path) -> None:
+    save_deepseek_provider(model="deepseek-flash", api_key="deepseek-key", user_config_root=tmp_path)
+    save_kimi_provider(region="global", model="kimi-k3", api_key="kimi-key", user_config_root=tmp_path)
+    assert {path.name for path in (tmp_path / "auth").iterdir()} == {"kimi.json"}
+
+    save_deepseek_provider(model="deepseek-flash", api_key="new-deepseek-key", user_config_root=tmp_path)
+    assert {path.name for path in (tmp_path / "auth").iterdir()} == {"deepseek.json"}
 
 
 @pytest.mark.parametrize(

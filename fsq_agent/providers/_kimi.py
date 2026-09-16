@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Literal
 
 import httpx
@@ -68,7 +69,8 @@ def _eligible_model(model_id: str) -> tuple[int, int, str] | None:
         return None
     suffix = match["suffix"]
     suffix_tokens = suffix.removeprefix("-").split("-") if suffix else []
-    if any(token.startswith(marker) for token in suffix_tokens for marker in _UNSTABLE_MARKERS):
+    release_candidate = any(left == "release" and right == "candidate" for left, right in pairwise(suffix_tokens))
+    if release_candidate or any(token.startswith(marker) for token in suffix_tokens for marker in _UNSTABLE_MARKERS):
         return None
     if any(_COMPACT_DATE.fullmatch(token) for token in suffix_tokens) or _DASHED_DATE.search(suffix):
         return None

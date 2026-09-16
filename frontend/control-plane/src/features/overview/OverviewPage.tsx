@@ -7,7 +7,7 @@ import './overview.css';
 export type OverviewProviderState =
   | { status: 'loading' }
   | { status: 'unconfigured' }
-  | { status: 'configured'; provider: 'OpenAI' | 'Azure OpenAI' | 'Google Gemini' | 'Kimi' | 'GitHub Copilot'; modelName: string; region?: 'China' | 'Global'; authenticated?: true }
+  | { status: 'configured'; provider: 'OpenAI' | 'Azure OpenAI' | 'DeepSeek' | 'Google Gemini' | 'Kimi' | 'GitHub Copilot'; modelName: string; region?: 'China' | 'Global'; authenticated?: true }
   | { status: 'error'; error: { message: string; action: string } };
 interface OverviewPageProps {
   workspaces: readonly WorkspaceRegistryEntry[];

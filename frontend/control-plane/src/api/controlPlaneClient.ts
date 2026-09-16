@@ -2,6 +2,7 @@ import type {
   HistoryResponse, RunReportResponse, ReportExportResponse, ReportFormat,
   ApiErrorBody,
   AzureConfigPayload,
+  DeepSeekConfigPayload,
   OpenAIConfigPayload,
   GoogleGeminiConfigPayload,
   KimiConfigPayload,
@@ -58,7 +59,7 @@ const modes = new Set(['explore', 'strict']);
 const statuses = new Set(['preparing', 'running', 'finalizing', 'success', 'failed', 'inconclusive', 'cancelled', 'error']);
 const readinessStatuses = new Set(['ready', 'unavailable', 'error']);
 const deviceFlowStatuses = new Set(['waiting', 'loading_models', 'ready', 'model_error', 'success', 'failed', 'expired', 'cancelled']);
-const providerTypes = new Set(['openai', 'azure_openai', 'google_gemini', 'kimi', 'github_copilot']);
+const providerTypes = new Set(['openai', 'azure_openai', 'deepseek', 'google_gemini', 'kimi', 'github_copilot']);
 const kimiRegions = new Set(['cn', 'global']);
 
 export class ControlPlaneApiError extends Error {
@@ -241,7 +242,7 @@ function validateConfig(value: unknown): ConfigResponse {
   if (!record(provider) || !string(provider.type) || !providerTypes.has(provider.type) || !string(provider.modelName) || !provider.modelName) {
     invalidResponse('config', 'Invalid Provider identity.');
   }
-  if (provider.type === 'openai' || provider.type === 'google_gemini') {
+  if (provider.type === 'openai' || provider.type === 'deepseek' || provider.type === 'google_gemini') {
     if (!hasOnlyKeys(provider, ['type', 'modelName', 'apiKey']) || !string(provider.apiKey) || !provider.apiKey.trim()) invalidResponse('config', 'Invalid API-key Provider fields.');
   } else if (provider.type === 'kimi') {
     if (!hasOnlyKeys(provider, ['type', 'region', 'modelName', 'apiKey'])
@@ -507,6 +508,8 @@ export const controlPlaneClient = {
   config: (signal?: AbortSignal) => jsonRequest('/config', validateConfig, { signal }),
   openaiModels: (apiKey: string, signal?: AbortSignal) =>
     jsonRequest('/config/openai/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
+  deepseekModels: (apiKey: string, signal?: AbortSignal) =>
+    jsonRequest('/config/deepseek/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
   googleGeminiModels: (apiKey: string, signal?: AbortSignal) =>
     jsonRequest('/config/google-gemini/models', validateOpenAIModels, { method: 'POST', body: JSON.stringify({ apiKey }), signal }),
   kimiModels: (payload: KimiModelsPayload, signal?: AbortSignal) =>
@@ -517,6 +520,8 @@ export const controlPlaneClient = {
     jsonRequest('/config/kimi', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   saveOpenAIConfig: (payload: OpenAIConfigPayload, signal?: AbortSignal) =>
     jsonRequest('/config/openai', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
+  saveDeepSeekConfig: (payload: DeepSeekConfigPayload, signal?: AbortSignal) =>
+    jsonRequest('/config/deepseek', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   saveAzureConfig: (payload: AzureConfigPayload, signal?: AbortSignal) =>
     jsonRequest('/config/azure', validateConfig, { method: 'PUT', body: JSON.stringify(payload), signal }),
   startGithubDeviceFlow: (signal?: AbortSignal) =>

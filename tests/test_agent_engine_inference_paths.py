@@ -51,15 +51,17 @@ async def _run_main(runtime, task, run_id):
 
 @pytest.mark.parametrize("path", ["pre_plan", "main", "verification", "assertion", "connection", "suggestion"])
 @pytest.mark.parametrize("failure_kind", [None, "incomplete", "failed", "refusal"])
-@pytest.mark.parametrize("provider", ["azure_openai", "openai", "google_gemini", "github_copilot", "kimi"])
+@pytest.mark.parametrize("provider", ["azure_openai", "openai", "deepseek", "google_gemini", "github_copilot", "kimi"])
 @pytest.mark.parametrize("effort", ["low", "high"])
 async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str, failure_kind: str | None, provider: str, effort: str) -> None:
     settings = Settings(agent_runtime=AgentRuntimeSettings(provider=provider, tracing_enabled=False, reasoning_effort=effort))
     settings.agent_runtime.base_url = "https://api.openai.com/v1/" if provider == "openai" else "https://model.example.test/openai/v1/"
+    if provider == "deepseek":
+        settings.agent_runtime.base_url = "https://api.deepseek.com/"
     if provider == "google_gemini":
         settings.agent_runtime.base_url = "https://generativelanguage.googleapis.com/v1beta/"
     settings.agent_runtime.api_key = "synthetic-model-key"
-    model_name = "gemini-3.6-flash" if provider == "google_gemini" else "kimi-k3" if provider == "kimi" else "gpt-5.2-pro"
+    model_name = "gemini-3.6-flash" if provider == "google_gemini" else "deepseek-flash" if provider == "deepseek" else "kimi-k3" if provider == "kimi" else "gpt-5.2-pro"
     settings.agent_runtime.model = model_name
     if provider == "kimi":
         settings.agent_runtime.base_url = ""
@@ -210,7 +212,7 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
     assert len(payloads) == 1
     assert payloads[0]["model"] == model_name
     effective_effort = "low" if path == "connection" else effort
-    minimum = "minimal" if provider == "google_gemini" else "low" if provider in {"azure_openai", "kimi"} else "medium"
+    minimum = "minimal" if provider == "google_gemini" else "low" if provider in {"azure_openai", "deepseek", "kimi"} else "medium"
     native_effort = minimum if effective_effort == "low" else "max" if provider == "kimi" else "high"
     if provider == "google_gemini":
         assert payloads[0]["store"] is False

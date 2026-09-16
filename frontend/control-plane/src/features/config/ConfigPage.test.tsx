@@ -161,6 +161,43 @@ it('does not show a rejected Kimi save error after changing provider', async () 
   expect(screen.queryByText('Kimi selection expired.')).not.toBeInTheDocument();
 });
 
+it('configures DeepSeek through explicit discovery and tests the saved provider', async () => {
+  const saved: ConfigResponse = { configured: true, provider: { type: 'deepseek', modelName: 'deepseek-flash', apiKey: 'deepseek-key' } };
+  const api = client(unconfigured, {
+    deepseekModels: vi.fn().mockResolvedValue({ models: [{ id: 'deepseek-flash', name: 'deepseek-flash' }] }),
+    saveDeepSeekConfig: vi.fn().mockResolvedValue(saved),
+    testConnection: vi.fn().mockResolvedValue({ success: true, provider: 'deepseek', modelName: 'deepseek-flash', durationMs: 11 }),
+  });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: /DeepSeek/ }));
+  expect(screen.getByRole('heading', { name: 'DeepSeek configuration' })).toBeVisible();
+  expect(screen.queryByLabelText('Base URL')).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('API key'), 'deepseek-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  const select = await screen.findByRole('combobox', { name: 'Model' });
+  expect(select).toHaveValue('');
+  await user.selectOptions(select, 'deepseek-flash');
+  await user.click(screen.getByRole('button', { name: 'Save changes' }));
+  expect(api.saveDeepSeekConfig).toHaveBeenCalledWith({ apiKey: 'deepseek-key', modelName: 'deepseek-flash' }, expect.any(AbortSignal));
+  const test = await screen.findByRole('button', { name: 'Test connection' });
+  await user.click(test);
+  expect(await screen.findByRole('dialog')).toHaveTextContent('DeepSeek');
+});
+
+it('keeps an empty DeepSeek discovery unsaveable without inventing a model', async () => {
+  const saved: ConfigResponse = { configured: true, provider: { type: 'deepseek', modelName: 'deepseek-flash', apiKey: 'deepseek-key' } };
+  const api = client(saved, { deepseekModels: vi.fn().mockResolvedValue({ models: [] }) });
+  const user = userEvent.setup();
+  render(<ConfigPage client={api} />);
+  await user.click(await screen.findByRole('button', { name: 'Load models' }));
+  expect(await screen.findByText('No eligible models are available.')).toBeVisible();
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Test connection' })).toBeDisabled();
+});
+
 it('configures Gemini using explicit discovery and tests the saved provider', async () => {
   const saved: ConfigResponse = { configured: true, provider: { type: 'google_gemini', modelName: 'gemini-3.8-flash', apiKey: 'google-key' } };
   const api = client(unconfigured, {

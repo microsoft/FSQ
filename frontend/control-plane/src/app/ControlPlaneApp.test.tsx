@@ -142,6 +142,13 @@ it('projects Gemini into Home without passing its key', async () => {
   expect(JSON.parse(projection.textContent ?? '{}')).toEqual({ status: 'configured', provider: 'Google Gemini', modelName: 'gemini-3.8-flash' });
 });
 
+it('projects DeepSeek into Home without passing its key', async () => {
+  vi.mocked(controlPlaneClient.config).mockResolvedValue({ configured: true, provider: { type: 'deepseek', modelName: 'deepseek-flash', apiKey: 'must-not-enter-home' } });
+  render(<ControlPlaneApp />);
+  const projection = await screen.findByTestId('overview-provider-projection');
+  expect(JSON.parse(projection.textContent ?? '{}')).toEqual({ status: 'configured', provider: 'DeepSeek', modelName: 'deepseek-flash' });
+});
+
 it('projects Kimi region and model into Home without passing its key', async () => {
   vi.mocked(controlPlaneClient.config).mockResolvedValue({ configured: true, provider: { type: 'kimi', region: 'global', modelName: 'kimi-k3', apiKey: 'must-not-enter-home' } });
   render(<ControlPlaneApp />);

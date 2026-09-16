@@ -57,6 +57,30 @@ def _provider(monkeypatch: pytest.MonkeyPatch, handler: "Callable[[httpx.Request
     return create_model_provider(base_url="https://model.example.test/v1/", api_key="test-credential", headers={"x-test-provider": "configured"}, **options), client
 
 
+async def test_deepseek_image_rejection_does_not_retry_or_enter_continuation(monkeypatch: pytest.MonkeyPatch) -> None:
+    requests = []
+
+    def reject_image(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(400, json={"error": {"message": "image input is unsupported", "type": "invalid_request_error"}})
+
+    provider, client = _provider(monkeypatch, reject_image)
+    try:
+        request = AgentRequest(
+            name="deepseek-image",
+            instructions="Use available tools when useful.",
+            input=(Message(content=(TextContent("Inspect this image."), ImageContent(data=b"image", mime_type="image/png"))),),
+            max_turns=4,
+        )
+        with pytest.raises(EngineError):
+            await create_agent_engine().run(provider.get_model("deepseek-v4-pro"), request)
+        assert len(requests) == 1
+        assert requests[0]["input"][0]["content"][1]["type"] == "input_image"
+    finally:
+        await provider.aclose()
+    assert client.is_closed
+
+
 def test_public_import_does_not_load_sdk_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     module = importlib.import_module("fsq_agent.agent_engine")
     root = importlib.import_module("fsq_agent")
