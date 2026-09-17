@@ -19,6 +19,9 @@
 .config-field input, .config-field select { width: 100%; min-width: 0; min-height: var(--cp-control-height); padding: 8px 10px; border: 1px solid var(--cp-border-strong); border-radius: var(--cp-radius); background: var(--cp-surface); }
 .config-field input:focus, .config-field select:focus { border-color: var(--cp-focus); }
 .config-field small, .field-help { color: var(--cp-muted); font-size: var(--cp-type-meta); line-height: var(--cp-leading-meta); }
+.config-model-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.config-model-heading > label, .config-model-heading > span { font-weight: var(--cp-weight-control); }
+.config-model-value { margin: 0; }
 .config-secret-input { position: relative; display: block; }
 .config-secret-input input { padding-right: 48px; }
 .config-secret-input .config-icon-button { position: absolute; top: 0; right: 0; width: 40px; height: 40px; }
