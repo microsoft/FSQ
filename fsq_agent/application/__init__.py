@@ -3,6 +3,7 @@
 
 from fsq_agent.application._errors import normalize_application_error
 from fsq_agent.application.cases import create_case, format_case, save_recorded_case, test_case
+from fsq_agent.application.coding_agents import install_coding_agent
 from fsq_agent.application.contracts import (
     ApplicationError,
     ApplicationErrorCategory,
@@ -13,6 +14,9 @@ from fsq_agent.application.contracts import (
     CaseCreateResult,
     CaseTestRequest,
     CaseTestResult,
+    CodingAgentInstallFileResult,
+    CodingAgentInstallRequest,
+    CodingAgentInstallResult,
     DoctorChecks,
     DoctorCommands,
     DoctorPlatformResult,
@@ -85,6 +89,9 @@ __all__ = [
     "CaseSaveResult",
     "CaseTestRequest",
     "CaseTestResult",
+    "CodingAgentInstallFileResult",
+    "CodingAgentInstallRequest",
+    "CodingAgentInstallResult",
     "DoctorChecks",
     "DoctorCommands",
     "DoctorPlatformResult",
@@ -142,6 +149,7 @@ __all__ = [
     "generate_run_html",
     "get_run_report",
     "initialize_workspace",
+    "install_coding_agent",
     "list_deepseek_models",
     "list_environments",
     "list_google_gemini_models",

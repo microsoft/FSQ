@@ -19,6 +19,7 @@ from fsq_agent.application import (
     CaseCreateRequest,
     CaseFormatRequest,
     CaseTestRequest,
+    CodingAgentInstallRequest,
     DoctorRequest,
     ExportRunReportRequest,
     GenerateRunHtmlRequest,
@@ -40,6 +41,7 @@ from fsq_agent.application import (
     format_case,
     generate_run_html,
     initialize_workspace,
+    install_coding_agent,
     list_deepseek_models,
     list_google_gemini_models,
     list_kimi_models,
@@ -205,7 +207,9 @@ def main(context: click.Context, output_format: str, non_interactive: bool) -> N
 
 
 @main.command()
-@click.option("--platform", type=PLATFORMS, required=True)
+@click.option("--platform", type=PLATFORMS, default=None)
+@click.option("--agent", type=click.Choice(["codex"]), default=None)
+@click.option("--no-overwrite", is_flag=True, default=False)
 @click.option("--name", default=None)
 @click.option("--app-id", default=None)
 @click.option("--browser-channel", type=click.Choice(["chromium", "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", "msedge-canary"]), default=None)
@@ -219,7 +223,9 @@ def main(context: click.Context, output_format: str, non_interactive: bool) -> N
 @click.pass_context
 def init(
     context: click.Context,
-    platform: str,
+    platform: str | None,
+    agent: str | None,
+    no_overwrite: bool,
     name: str | None,
     app_id: str | None,
     browser_channel: str | None,
@@ -231,6 +237,13 @@ def init(
     env_values: tuple[str, ...],
     update_existing: bool,
 ) -> None:
+    if platform is None and agent is None:
+        raise click.UsageError("At least one of --platform or --agent is required.")
+    platform_values = (name, app_id, browser_channel, browser_executable_path, app_path, window_title_re, launch_args, bundle_id)
+    if platform is None and (any(value is not None for value in platform_values) or env_values or update_existing):
+        raise click.UsageError("Workspace and platform options require --platform.")
+    if agent is None and no_overwrite:
+        raise click.UsageError("--no-overwrite requires --agent.")
     env: dict[str, str] = {}
     for value in env_values:
         key, separator, secret = value.partition("=")
@@ -239,28 +252,65 @@ def init(
         if key in env:
             raise click.UsageError("Each --env name may be supplied only once.")
         env[key] = secret
-    workspace = initialize_workspace(
-        WorkspaceInitializeRequest(
-            current_directory=Path.cwd(),
-            platform=platform,
-            name=name,
-            app_id=app_id,
-            browser_channel=browser_channel,
-            browser_executable_path=browser_executable_path,
-            app_path=app_path,
-            window_title_re=window_title_re,
-            launch_args=launch_args,
-            bundle_id=bundle_id,
-            env=env,
-            update_existing=update_existing,
+    current_directory = Path.cwd()
+    workspace = None
+    if platform is not None:
+        workspace = initialize_workspace(
+            WorkspaceInitializeRequest(
+                current_directory=current_directory,
+                platform=platform,
+                name=name,
+                app_id=app_id,
+                browser_channel=browser_channel,
+                browser_executable_path=browser_executable_path,
+                app_path=app_path,
+                window_title_re=window_title_re,
+                launch_args=launch_args,
+                bundle_id=bundle_id,
+                env=env,
+                update_existing=update_existing,
+            )
         )
-    )
+    coding_agent = None
+    if agent is not None:
+        try:
+            coding_agent = install_coding_agent(
+                CodingAgentInstallRequest(
+                    project_directory=current_directory,
+                    agent=agent,
+                    workspace_root=workspace.root_path if workspace is not None else current_directory / "workspace",
+                    no_overwrite=no_overwrite,
+                )
+            )
+        except ApplicationError as exc:
+            if workspace is None:
+                raise
+            raise ApplicationError(
+                code=exc.code,
+                category=exc.category,
+                message=f"Workspace initialization completed, but Codex agent installation failed: {exc.message}",
+                action=exc.action,
+                details={**exc.details, "workspace_status": workspace.status, "workspace_root": str(workspace.root_path)},
+            ) from exc
     if context.obj["output"] == "human":
-        click.echo(f"Workspace {workspace.name} {workspace.status}: {workspace.platform} at {workspace.root_path}")
-        if workspace.browser_executable_path is not None:
-            click.echo(f"Browser: {workspace.browser_executable_path}")
+        if workspace is not None:
+            click.echo(f"Workspace {workspace.name} {workspace.status}: {workspace.platform} at {workspace.root_path}")
+            if workspace.browser_executable_path is not None:
+                click.echo(f"Browser: {workspace.browser_executable_path}")
+        if coding_agent is not None:
+            click.echo(f"Coding Agent {coding_agent.agent}: {coding_agent.project_directory}")
+            for item in coding_agent.files:
+                click.echo(f"{item.status}: {item.path}")
+                if item.backup_path is not None:
+                    click.echo(f"backup: {item.backup_path}")
     else:
-        _emit_terminal(context, workspace.model_dump(mode="json"))
+        if workspace is not None and coding_agent is not None:
+            result = {"workspace": workspace.model_dump(mode="json"), "coding_agent": coding_agent.model_dump(mode="json")}
+        elif workspace is not None:
+            result = workspace.model_dump(mode="json")
+        else:
+            result = coding_agent.model_dump(mode="json")
+        _emit_terminal(context, result)
 
 
 @main.command()

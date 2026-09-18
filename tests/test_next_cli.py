@@ -15,6 +15,8 @@ from fsq_agent.application import (
     ApplicationErrorCode,
     CaseCreateResult,
     CaseTestResult,
+    CodingAgentInstallFileResult,
+    CodingAgentInstallResult,
     DoctorChecks,
     DoctorCommands,
     DoctorPlatformResult,
@@ -502,6 +504,76 @@ def test_init_maps_web_options_to_application(monkeypatch, tmp_path: Path) -> No
     assert result.exit_code == 0
     assert captured["request"].browser_channel == "chrome"
     assert captured["request"].browser_executable_path is None
+
+
+def test_init_agent_codex_is_independent_of_platform(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+    monkeypatch.setattr("fsq_agent.adapters.cli._main.initialize_workspace", lambda _request: pytest.fail("workspace initialization must not run"))
+    monkeypatch.setattr(
+        "fsq_agent.adapters.cli._main.install_coding_agent",
+        lambda request: captured.update(request=request)
+        or CodingAgentInstallResult(
+            agent="codex",
+            project_directory=request.project_directory,
+            workspace_root=request.workspace_root,
+            files=(CodingAgentInstallFileResult(path=request.project_directory / "AGENTS.md", status="created"),),
+        ),
+    )
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(main, ["--output", "json", "init", "--agent", "codex"])
+        current = Path.cwd().resolve()
+
+    assert result.exit_code == 0, result.output
+    assert captured["request"].project_directory == current
+    assert captured["request"].workspace_root == current / "workspace"
+    assert json.loads(result.output)["result"]["agent"] == "codex"
+
+
+def test_init_rejects_removed_agents_md_update_option() -> None:
+    result = CliRunner().invoke(main, ["init", "--agent", "codex", "--update-agents-md"])
+
+    assert result.exit_code == 2
+    assert "No such option: --update-agents-md" in result.output
+
+
+def test_init_combines_workspace_and_codex_agent(monkeypatch, tmp_path: Path) -> None:
+    actual_workspace = tmp_path / "registered-workspace"
+    captured = {}
+    monkeypatch.setattr(
+        "fsq_agent.adapters.cli._main.initialize_workspace",
+        lambda _request: WorkspaceInitializeResult(status="initialized", name="project", root_path=actual_workspace, platform="android", driver_status="ready"),
+    )
+    monkeypatch.setattr(
+        "fsq_agent.adapters.cli._main.install_coding_agent",
+        lambda request: captured.update(request=request)
+        or CodingAgentInstallResult(agent="codex", project_directory=request.project_directory, workspace_root=request.workspace_root, files=()),
+    )
+
+    result = CliRunner().invoke(main, ["--output", "json", "init", "--platform", "android", "--app-id", "com.example", "--agent", "codex"])
+    payload = json.loads(result.output)["result"]
+
+    assert result.exit_code == 0, result.output
+    assert captured["request"].workspace_root == actual_workspace
+    assert payload["workspace"]["root_path"] == str(actual_workspace)
+    assert payload["coding_agent"]["agent"] == "codex"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [],
+        ["--app-id", "com.example", "--agent", "codex"],
+        ["--platform", "android", "--app-id", "com.example", "--no-overwrite"],
+    ],
+)
+def test_init_rejects_missing_or_mismatched_modes_before_application(monkeypatch, arguments: list[str]) -> None:
+    monkeypatch.setattr("fsq_agent.adapters.cli._main.initialize_workspace", lambda _request: pytest.fail("workspace initialization must not run"))
+    monkeypatch.setattr("fsq_agent.adapters.cli._main.install_coding_agent", lambda _request: pytest.fail("agent installation must not run"))
+
+    result = CliRunner().invoke(main, ["init", *arguments])
+
+    assert result.exit_code == 2
 
 
 def test_init_rejects_install_driver_option() -> None:

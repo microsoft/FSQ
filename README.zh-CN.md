@@ -163,6 +163,8 @@ fsq ui
 | [Platform prerequisites](docs/platform-prerequisites.md) | 平台前置条件边界 |
 | [Support and stability](docs/support-and-stability.md) | Alpha 范围、兼容性、隐私和支持预期 |
 
+项目级 FSQ Agent 安装请参阅 [Codex integration](docs/codex-integration.md)。
+
 ## License
 
 [MIT](LICENSE) - Copyright (c) Microsoft Corporation.
