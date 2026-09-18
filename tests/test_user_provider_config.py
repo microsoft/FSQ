@@ -1,10 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import errno
 import json
 import multiprocessing
+import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -19,6 +21,23 @@ from fsq_agent.config import (
     validate_provider_settings,
 )
 from fsq_agent.models import ConfigurationError
+
+if TYPE_CHECKING:
+    from multiprocessing.synchronize import Event
+
+
+def _hold_windows_config_lock(user_root: Path, acquired: "Event", release: "Event") -> None:
+    import msvcrt
+
+    with (user_root / ".config.lock").open("a+b") as lock_file:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            acquired.set()
+            assert release.wait(timeout=30), "Timed out waiting to release the test lock"
+        finally:
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _save_azure_repeatedly(user_root: Path, start: Any) -> None:
@@ -361,12 +380,19 @@ def test_provider_replacement_is_serialized_across_processes(tmp_path: Path) -> 
         context.Process(target=_save_azure_repeatedly, args=(user_root, start)),
         context.Process(target=_save_github_repeatedly, args=(user_root, start)),
     ]
-    for process in processes:
-        process.start()
-    start.set()
-    for process in processes:
-        process.join(timeout=30)
-        assert process.exitcode == 0
+    try:
+        for process in processes:
+            process.start()
+        start.set()
+        for process in processes:
+            process.join(timeout=30)
+            assert process.exitcode == 0
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            if process.pid is not None:
+                process.join(timeout=5)
 
     saved = load_user_provider_config(user_root)
     assert saved.provider is not None
@@ -378,6 +404,160 @@ def test_provider_replacement_is_serialized_across_processes(tmp_path: Path) -> 
         assert saved.github_token is not None
         assert saved.provider_token is not None
         assert not (user_root / "auth" / "azure-openai.json").exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows CRT file locking")
+@pytest.mark.parametrize("lock_content", [b"", b"\0"])
+def test_windows_provider_replacement_waits_past_native_lock_retry_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lock_content: bytes) -> None:
+    import msvcrt
+
+    user_root = tmp_path / "user"
+    save_azure_openai_provider(base_url="https://example.openai.azure.com", model="azure-model", api_key="azure-key", user_config_root=user_root)
+    config_path = user_root / "config.yaml"
+    credentials_path = user_root / "auth" / "azure-openai.json"
+    before = (config_path.read_bytes(), credentials_path.read_bytes())
+    lock_path = user_root / ".config.lock"
+    lock_path.write_bytes(lock_content)
+    context = multiprocessing.get_context("spawn")
+    acquired, release = context.Event(), context.Event()
+    holder = context.Process(target=_hold_windows_config_lock, args=(user_root, acquired, release))
+    native_locking = msvcrt.locking
+    contention_errors: list[int] = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        try:
+            native_locking(fd, mode, size)
+        except OSError as error:
+            if mode == msvcrt.LK_LOCK and error.errno == errno.EDEADLK:
+                contention_errors.append(error.errno)
+                assert (config_path.read_bytes(), credentials_path.read_bytes()) == before
+                assert not (user_root / "auth" / "github-copilot-token.json").exists()
+                release.set()
+            raise
+
+    holder.start()
+    try:
+        assert acquired.wait(timeout=15), "Test process did not acquire the lock"
+        with monkeypatch.context() as patch:
+            patch.setattr(msvcrt, "locking", locking)
+            saved = activate_github_copilot_provider(
+                model="copilot-model",
+                github_token={"access_token": "github-token"},
+                provider_token={"token": "provider-token", "plan": "individual"},
+                user_config_root=user_root,
+            )
+        holder.join(timeout=5)
+        assert holder.exitcode == 0
+    finally:
+        release.set()
+        holder.join(timeout=5)
+        if holder.is_alive():
+            holder.terminate()
+            holder.join(timeout=5)
+
+    assert contention_errors == [errno.EDEADLK]
+    assert saved.provider is not None
+    assert saved.provider.type == "github_copilot"
+    assert load_user_provider_config(user_root).provider == saved.provider
+    assert not credentials_path.exists()
+    assert lock_path.read_bytes() == lock_content
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows CRT file locking")
+@pytest.mark.parametrize("operation", ["load", "save", "registry"])
+def test_windows_user_config_retries_repeated_lock_contention(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
+    import msvcrt
+
+    native_locking = msvcrt.locking
+    attempts: list[int] = []
+    unlocks: list[int] = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        if mode == msvcrt.LK_LOCK:
+            attempts.append(mode)
+            if len(attempts) <= 2:
+                raise OSError(errno.EDEADLK, "Lock contention")
+        else:
+            unlocks.append(mode)
+        native_locking(fd, mode, size)
+
+    monkeypatch.setattr(msvcrt, "locking", locking)
+    if operation == "load":
+        assert load_user_provider_config(tmp_path).provider is None
+    elif operation == "registry":
+        assert list_workspace_registry(tmp_path) == []
+    else:
+        saved = save_azure_openai_provider(base_url="https://example.openai.azure.com", model="azure-model", api_key="azure-key", user_config_root=tmp_path)
+        assert saved.provider is not None
+    assert attempts == [msvcrt.LK_LOCK] * 3
+    assert unlocks == [msvcrt.LK_UNLCK]
+    assert (tmp_path / ".config.lock").read_bytes() == b""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows CRT file locking")
+@pytest.mark.parametrize("error_number", [errno.EACCES, errno.EBADF, errno.EINVAL, errno.EIO])
+def test_windows_lock_io_errors_preserve_cause_and_active_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_number: int) -> None:
+    import msvcrt
+
+    active = save_azure_openai_provider(base_url="https://example.openai.azure.com", model="azure-model", api_key="azure-key", user_config_root=tmp_path)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    failure = OSError(error_number, "Lock I/O failure")
+    calls: list[int] = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        calls.append(mode)
+        raise failure
+
+    with monkeypatch.context() as patch:
+        patch.setattr(msvcrt, "locking", locking)
+        with pytest.raises(ConfigurationError, match="Unable to lock user Provider configuration") as caught:
+            save_azure_openai_provider(base_url="https://example.openai.azure.com", model="replacement", api_key="replacement-key", user_config_root=tmp_path)
+    assert caught.value.__cause__ is failure
+    assert calls == [msvcrt.LK_LOCK]
+    assert {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()} == before
+    assert load_user_provider_config(tmp_path).provider == active.provider
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows CRT file locking")
+def test_windows_lock_wait_preserves_interruption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import msvcrt
+
+    calls: list[int] = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        calls.append(mode)
+        if len(calls) == 1:
+            raise OSError(errno.EDEADLK, "Lock contention")
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(msvcrt, "locking", locking)
+    with pytest.raises(KeyboardInterrupt):
+        load_user_provider_config(tmp_path)
+    assert calls == [msvcrt.LK_LOCK] * 2
+    assert not (tmp_path / "config.yaml").exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows CRT file locking")
+def test_windows_unlock_failure_is_not_retried_as_contention(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import msvcrt
+
+    native_locking = msvcrt.locking
+    failure = OSError(errno.EDEADLK, "Unlock failure")
+    calls: list[int] = []
+
+    def locking(fd: int, mode: int, size: int) -> None:
+        calls.append(mode)
+        if mode == msvcrt.LK_UNLCK:
+            raise failure
+        native_locking(fd, mode, size)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(msvcrt, "locking", locking)
+        with pytest.raises(OSError, match="Unlock failure") as caught:
+            load_user_provider_config(tmp_path)
+    assert caught.value is failure
+    assert calls == [msvcrt.LK_LOCK, msvcrt.LK_UNLCK]
+    assert load_user_provider_config(tmp_path).provider is None
 
 
 def test_runtime_load_ignores_provider_environment_and_refreshes_only_provider(

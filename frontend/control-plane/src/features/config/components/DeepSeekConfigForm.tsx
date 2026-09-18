@@ -25,7 +25,8 @@ export function DeepSeekConfigForm(props: DeepSeekConfigFormProps) {
   const [keyVisible, setKeyVisible] = useState(false);
   const loading = props.models.state === 'loading';
   const models = props.models.data?.models ?? [];
-  const offered = props.models.state === 'ready' && models.some(model => model.id === props.draft.modelName);
+  const hasModels = props.models.state === 'ready' && models.length > 0;
+  const offered = hasModels && models.some(model => model.id === props.draft.modelName);
   const canSave = props.dirty && offered && Boolean(props.draft.apiKey.trim()) && !props.savePending && !props.blocked;
   const locked = props.savePending || props.blocked;
   return <section className="config-editor" aria-labelledby="deepseek-config-title">
@@ -49,13 +50,16 @@ export function DeepSeekConfigForm(props: DeepSeekConfigFormProps) {
       </div>
       {props.models.error && <div className="config-error" role="alert"><strong>{props.models.error.message}</strong><span>{props.models.error.action}</span></div>}
       {props.models.state === 'ready' && models.length === 0 && <div className="config-error" role="status"><strong>No eligible models are available.</strong><span>Retry model discovery or use another provider.</span></div>}
-      {props.models.state === 'ready' && models.length > 0 ? <div className="config-field">
-        <label htmlFor="deepseek-model">Model</label>
-        <select id="deepseek-model" required value={props.draft.modelName} disabled={locked} onChange={event => props.onChange({ ...props.draft, modelName: event.target.value })}>
+      <div className="config-field">
+        <div className="config-model-heading">
+          {hasModels ? <label htmlFor="deepseek-model">Model</label> : <span>Model</span>}
+          <small id="deepseek-model-rule">deepseek-flash / Flash V4.1+ / Pro V4+ only; no extra suffixes.</small>
+        </div>
+        {hasModels ? <select id="deepseek-model" aria-describedby="deepseek-model-rule" required value={props.draft.modelName} disabled={locked} onChange={event => props.onChange({ ...props.draft, modelName: event.target.value })}>
           <option value="">Select a model</option>
           {models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-        </select>
-      </div> : props.draft.modelName && <dl className="provider-details"><div><dt>Model</dt><dd>{props.draft.modelName}</dd></div></dl>}
+        </select> : props.draft.modelName && <p className="config-model-value">{props.draft.modelName}</p>}
+      </div>
       {props.saveError && <div className="config-error" role="alert"><strong>{props.saveError.message}</strong><span>{props.saveError.action}</span></div>}
       {props.dirty && !offered && !loading && <p className="field-help">A model selection is required before saving.</p>}
       {props.savePending && <p role="status">Saving configuration...</p>}

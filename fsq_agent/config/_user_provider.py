@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import tempfile
@@ -517,12 +518,17 @@ def _acquire_process_lock(lock_file: BinaryIO) -> None:
     if os.name == "nt":
         import msvcrt
 
+        # Windows byte-range locks may extend beyond EOF; do not write before locking.
         lock_file.seek(0)
-        lock_file.write(b"\0")
-        lock_file.flush()
-        lock_file.seek(0)
-        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-        return
+        while True:
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            except OSError as error:
+                # LK_LOCK waits internally, but gives up after ten contention attempts.
+                if error.errno != errno.EDEADLK:
+                    raise
+            else:
+                return
     import fcntl
 
     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)

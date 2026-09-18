@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ControlPlaneApiError, type ControlPlaneClient } from '../../api/controlPlaneClient';
-import type { ConfigResponse, GitHubDeviceFlowResponse } from '../../api/types';
+import type { ConfigResponse, GitHubDeviceFlowResponse, OpenAIModelsResponse } from '../../api/types';
 import { ConfigPage } from './ConfigPage';
 
 const unconfigured: ConfigResponse = { configured: false, provider: null };
@@ -42,6 +42,65 @@ function client(config: ConfigResponse = unconfigured, overrides: Partial<Contro
 const openai: ConfigResponse = { configured: true, provider: { type: 'openai', modelName: 'gpt-5', apiKey: 'candidate-key' } };
 const openaiModels = { models: [{ id: 'gpt-5', name: 'gpt-5' }, { id: 'gpt-5.4', name: 'gpt-5.4' }] };
 const kimi: ConfigResponse = { configured: true, provider: { type: 'kimi', region: 'cn', modelName: 'kimi-k3', apiKey: 'china-key' } };
+
+it.each([
+  {
+    provider: 'Kimi', method: 'kimiModels', modelId: 'kimi-k3',
+    hint: 'Stable K3+ only; no prerelease, latest, or dated models.',
+  },
+  {
+    provider: 'DeepSeek', method: 'deepseekModels', modelId: 'deepseek-flash',
+    hint: 'deepseek-flash / Flash V4.1+ / Pro V4+ only; no extra suffixes.',
+  },
+] as const)('keeps $provider model rules visible across discovery states', async ({ provider, method, modelId, hint }) => {
+  let finishDiscovery!: (value: OpenAIModelsResponse) => void;
+  const pending = new Promise<OpenAIModelsResponse>(resolve => { finishDiscovery = resolve; });
+  const discover = vi.fn()
+    .mockReturnValueOnce(pending)
+    .mockRejectedValueOnce(new ControlPlaneApiError(503, {
+      code: 'provider_unavailable', message: 'Model discovery unavailable.', action: 'Retry loading models.',
+    }))
+    .mockResolvedValueOnce({ models: [{ id: modelId, name: modelId }] });
+  const user = userEvent.setup();
+  render(<ConfigPage client={client(unconfigured, { [method]: discover })} />);
+  await user.click(await screen.findByRole('button', { name: 'Add configuration' }));
+  await user.click(screen.getByRole('button', { name: new RegExp(provider) }));
+
+  expect(screen.getByText(hint)).toBeVisible();
+  expect(screen.getByText('Model')).toBeVisible();
+  expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
+  expect(discover).not.toHaveBeenCalled();
+  if (provider === 'Kimi') await user.selectOptions(screen.getByRole('combobox', { name: 'Region' }), 'global');
+  await user.type(screen.getByLabelText('API key'), 'candidate-key');
+  await user.click(screen.getByRole('button', { name: 'Load models' }));
+  expect(screen.getByText('Loading available models...')).toBeVisible();
+  expect(screen.getByText(hint)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+  await act(async () => { finishDiscovery({ models: [] }); });
+  expect(screen.getByText('No eligible models are available.')).toBeVisible();
+  expect(screen.getByText(hint)).toBeVisible();
+  expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+  await user.click(screen.getByRole('button', { name: 'Retry models' }));
+  expect(await screen.findByText('Model discovery unavailable.')).toBeVisible();
+  expect(screen.getByText(hint)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+  await user.click(screen.getByRole('button', { name: 'Retry models' }));
+  const model = await screen.findByRole('combobox', { name: 'Model' });
+  expect(model).toHaveAccessibleDescription(hint);
+  expect(model).toHaveValue('');
+  expect(screen.getAllByText(hint)).toHaveLength(1);
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  await user.selectOptions(model, modelId);
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  await user.clear(screen.getByLabelText('API key'));
+  expect(screen.getByText(hint)).toBeVisible();
+  expect(screen.queryByRole('combobox', { name: 'Model' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+});
 
 it('configures Kimi only after explicit region, discovery, and model selection', async () => {
   const saved: ConfigResponse = { configured: true, provider: { type: 'kimi', region: 'global', modelName: 'kimi-k3', apiKey: 'global-key' } };
@@ -108,6 +167,7 @@ it('restores complete saved Kimi values and keeps them out of provider replaceme
   expect(await screen.findByRole('combobox', { name: 'Region' })).toHaveValue('cn');
   expect(screen.getByLabelText('API key')).toHaveValue('china-key');
   expect(screen.getByText('kimi-k3')).toBeVisible();
+  expect(screen.getByText('Stable K3+ only; no prerelease, latest, or dated models.')).toBeVisible();
   await user.click(screen.getByRole('button', { name: 'Test connection' }));
   expect(await screen.findByRole('dialog', { name: 'Connection successful' })).toHaveTextContent('Kimi');
   await user.click(screen.getByRole('button', { name: 'Done' }));
@@ -191,6 +251,8 @@ it('keeps an empty DeepSeek discovery unsaveable without inventing a model', asy
   const api = client(saved, { deepseekModels: vi.fn().mockResolvedValue({ models: [] }) });
   const user = userEvent.setup();
   render(<ConfigPage client={api} />);
+  expect(await screen.findByText('deepseek-flash / Flash V4.1+ / Pro V4+ only; no extra suffixes.')).toBeVisible();
+  expect(screen.getByText('deepseek-flash')).toBeVisible();
   await user.click(await screen.findByRole('button', { name: 'Load models' }));
   expect(await screen.findByText('No eligible models are available.')).toBeVisible();
   expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
