@@ -13,6 +13,7 @@ from fsq_agent.application.contracts.cases import (
     CaseTestRequest,
     CaseTestResult,
 )
+from fsq_agent.application.contracts.coding_agents import CodingAgentInstallFileResult, CodingAgentInstallRequest, CodingAgentInstallResult
 from fsq_agent.application.contracts.doctor import (
     DoctorChecks,
     DoctorCommands,
@@ -69,6 +70,9 @@ __all__ = [
     "CaseSaveResult",
     "CaseTestRequest",
     "CaseTestResult",
+    "CodingAgentInstallFileResult",
+    "CodingAgentInstallRequest",
+    "CodingAgentInstallResult",
     "DoctorChecks",
     "DoctorCommands",
     "DoctorPlatformResult",

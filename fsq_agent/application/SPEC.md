@@ -13,6 +13,7 @@ Application may consume public APIs from `models`, `config`, `providers`, `ai_se
 The package exports transport-neutral operations and their Request, Result, Event, and Error contracts through `__init__.py`. The same symbols are available from their canonical resource modules so callers may depend on the narrow boundary they use. Operations are organized by resource domain rather than exposed through one generic `execute(command)` facade:
 
 - Workspace operations support the shared workspace precondition, platform target resolution, read-only runtime readiness coordination, and workspace initialization needed by adapters.
+- Coding Agent operations support project-local installation of package-owned Codex agent definitions and managed parent workflow instructions without requiring a registered Workspace.
 - Case operations support creating a Case from a Goal, testing an existing Case with optional suggestions, static formatting, and saving generated recordings.
 - Run operations support Workspace-scoped listing, stable detail, safe logs, historical inference, public evidence projection/comparison, artifact resolution, and offline exports.
 - Provider operations support user-level OpenAI, DeepSeek, Google Gemini, and region-bound Kimi model discovery/configuration, Azure OpenAI configuration, GitHub Copilot device authorization/model activation, and active-Provider readiness status. Supplier model discovery does not expose a Provider profile inventory.
@@ -24,6 +25,7 @@ Requests contain application inputs, Results contain operation outcomes and safe
 Canonical resource modules are:
 
 - `application.workspace`: Workspace operations.
+- `application.coding_agents`: Coding Agent installation operations.
 - `application.cases`: Case creation, testing, formatting, and generated-recording save operations.
 - `application.runs`: persisted Run query, report, artifact, and export operations.
 - `application.providers`: Provider operations.
@@ -70,6 +72,12 @@ Case testing performs one deterministic Execution run whose conclusion is frozen
 Workspace initialization accepts a selected current directory, optional workspace name, one platform's target inputs/environment, and controlled-update intent. Application resolves the name case-insensitively through Config's registry. For an unregistered name it delegates final-root selection to Config: an empty selected directory is adopted as the root, while a non-empty selected directory receives an absent `<selected-directory>/<workspace-name>` child. For a registered name it ignores the selected directory for persistence and uses the immutable stored root; an unavailable registered name is not recreated. Before any workspace mutation Application validates the request, resolves the complete target, and asks the platform runtime service to check readiness without installing software. Web target resolution requires an explicit channel and either validates the explicit executable path or discovers exactly one compatible host executable. Application delegates filesystem validation, root selection, platform persistence, registry mutation, idempotency, revision handling, and rollback to Config only after these prerequisites succeed, then returns committed workspace name/root/platform/status plus safe readiness/discovery facts needed by CLI or Control Plane presentation. The shared workspace precondition for non-init commands resolves the exact current directory through Config registry and Workspace truth; a marker directory alone never satisfies it.
 
 Application also exposes transport-neutral workspace create, add-platform, and update-platform operations used by Control Plane. Create accepts a selected directory, name, and complete platform inputs; add and update accept the identity and revision fields required by that mutation. Each operation resolves every target, completes readiness, and only then calls Config persistence. CLI and Control Plane do not call Config workspace mutation operations directly.
+
+`install_coding_agent` accepts a project directory, the `codex` agent kind, an intended Workspace root, and no-overwrite intent. It requires no registered Workspace, Provider, platform runtime, or external executable. The operation loads package-owned Codex resources, copies both TOML resources into staging byte-for-byte without interpreting or rendering their content, uses the `AGENTS.md` workflow bytes without path rendering or content interpretation, and parses and validates each staged TOML definition before changing a target. The operation rejects symlinked or non-directory `.codex` directories, symlinked or non-regular TOML targets, and missing or invalid package resources.
+
+The Codex workflow is wrapped between one exact `<!-- BEGIN FSQ CODEX WORKFLOW -->` and `<!-- END FSQ CODEX WORKFLOW -->` pair only when project-root `AGENTS.md` has no existing directory entry. Any existing entry at that path, including a regular file, directory, symlink, or broken symlink, returns `skipped` without content read, shape or marker validation, backup, replacement, or filename normalization. Managed-block append and update are unsupported. Existing differing TOML files receive unique adjacent backups before replacement; identical TOMLs are not rewritten; TOML destination filename casing is normalized where the filesystem requires it. No-overwrite mode skips each existing TOML destination. Legacy files under `.codex` are not deleted.
+
+Coding Agent installation returns the normalized project and intended Workspace roots plus one ordered result for each managed destination, with status `created`, `updated`, `unchanged`, or `skipped` and an optional backup path. Expected validation, ownership, target-shape, concurrent-change, and file I/O failures are safe Application errors. Preparation failure changes no target. Target replacement does not claim a cross-file rollback guarantee; completed replacements and backups remain truthful if a later replacement fails.
 
 Provider operations do not accept or resolve a Workspace. They coordinate the existing public Config and Providers APIs against the user Config root also used by Control Plane and never use process environment, Workspace `.env`, or platform configuration as Provider authority. Azure configuration accepts a complete endpoint, model/deployment name, and API key candidate and delegates validation plus atomic replacement to Config. GitHub configuration exposes transport-neutral device-code request, cancellable completion, eligible-model discovery, and authorization activation operations so an adapter can present and select without receiving persistence authority. Application validates that the selected model came from that authorization's discovered eligible set before activation.
 
@@ -124,6 +132,8 @@ Control Plane startup diagnoses the exact Android settings copy after applying t
 - `__init__.py`: Complete convenience exports for the public Application API.
 - `contracts/`: Canonical transport-neutral Request, Result, Event, Error, summary, and machine-record contracts grouped by resource concern.
 - `workspace.py`: Public Workspace operation boundary and private Workspace orchestration helpers.
+- `coding_agents.py`: Public project-local Coding Agent installation boundary.
+- `_codex_install.py`: Private Codex resource rendering, validation, managed-block merge, and guarded file replacement helpers.
 - `cases.py`: Public Case creation, testing, formatting, and generated-recording save boundary.
 - `_case_format.py`: Static Case file orchestration and atomic conditional formatting writes.
 - `runs.py`: public persisted Run query/report/export/artifact boundary with Workspace and destination resolution.
@@ -165,6 +175,7 @@ Doctor component failures do not expose exception messages, arguments, traceback
 - Suggestion-enabled Case testing separates deterministic execution from read-only post-execution AI analysis; the analysis has no UI-action authority and all generated artifacts remain inside the completed Run directory.
 - Doctor is a read-only Application use case; CLI presents its result but does not reproduce diagnostic or command-readiness rules.
 - Provider configuration and status are user-level Application use cases shared in persistence authority with Control Plane, require no Workspace, and never recover Provider state from `.env` or process environment.
+- Coding Agent installation is a project-local Application use case that requires no Workspace registration or Provider and never installs the FSQ package, initializes a Workspace, or changes user-level configuration.
 - The Provider boundary has one active Provider and no profile inventory, retained profiles, fallback chain, or transport-specific UI models. OpenAI, DeepSeek, Gemini, Kimi, and GitHub model discovery enumerate eligible model facts only and do not activate a Provider. Kimi region is explicit configuration identity rather than a second profile.
 
 ## Static Case Formatting And Generated Save

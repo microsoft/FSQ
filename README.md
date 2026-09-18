@@ -233,6 +233,8 @@ Provider configuration is stored under `~/.fsq` and shared by the CLI and local 
 
 Contributions are welcome across documentation, Cases, platform Harnesses, evidence, verification, and developer experience. Start with [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
+See [Codex integration](docs/codex-integration.md) for project-local FSQ agent setup.
+
 ## License
 
 [MIT](LICENSE) — Copyright (c) Microsoft Corporation.

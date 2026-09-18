@@ -13,7 +13,7 @@ FSQ installs `fsq` and the compatibility alias `fsq-agent`. Both invoke the same
 
 | Command | Purpose | Workspace required |
 |---|---|---|
-| `fsq init` | Check readiness and initialize one Workspace platform. | No |
+| `fsq init` | Initialize a Workspace platform, a project-local Coding Agent integration, or both. | No |
 | `fsq doctor` | Diagnose configured platforms without mutation. | Yes |
 | `fsq providers configure/status` | Configure or inspect the user-level Provider. | No |
 | `fsq case create` | Execute one AI-driven goal. | Yes |
@@ -35,6 +35,8 @@ fsq runs export RUN_ID --format bundle --baseline BASELINE_RUN_ID --related-run 
 ```
 
 Choose one `--format json|junit|html|bundle`. Omitted `--output` creates a unique Run-local export directory; an explicit path names an absent output file. Existing files are not overwritten. `--baseline` requires comparable source identity; `--related-run` requires persisted lineage. `--share-profile PATH` selects bounded, local artifact/text/mask transformations on copies, without publishing. The global `--output json` controls CLI output, while the subcommand's `--output` controls the exported file. A successful export exits zero even for a failed Run; the report retains its non-passing gate. See [CI evidence](ci-evidence.md) and the [public demo source](../examples/evidence-demo/README.md).
+
+`fsq init --agent codex` installs the two FSQ Codex TOML definitions byte-for-byte in the current project and uses the packaged `AGENTS.md` workflow content without path rendering. When `AGENTS.md` is absent, installation creates it with one FSQ managed block. Any existing entry at that path is always skipped without reading or modification. `--no-overwrite` skips every existing TOML destination. At least one of `--platform` or `--agent` is required.
 
 `init` never installs Driver/Runtime packages or system prerequisites. The public CLI has no `environments` command, `providers list`, or `--install-driver` option.
 

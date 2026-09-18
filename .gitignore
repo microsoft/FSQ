@@ -24,6 +24,8 @@ node_modules/
 fsq_agent/adapters/control_plane/playground/static/
 fsq_agent/adapters/control_plane/static/
 fsq_agent/resources/*
+!fsq_agent/resources/codex/
+!fsq_agent/resources/codex/**
 !fsq_agent/resources/skills/
 !fsq_agent/resources/skills/**
 
