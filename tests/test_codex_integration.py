@@ -29,7 +29,7 @@ from fsq_agent.application import (
 from fsq_agent.execution import RunSource, allocate_run, transition_run
 
 ROOT = Path(__file__).resolve().parents[1]
-AGENT_PATH = ROOT / ".codex" / "agents" / "fsq_test_runner.toml"
+AGENT_PATH = ROOT / "fsq_agent" / "resources" / "codex" / "agents" / "fsq_test_runner.toml"
 CLI_MODULE = "fsq_agent.adapters.cli._main"
 COMMAND_NAMES = ("doctor", "case.format", "case.create", "case.create.named", "case.test", "case.test.suggest", "runs.show", "runs.logs")
 
@@ -333,6 +333,6 @@ def test_logs_template_uses_exact_run_and_bounded_limit(commands, tmp_path, monk
 
 def test_integration_guide_is_discoverable_and_links_the_shipped_definition() -> None:
     guide = ROOT / "docs" / "codex-integration.md"
-    assert "../.codex/agents/fsq_test_runner.toml" in guide.read_text(encoding="utf-8")
+    assert "../fsq_agent/resources/codex/agents/fsq_test_runner.toml" in guide.read_text(encoding="utf-8")
     for readme in ("README.md", "README.zh-CN.md"):
         assert "docs/codex-integration.md" in (ROOT / readme).read_text(encoding="utf-8")

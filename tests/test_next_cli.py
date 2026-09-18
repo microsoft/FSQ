@@ -511,12 +511,14 @@ def test_init_agent_codex_is_independent_of_platform(monkeypatch, tmp_path: Path
     monkeypatch.setattr("fsq_agent.adapters.cli._main.initialize_workspace", lambda _request: pytest.fail("workspace initialization must not run"))
     monkeypatch.setattr(
         "fsq_agent.adapters.cli._main.install_coding_agent",
-        lambda request: captured.update(request=request)
-        or CodingAgentInstallResult(
-            agent="codex",
-            project_directory=request.project_directory,
-            workspace_root=request.workspace_root,
-            files=(CodingAgentInstallFileResult(path=request.project_directory / "AGENTS.md", status="created"),),
+        lambda request: (
+            captured.update(request=request)
+            or CodingAgentInstallResult(
+                agent="codex",
+                project_directory=request.project_directory,
+                workspace_root=request.workspace_root,
+                files=(CodingAgentInstallFileResult(path=request.project_directory / "AGENTS.md", status="created"),),
+            )
         ),
     )
     runner = CliRunner()
@@ -546,8 +548,7 @@ def test_init_combines_workspace_and_codex_agent(monkeypatch, tmp_path: Path) ->
     )
     monkeypatch.setattr(
         "fsq_agent.adapters.cli._main.install_coding_agent",
-        lambda request: captured.update(request=request)
-        or CodingAgentInstallResult(agent="codex", project_directory=request.project_directory, workspace_root=request.workspace_root, files=()),
+        lambda request: captured.update(request=request) or CodingAgentInstallResult(agent="codex", project_directory=request.project_directory, workspace_root=request.workspace_root, files=()),
     )
 
     result = CliRunner().invoke(main, ["--output", "json", "init", "--platform", "android", "--app-id", "com.example", "--agent", "codex"])

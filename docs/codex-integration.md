@@ -5,7 +5,7 @@ keeps responsibility for the development task; FSQ keeps its own planning,
 Provider session, UI execution, verification, recording, and evidence.
 
 The reusable definition is
-[`.codex/agents/fsq_test_runner.toml`](../.codex/agents/fsq_test_runner.toml).
+[`fsq_test_runner.toml`](../fsq_agent/resources/codex/agents/fsq_test_runner.toml).
 It calls the installed `fsq` JSON CLI. It does not add an MCP server, a new
 Provider, a Python wrapper, or another FSQ execution loop.
 
