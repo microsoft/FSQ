@@ -19,6 +19,7 @@ from fsq_agent.models import (
     CapabilityExecutionResult,
     ConfigurationError,
     EvidenceArtifactRef,
+    EvidenceJournalRecord,
     EvidencePolicy,
     ExecutableStep,
     FailureCategory,
@@ -275,7 +276,6 @@ class StepRunner:
             artifact_refs=refs,
             metadata={**self._safe_value(metadata), "timing_measured": True},
         )
-        state.phase_reports.append(report)
         if phase == "invoke" and self._last_capability_execution_result is not None:
             self._last_capability_execution_result = self._last_capability_execution_result.model_copy(
                 update={
@@ -284,7 +284,7 @@ class StepRunner:
                     "metadata": {**self._last_capability_execution_result.metadata, "timing_measured": True, "timing_scope": "invoke"},
                 }
             )
-        self._emit(
+        event = self._emit(
             run_id=run_id,
             event_type="phase_finish",
             step=step,
@@ -295,6 +295,7 @@ class StepRunner:
                 "phase_report": report.model_dump(mode="json"),
             },
         )
+        state.phase_reports.append(StepPhaseReport.model_validate(event.payload["phase_report"]))
         if interrupted is not None:
             raise interrupted
         return value
@@ -476,27 +477,29 @@ class StepRunner:
         failure_category: FailureCategory | None,
         error_message: str | None,
     ) -> RunnerStepResult:
-        result = RunnerStepResult(
-            step_id=step.step_id,
-            source_step_id=step.source_step_id,
-            step_execution_id=step.step_execution_id,
-            invocation_path=step.invocation_path,
-            source_ref=step.source_ref,
-            status=status,
-            action_status=state.action_status,
-            action_name=step.action_name,
-            kind=step.kind,
-            started_at=state.started_at,
-            ended_at=datetime.now(UTC),
-            duration_ms=self._duration_ms(state.started),
-            unavailable_reason=None,
-            phase_reports=state.phase_reports,
-            attempt_index=step.attempt_index,
-            max_attempts=step.retry_policy.max_attempts,
-            failure_category=failure_category,
-            error_message=self._safe_text(error_message),
-            evidence_errors=state.evidence_errors,
-            metadata={**self._safe_value(step.metadata), "timing_measured": True, "evidence_policy": step.evidence_policy.model_dump(mode="json")},
+        result = self._canonical_step_result(
+            RunnerStepResult(
+                step_id=step.step_id,
+                source_step_id=step.source_step_id,
+                step_execution_id=step.step_execution_id,
+                invocation_path=step.invocation_path,
+                source_ref=step.source_ref,
+                status=status,
+                action_status=state.action_status,
+                action_name=step.action_name,
+                kind=step.kind,
+                started_at=state.started_at,
+                ended_at=datetime.now(UTC),
+                duration_ms=self._duration_ms(state.started),
+                unavailable_reason=None,
+                phase_reports=state.phase_reports,
+                attempt_index=step.attempt_index,
+                max_attempts=step.retry_policy.max_attempts,
+                failure_category=failure_category,
+                error_message=self._safe_text(error_message),
+                evidence_errors=state.evidence_errors,
+                metadata={**step.metadata, "timing_measured": True, "evidence_policy": step.evidence_policy.model_dump(mode="json")},
+            )
         )
         if self.evidence_sink is not None:
             try:
@@ -537,18 +540,20 @@ class StepRunner:
         step: ExecutableStep,
         phase: StepPhase | None = None,
         payload: dict[str, object] | None = None,
-    ) -> None:
-        event = RunnerEvent(
-            event_id=uuid.uuid4().hex,
-            event_type=event_type,
-            run_id=run_id,
-            step_id=step.step_id,
-            source_step_id=step.source_step_id,
-            step_execution_id=step.step_execution_id,
-            invocation_path=step.invocation_path,
-            attempt_index=step.attempt_index,
-            phase=phase,
-            payload=self._safe_value(payload or {}),
+    ) -> RunnerEvent:
+        event = self._canonical_event(
+            RunnerEvent(
+                event_id=uuid.uuid4().hex,
+                event_type=event_type,
+                run_id=run_id,
+                step_id=step.step_id,
+                source_step_id=step.source_step_id,
+                step_execution_id=step.step_execution_id,
+                invocation_path=step.invocation_path,
+                attempt_index=step.attempt_index,
+                phase=phase,
+                payload=payload or {},
+            )
         )
         if self.evidence_sink is not None:
             try:
@@ -558,6 +563,21 @@ class StepRunner:
                 exc.fsq_evidence_fatal = True
                 raise
         self._events.append(event)
+        return event
+
+    def _canonical_event(self, event: RunnerEvent) -> RunnerEvent:
+        record = EvidenceJournalRecord(sequence=1, event_id=uuid.uuid4().hex, run_id=event.run_id, event=event)
+        canonical = EvidenceJournalRecord.model_validate(self._safe_value(record.model_dump(mode="json")))
+        if canonical.event is None:
+            raise ValueError("Canonical evidence event is unavailable.")
+        return canonical.event
+
+    def _canonical_step_result(self, result: RunnerStepResult) -> RunnerStepResult:
+        record = EvidenceJournalRecord(sequence=1, event_id=uuid.uuid4().hex, run_id=str(result.metadata.get("run_id") or "runner"), step_result=result)
+        canonical = EvidenceJournalRecord.model_validate(self._safe_value(record.model_dump(mode="json")))
+        if canonical.step_result is None:
+            raise ValueError("Canonical evidence step result is unavailable.")
+        return canonical.step_result
 
     def _capture_artifacts(
         self,

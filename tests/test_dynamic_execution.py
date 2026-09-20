@@ -3,6 +3,7 @@
 
 import ast
 import asyncio
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -135,6 +136,51 @@ async def test_execution_finalizes_agent_error_or_cancellation_and_preserves_exc
         await DynamicExecutionService(agent=agent).execute(DynamicExecutionRequest(task=Task(description="Task"), settings=settings))
     assert (failure.value if cancelled else failure.value.__cause__) is error
     assert load_run_metadata(settings.output.runs_dir / agent.run_ids[0]).status == ("cancelled" if cancelled else "error")
+
+
+async def test_execution_error_freezes_steps_recovered_from_deep_evidence_journal(tmp_path: Path) -> None:
+    from fsq_agent.core import StepRunner
+    from fsq_agent.models import HarnessActionResult, HarnessContext
+
+    settings = _settings(tmp_path)
+
+    class Harness:
+        def get_context(self):
+            return HarnessContext(platform="web")
+
+        def before_action(self, step, context):
+            pass
+
+        def invoke_action(self, step, context):
+            output = {"attributes": {"value": "A"}}
+            for _ in range(10):
+                output = {"children": [output]}
+            return HarnessActionResult(status="passed", action_name=step.action_name, output={"snapshot": output})
+
+        def after_action(self, step, context, result):
+            pass
+
+        def classify_error(self, error, phase, step):
+            return "harness_error"
+
+    class FailingAfterEvidenceAgent(_Agent):
+        async def run_in_context(self, task, context, event_sink=None, *, evidence_sink, **kwargs):
+            self.run_ids.append(context.run_id)
+            StepRunner(Harness(), evidence_sink=evidence_sink).run_step(
+                context.run_id,
+                ExecutableStep(step_id="deep-observation", kind="observation", action_name="ui_snapshot", params={}),
+            )
+            raise RuntimeError("failure after durable evidence")
+
+    agent = FailingAfterEvidenceAgent(settings)
+
+    with pytest.raises(ToolExecutionError):
+        await DynamicExecutionService(agent=agent).execute(DynamicExecutionRequest(task=Task(description="Task"), settings=settings))
+
+    run_dir = settings.output.runs_dir / agent.run_ids[0]
+    frozen = json.loads((run_dir / "execution-result.json").read_text())
+    assert frozen["counts"]["total"] == 1
+    assert frozen["counts"]["passed"] == 1
 
 
 @pytest.mark.parametrize("before_allocation", [False, True])

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from fsq_agent.drivers._ai_assertion import AIAssertionBackendToolMixin
 from fsq_agent.drivers._capabilities import _macos_driver_tool
-from fsq_agent.drivers.macos._elements import candidate, parse_source, query_source
+from fsq_agent.drivers.macos._elements import candidate, parse_source
 from fsq_agent.models import (
     ConfigurationError,
     MacOSAssertElementsOrderParams,
@@ -71,6 +71,7 @@ DEFAULT_MACOS_SNAPSHOT_ATTRIBUTE_KEYS = frozenset(
         "name",
         "label",
         "value",
+        "title",
         "type",
         "role",
         "enabled",
@@ -82,7 +83,7 @@ DEFAULT_MACOS_SNAPSHOT_ATTRIBUTE_KEYS = frozenset(
         "height",
     }
 )
-MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS = frozenset({"name", "label", "value"})
+MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS = frozenset({"name", "label", "value", "title"})
 MACOS_SNAPSHOT_IDENTITY_ATTRIBUTE_KEYS = frozenset({"identifier", *MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS})
 MACOS_SNAPSHOT_SEMANTIC_ATTRIBUTE_KEYS = frozenset({*MACOS_SNAPSHOT_IDENTITY_ATTRIBUTE_KEYS, "type", "role"})
 MACOS_SNAPSHOT_STATE_DEFAULTS = {"enabled": "true", "visible": "true", "selected": "false"}
@@ -200,33 +201,84 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
     @_macos_driver_tool("typeText", description="Type text into the active or resolved macOS element.")
     def type_text(self, params: MacOSTypeTextParams) -> dict[str, object]:
         element = self._resolve_element_or_none(params)
-        if element is not None:
-            if params.clear:
-                clear = getattr(element, "clear", None)
-                if not callable(clear):
-                    return self._failed("action_error", "Resolved Appium element cannot clear existing text.")
-                clear()
-            self._send_macos_text(params.text, element=element)
-            return self._passed()
-
-        point = self._point_from_params(params)
-        if point is not None:
+        point = self._point_from_params(params) if element is None else None
+        if element is None and point is not None:
             self._perform_pointer_click(point)
-        elif params.target is not None or params.locator is not None:
+        elif element is None and (params.target is not None or params.locator is not None):
             return self._target_missing(params)
 
+        element = element or self._active_element_or_none()
+        if element is not None:
+            result = self._type_text_into_element(element, params)
+            if point is not None and result.get("status") == "passed":
+                result["output"] = {"point": point.model_dump(mode="json")}
+            return result
+
         if params.clear:
-            session = self._require_session()
-            switch_to = getattr(session, "switch_to", None)
-            active_element = getattr(switch_to, "active_element", None)
-            clear = getattr(active_element, "clear", None)
-            if not callable(clear):
-                return self._failed("action_error", "Appium session has no active element that can clear existing text.")
-            clear()
+            return self._failed("action_error", "Appium session has no active element that can clear and verify text.")
         self._send_macos_text(params.text)
         if point is not None:
             return self._passed({"point": point.model_dump(mode="json")})
         return self._passed()
+
+    def _type_text_into_element(self, element: object, params: MacOSTypeTextParams) -> dict[str, object]:
+        initial_value = self._element_value(element)
+        click = self._safe_attr(element, "click")
+        if callable(click):
+            try:
+                click()
+            except Exception as exc:  # noqa: BLE001 -- normalize optional backend failures.
+                self._raise_resolution_error(exc)
+        if params.clear and not self._clear_element_text(element):
+            return self._failed("action_error", "Resolved Appium element cannot clear existing text.")
+        send_keys = self._safe_attr(element, "send_keys")
+        if callable(send_keys):
+            try:
+                send_keys(params.text)
+            except Exception as exc:  # noqa: BLE001 -- normalize optional backend failures.
+                self._raise_resolution_error(exc)
+        if self._element_value_reflects_text(element, params.text, clear=bool(params.clear), initial_value=initial_value):
+            return self._passed()
+
+        if params.clear and not self._clear_element_text(element):
+            return self._failed("action_error", "Resolved Appium element cannot clear existing text before fallback.")
+        self._send_macos_text(params.text)
+        if self._element_value_reflects_text(element, params.text, clear=bool(params.clear), initial_value=initial_value):
+            return self._passed()
+        return self._failed("action_error", "macOS text entry did not update the target element value after fallback.")
+
+    def _active_element_or_none(self) -> object | None:
+        session = self._require_session()
+        switch_to = self._safe_attr(session, "switch_to")
+        return self._safe_attr(switch_to, "active_element")
+
+    def _clear_element_text(self, element: object) -> bool:
+        clear = self._safe_attr(element, "clear")
+        if not callable(clear):
+            return False
+        try:
+            clear()
+        except Exception as exc:  # noqa: BLE001 -- normalize optional backend failures.
+            self._raise_resolution_error(exc)
+        return True
+
+    def _element_value(self, element: object) -> str | None:
+        get_attribute = self._safe_attr(element, "get_attribute")
+        if not callable(get_attribute):
+            return None
+        try:
+            value = get_attribute("value")
+        except Exception as exc:  # noqa: BLE001 -- normalize optional backend failures.
+            self._raise_resolution_error(exc)
+        return value if isinstance(value, str) else None
+
+    def _element_value_reflects_text(self, element: object, text: str, *, clear: bool, initial_value: str | None) -> bool:
+        value = self._element_value(element)
+        if value is None:
+            return False
+        if clear:
+            return value == text
+        return value == f"{initial_value}{text}" if initial_value is not None else value.endswith(text)
 
     def _send_macos_text(self, text: str, *, element: object | None = None) -> None:
         normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -299,8 +351,6 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
             self._raise_resolution_error(exc)
         if not isinstance(source, str):
             raise ConfigurationError("Mac2 did not return a page source.", context={"resolution_reason": "backend_error"})
-        if params.query is not None:
-            return query_source(source, params.query)
         max_depth = params.max_depth or self.page_source_max_depth
         include_attributes = bool(params.include_attributes)
         return {
@@ -492,13 +542,13 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
 
     def _locator_constraints(self, locator: MacOSLocator) -> list[str]:
         constraints = []
-        for field, attribute in (("accessibilityId", "identifier"), ("label", "label"), ("value", "value"), ("role", "role")):
+        for field, attribute in (("accessibilityId", "identifier"), ("label", "label"), ("value", "value"), ("title", "title"), ("role", "role")):
             value = getattr(locator, field)
             if value:
                 constraints.append(f"@{attribute}={self._xpath_literal(value)}")
         if locator.name:
             literal = self._xpath_literal(locator.name)
-            constraints.append("(" + " or ".join(f"@{key}={literal}" for key in ("identifier", "name", "label", "value")) + ")")
+            constraints.append("(" + " or ".join(f"@{key}={literal}" for key in ("identifier", "name", "label", "value", "title")) + ")")
         for value in (locator.controlType, locator.className):
             if value:
                 literal = self._xpath_literal(value)
@@ -515,7 +565,7 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         getter = getattr(element, "get_attribute", None)
         attrs = {}
         if callable(getter):
-            for key in ("identifier", "label", "value", "type", "enabled", "visible", "selected"):
+            for key in ("identifier", "name", "label", "value", "title", "type", "enabled", "visible", "selected"):
                 try:
                     value = getter(key)
                 except Exception:  # noqa: BLE001 -- optional diagnostic attributes must not expose backend errors.

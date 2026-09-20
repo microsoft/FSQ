@@ -2,17 +2,22 @@
 # Licensed under the MIT License.
 
 import pytest
+from pydantic import ValidationError
 
 from fsq_agent.drivers.macos._appium_mac2 import AppiumMac2Driver
-from fsq_agent.models import ConfigurationError, MacOSAssertVisibleParams, MacOSClickOnParams, MacOSElementQuery, MacOSLocator, MacOSRightClickOnParams, MacOSUiSnapshotParams
+from fsq_agent.models import ConfigurationError, MacOSAssertVisibleParams, MacOSClickOnParams, MacOSLocator, MacOSRightClickOnParams, MacOSUiSnapshotParams
 
 
 class Element:
-    def __init__(self, identifier):
+    def __init__(self, identifier, **attributes):
         self.id = identifier
+        self.attributes = attributes
 
     def is_displayed(self):
         return True
+
+    def get_attribute(self, name):
+        return self.attributes.get(name)
 
 
 class Session:
@@ -48,6 +53,28 @@ def test_locator_literal_apostrophe_and_quotes_are_encoded():
     assert "concat(" in session.calls[0][1]
 
 
+def test_title_is_preserved_and_supported_by_locators():
+    title = "Save Link As" + "x" * 50
+    driver = AppiumMac2Driver(session=Session(source=f'<Application><MenuItem title="{title}"/></Application>'))
+    assert "title" in MacOSLocator.model_json_schema()["properties"]
+
+    tree = driver.ui_snapshot(MacOSUiSnapshotParams())
+    assert tree["page_source"]["root"]["children"][0]["attributes"]["title"] == title[:50]
+    assert tree["page_source"]["root"]["children"][0]["truncated_attributes"] == ["title"]
+
+    locator_session = Session([Element("one")])
+    AppiumMac2Driver(session=locator_session).assert_visible(MacOSAssertVisibleParams(locator=MacOSLocator(title=title)))
+    assert f"@title='{title}'" in locator_session.calls[0][1]
+
+    target_session = Session([Element("one")])
+    AppiumMac2Driver(session=target_session).assert_visible(MacOSAssertVisibleParams(target=title))
+    assert f"@title='{title}'" in target_session.calls[0][1]
+
+    with pytest.raises(ConfigurationError) as error:
+        AppiumMac2Driver(session=Session([Element("a", title=title), Element("b", title=title)])).assert_visible(MacOSAssertVisibleParams(target=title))
+    assert error.value.context["candidates"][0]["display"]["title"] == title[:50]
+
+
 def test_ambiguous_locator_never_claims_visible():
     driver = AppiumMac2Driver(session=Session([Element("a"), Element("b")]))
     with pytest.raises(ConfigurationError) as error:
@@ -63,43 +90,12 @@ def test_backend_error_not_disguised_as_missing_target():
     assert "SECRET" not in str(error.value)
 
 
-def test_query_ignores_element_type_names_and_preserves_full_locator():
-    title = "Apply Men filter " + "x" * 70
-    source = f'<Application><XCUIElementTypeButton label="Unrelated"/><Group><Link label="{title}" selected="true"/></Group></Application>'
-    driver = AppiumMac2Driver(session=Session(source=source))
-    result = driver.ui_snapshot(MacOSUiSnapshotParams.model_validate({"max_depth": 1, "query": {"text": "Men"}}))
-    assert result["match_count"] == 1
-    candidate = result["candidates"][0]
-    assert candidate["locator"]["label"] == title
-    assert candidate["text_truncated"] is True
-    assert len(candidate["display"]["label"]) == 50
-    assert "page_source" not in result
-
-
-def test_query_missing_state_is_not_false_and_pagination_is_revision_bound():
-    session = Session(source='<Application><Button label="shoe"/><Button label="shoe" visible="false"/></Application>')
-    driver = AppiumMac2Driver(session=session)
-    filtered = driver.ui_snapshot(MacOSUiSnapshotParams.model_validate({"query": {"text": "shoe", "visible": False}}))
-    assert filtered["match_count"] == 1
-    first = driver.ui_snapshot(MacOSUiSnapshotParams.model_validate({"query": {"text": "shoe", "limit": 1}}))
-    assert first["next_offset"] == 1
-    second = driver.ui_snapshot(MacOSUiSnapshotParams.model_validate({"query": {"text": "shoe", "offset": 1, "snapshot_revision": first["snapshot_revision"]}}))
-    assert len(second["candidates"]) == 1
-    session.page_source = "<Application/>"
-    stale = driver.ui_snapshot(MacOSUiSnapshotParams.model_validate({"query": {"text": "shoe", "offset": 1, "snapshot_revision": first["snapshot_revision"]}}))
-    assert stale["metadata"]["resolution_reason"] == "stale_snapshot"
-
-
-def test_tree_clipping_explicit_and_query_does_not_invent_absent_button():
+def test_tree_clipping_is_explicit():
     source = '<Application><Button label="' + "x" * 60 + '"/></Application>'
     driver = AppiumMac2Driver(session=Session(source=source))
     tree = driver.ui_snapshot(MacOSUiSnapshotParams())
     node = tree["page_source"]["root"]["children"][0]
     assert node["truncated_attributes"] == ["label"]
-    result = driver.ui_snapshot(MacOSUiSnapshotParams.model_validate({"query": {"text": "Add to cart"}}))
-    assert result["match_count"] == 0
-    assert result["coverage"] == "complete"
-    assert result["absence_proves_invisibility"] is False
 
 
 @pytest.mark.parametrize("error_name,reason", [("InvalidSelectorException", "invalid_locator"), ("InvalidSessionIdException", "session_unavailable"), ("WebDriverException", "backend_error")])
@@ -142,80 +138,18 @@ def test_coordinates_cannot_override_missing_semantic_target(method, params_type
     assert result["metadata"]["resolution_reason"] == "not_found"
 
 
-def test_query_semantics_and_button_recovery_from_depth_clipping():
-    source = '<Application><Group label="wrapper"><Group label="nested"><Button label="Add to cart" enabled="true"/><Link label="Apply Men filter to narrow results"/><Link label="Apply adidas filter to narrow results"/></Group></Group></Application>'
-    driver = AppiumMac2Driver(session=Session(source=source))
-    tree = driver.ui_snapshot(MacOSUiSnapshotParams(max_depth=1))
-    assert tree["page_source"]["root"]["children_truncated"] == 1
-    result = driver.ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="add to cart", match="exact", control_type="Button", enabled=True)))
-    assert result["match_count"] == 1
-    assert result["candidates"][0]["locator"]["label"] == "Add to cart"
-    result = driver.ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="Men")))
-    assert result["match_count"] == 1
-    result = driver.ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="ADD", case_sensitive=True)))
-    assert result["match_count"] == 0
-
-
-@pytest.mark.parametrize(
-    "source",
-    ['<!DOCTYPE x [<!ENTITY a "xx">]><x>&a;</x>', "<bad", "<x>" * 130 + "</x>" * 130, "<x>" + "<Button/>" * 10001 + "</x>"],
-    ids=["dtd", "malformed", "depth-limit", "node-limit"],
-)
-def test_query_invalid_or_excessive_source_is_incomplete(source):
-    result = AppiumMac2Driver(session=Session(source=source)).ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="button")))
-    assert result["coverage"] == "incomplete"
-    assert result["count_is_lower_bound"] is True
-    assert result["candidates"] == []
-
-
-def test_oversized_locator_is_unavailable_not_a_prefix():
-    source = '<Application><Button label="' + "q" * 1025 + '"/></Application>'
-    result = AppiumMac2Driver(session=Session(source=source)).ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="q")))
-    item = result["candidates"][0]
-    assert item["locator"] is None
-    assert item["locator_unavailable_fields"] == ["label"]
-
-
-def test_response_bound_has_continuation():
-    source = "<Application>" + "".join('<Button label="' + str(i) + "q" * 1000 + '"/>' for i in range(50)) + "</Application>"
-    result = AppiumMac2Driver(session=Session(source=source)).ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="q", limit=50)))
-    assert result["match_count"] == 50
-    assert result["response_truncated"] is True
-    assert 0 < result["next_offset"] < 50
-
-
 def test_interactive_unlabelled_node_preserved():
     result = AppiumMac2Driver(session=Session(source='<Application><Wrapper><XCUIElementTypeButton enabled="true"/></Wrapper></Application>')).ui_snapshot(MacOSUiSnapshotParams())
     assert result["page_source"]["root"]["children"][0]["type"] == "XCUIElementTypeButton"
 
 
-def test_query_continuation_validation_and_normal_registry_exposure():
-    from pydantic import ValidationError
-
+def test_ui_snapshot_schema_rejects_query():
     from fsq_agent.harnesses._macos import MacOSHarness
 
     with pytest.raises(ValidationError):
-        MacOSElementQuery(offset=1)
+        MacOSUiSnapshotParams.model_validate({"query": {"text": "Save"}})
     schema = next(item for item in MacOSHarness(driver=AppiumMac2Driver()).action_space() if item.name == "ui_snapshot")
-    assert "query" in schema.params_json_schema["properties"]
-
-
-def test_type_and_state_queries_return_unlabelled_controls():
-    driver = AppiumMac2Driver(session=Session(source='<Application><Button enabled="true" visible="true"/></Application>'))
-    for query in (MacOSElementQuery(control_type="Button"), MacOSElementQuery(enabled=True), MacOSElementQuery(control_type="Button", visible=True)):
-        result = driver.ui_snapshot(MacOSUiSnapshotParams(query=query))
-        assert result["match_count"] == 1
-        assert result["candidates"][0]["type"] == "Button"
-
-
-def test_oversized_type_does_not_stall_pagination():
-    tag = "X" * 40000
-    driver = AppiumMac2Driver(session=Session(source=f'<{tag} label="Match"/>'))
-    result = driver.ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="Match")))
-    assert len(result["candidates"]) == 1
-    assert result["next_offset"] is None
-    assert "controlType" not in result["candidates"][0]["locator"]
-    assert "controlType" in result["candidates"][0]["locator_unavailable_fields"]
+    assert "query" not in schema.params_json_schema["properties"]
 
 
 @pytest.mark.parametrize("stage", ["visibility", "geometry", "click"])

@@ -8,7 +8,7 @@ import time
 from typing import Any
 
 from fsq_agent._capability_bootstrap import build_capability_registry
-from fsq_agent.agent_engine import ToolBinding, ToolCall, ToolInputFailure
+from fsq_agent.agent_engine import EngineError, ToolBinding, ToolCall, ToolInputFailure
 from fsq_agent.core import HarnessInterface, RuntimeSecretStore, StepRunner
 from fsq_agent.core.interfaces import EvidenceJournalSink
 from fsq_agent.models import CapabilityDefinition, ConfigurationError, ExecutableStep, HarnessFunctionSchema, HarnessPlatform, PostActionDelaySettings, RunnerStepResult
@@ -118,7 +118,7 @@ class HarnessToolAdapter:
             # Tool transport must convert arbitrary capability failures into structured results.
             except Exception as exc:
                 if getattr(exc, "fsq_evidence_fatal", False):
-                    raise
+                    raise EngineError("evidence", "Durable execution evidence failed.") from None
                 if type(exc).__name__ in {"TaskCancelledError", "ExecutionCancelled", "RunCancelled"}:
                     raise asyncio.CancelledError() from exc
                 return self._format_failure(schema, exc, int((time.perf_counter() - started) * 1000))

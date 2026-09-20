@@ -358,6 +358,27 @@ async def test_runtime_failure_returns_failed_step() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_classifies_durable_evidence_failure_separately_from_model_failure() -> None:
+    class EvidenceFailureEngine:
+        async def run(self, model, request, *, on_event=None):
+            raise EngineError("evidence", "Durable execution evidence failed.")
+
+    runtime = DefaultCodingAgentRuntime(
+        Settings(agent_runtime=_azure_openai_settings()),
+        _EmptyToolFactory(),
+        _fake_harness_factory,
+        engine=EvidenceFailureEngine(),
+    )
+
+    results = await _run_in_context(runtime, Task(id="evidence-failure", description="Fail evidence."), KnowledgeBundle(), [], "evidence-failure-run")
+
+    assert results[0].status == "failed"
+    assert results[0].tool_output["failure_category"] == "artifact_error"
+    assert results[0].tool_output["failure_reason"] == "evidence_persistence"
+    assert results[0].actual_outcome == "Agent runtime stopped because durable execution evidence failed."
+
+
+@pytest.mark.asyncio
 async def test_runtime_emits_startup_events_before_main_planning(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_runtime_engine(monkeypatch)
     runtime = DefaultCodingAgentRuntime(Settings(agent_runtime=_azure_openai_settings()), _EmptyToolFactory(), _fake_harness_factory)
@@ -1123,6 +1144,30 @@ async def test_harness_tool_adapter_delegates_to_step_runner(monkeypatch: pytest
     assert runner_calls[0][2].evidence_policy.capture_before is False
     assert runner_calls[0][2].evidence_policy.artifact_kinds == []
     assert harness.steps == []
+
+
+@pytest.mark.asyncio
+async def test_harness_tool_adapter_preserves_fatal_evidence_failure_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    import fsq_agent.adapters.coding_agent._harness_tools as harness_tools_module
+
+    class _FatalEvidenceStepRunner:
+        def __init__(self, harness: Any, **_: Any) -> None:
+            pass
+
+        def run_step(self, run_id: str, step: Any) -> RunnerStepResult:
+            error = ValueError("private evidence mismatch")
+            error.fsq_evidence_fatal = True
+            raise error
+
+    monkeypatch.setattr(harness_tools_module, "StepRunner", _FatalEvidenceStepRunner)
+    adapter = HarnessToolAdapter(_DirectInvokeForbiddenHarness(), run_id="run-1")
+    tool = adapter.build_tools()[0]
+
+    with pytest.raises(EngineError) as failure:
+        await tool.invoke(ToolCall(name=tool.name, arguments={"target": "Downloads"}, call_id="call-1"))
+
+    assert failure.value.category == "evidence"
+    assert str(failure.value) == "Durable execution evidence failed."
 
 
 @pytest.mark.asyncio

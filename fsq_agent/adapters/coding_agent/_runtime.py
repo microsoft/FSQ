@@ -57,6 +57,12 @@ _RUNTIME_TOOL_NAMES = {
 
 
 def _runtime_failure_metadata(exc: BaseException) -> dict[str, str]:
+    if isinstance(exc, EngineError) and exc.category == "evidence":
+        return {
+            "failure_category": "artifact_error",
+            "failure_reason": "evidence_persistence",
+            "failure_summary": "Agent runtime stopped because durable execution evidence failed.",
+        }
     if isinstance(exc, EngineError) and exc.category == "incomplete" and exc.reason == "content_filter":
         return {
             "failure_category": "provider_content_filter",

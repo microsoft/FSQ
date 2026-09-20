@@ -19,10 +19,10 @@ Use when `harness.platform` is macOS. This skill contains macOS-specific stabili
 
 ## Locator Rules
 
-- Discover controls with `ui_snapshot` and its `query` object, for example `query: {text: "Men", match: "contains", limit: 20}`. Query matches decoded semantic text, not JSON keys or `XCUIElementType` names. Narrow with `control_type` or known state filters; missing state is unknown.
-- Inspect query `coverage`, `count_is_lower_bound`, truncation and `next_offset`. Continue with the returned `snapshot_revision`; restart at offset zero if stale. Partial results are not exhaustive. Use complete candidate `locator` values, never clipped `display` text. Refine ambiguous matches rather than choosing the first.
+- Inspect the current `ui_snapshot` tree directly when it is returned inline. When the runtime externalizes a large snapshot, use `search_artifact` to find relevant text and `read_artifact_slice` to recover enough surrounding structure before choosing a locator.
+- Artifact searches inspect one immutable snapshot and may run concurrently. Search matches are discovery evidence only; use the surrounding element type and attributes to build a complete locator rather than treating matched text alone as an element identity.
 - All populated element locator fields constrain the same element. `label` and `value` match their own fields exactly; `name` is a compatibility semantic-name signal. A type constraint never replaces a failed text constraint.
-- A shallow or clipped tree is not proof that a control is absent. Use a fresh structured query before reporting a missing backend control. Query does not infer screenshot-only controls. Default tree output omits enabled=true, visible=true and selected=false; query state filters require explicit backend facts.
+- A shallow or clipped tree is not proof that a control is absent. Refresh the snapshot and inspect its artifact before reporting a missing backend control. Default tree output omits enabled=true, visible=true and selected=false.
 
 - A macOS locator may use `accessibilityId`, `name`, `label`, `value`, `role`, `controlType`, `className`, `xpath`, `predicate`, or `point`.
 - Prefer `accessibilityId` when available because it is the most stable Appium Mac2 lookup.
