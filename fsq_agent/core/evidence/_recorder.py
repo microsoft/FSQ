@@ -61,26 +61,42 @@ class EvidenceRecorder:
             key = (step.source_step_id or step.step_id, step.invocation_path)
             if key in self._planned_keys:
                 return
-            self._append(planned_step=step)
-            self._planned.append(step)
+            record = self._canonical_record(planned_step=step)
+            canonical = record.planned_step
+            if canonical is None:
+                raise ValueError("Canonical planned step is unavailable.")
+            self._append_record(record)
+            self._planned.append(canonical)
             self._planned_keys.add(key)
 
     def record_event(self, event: RunnerEvent) -> None:
         if event.run_id != self.run_id:
             raise ValueError("Evidence journal Run identity mismatch.")
         with self._lock:
-            _validate_execution_facts([*self._events, event], self._steps)
-            self._append(event=event)
-            self._events.append(event)
+            record = self._canonical_record(event=event)
+            canonical = record.event
+            if canonical is None:
+                raise ValueError("Canonical evidence event is unavailable.")
+            _validate_execution_facts([*self._events, canonical], self._steps)
+            self._append_record(record)
+            self._events.append(canonical)
 
     def record_step_result(self, result: RunnerStepResult) -> None:
         with self._lock:
-            _validate_execution_facts(self._events, [*self._steps, result])
-            self._append(step_result=result)
-            self._steps.append(result)
+            record = self._canonical_record(step_result=result)
+            canonical = record.step_result
+            if canonical is None:
+                raise ValueError("Canonical evidence step result is unavailable.")
+            _validate_execution_facts(self._events, [*self._steps, canonical])
+            self._append_record(record)
+            self._steps.append(canonical)
             self.write_manifest()
 
-    def _append(self, **fact) -> None:
+    def _canonical_record(self, **fact) -> EvidenceJournalRecord:
+        record = EvidenceJournalRecord(sequence=self._sequence + 1, event_id=uuid.uuid4().hex, run_id=self.run_id, **fact)
+        return EvidenceJournalRecord.model_validate(self._sanitize(record.model_dump(mode="json")))
+
+    def _append_record(self, record: EvidenceJournalRecord) -> None:
         if self._write_failed:
             error = OSError("Evidence journal is unavailable after a failed append.")
             error.fsq_evidence_fatal = True
@@ -88,8 +104,6 @@ class EvidenceRecorder:
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             path = self._contained("evidence-events.jsonl")
-            record = EvidenceJournalRecord(sequence=self._sequence + 1, event_id=uuid.uuid4().hex, run_id=self.run_id, **fact)
-            record = EvidenceJournalRecord.model_validate(self._sanitize(record.model_dump(mode="json")))
             with path.open("ab") as stream:
                 stream.write(record.model_dump_json().encode("utf-8") + b"\n")
                 stream.flush()
@@ -105,8 +119,7 @@ class EvidenceRecorder:
 
     def build_bundle(self) -> EvidenceBundle:
         with self._lock:
-            bundle = _bundle(self.bundle_id, self.run_id, self._events, self._steps, self._planned, self._sequence, self.metadata, include_unresolved=True)
-            return EvidenceBundle.model_validate(self._sanitize(bundle.model_dump(mode="json")))
+            return _bundle(self.bundle_id, self.run_id, self._events, self._steps, self._planned, self._sequence, self.metadata, include_unresolved=True)
 
     def _contained(self, filename: str) -> Path:
         path = self.output_dir / filename

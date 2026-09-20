@@ -9,7 +9,7 @@ import pytest
 
 from fsq_agent._capability_bootstrap import build_capability_registry
 from fsq_agent.core import ArtifactStore, EvidenceRecorder, StepRunner, StepSequenceRunner
-from fsq_agent.models import ExecutableStep, HarnessActionResult, HarnessArtifactRef, HarnessContext, RunnerEvent
+from fsq_agent.models import ExecutableStep, HarnessActionResult, HarnessArtifactRef, HarnessContext, RunnerEvent, StepPhaseReport
 
 
 def _step(name="tap", **updates):
@@ -86,6 +86,30 @@ def test_journal_is_durable_before_action_and_finalization(tmp_path):
     records = [json.loads(line) for line in (tmp_path / "evidence-events.jsonl").read_text().splitlines()]
     assert [record["sequence"] for record in records] == list(range(1, len(records) + 1))
     assert all(record["schema_version"] == "fsq.evidence-event/v1" for record in records)
+
+
+def test_deep_phase_output_has_one_canonical_journal_and_checkpoint_representation(tmp_path):
+    class DeepOutputHarness(JournalHarness):
+        def invoke_action(self, step, context):
+            output = {"attributes": {"value": "A"}}
+            for _ in range(10):
+                output = {"children": [output]}
+            return HarnessActionResult(status="passed", action_name=step.action_name, output={"page_source": {"root": output}})
+
+        def after_action(self, step, context, result):
+            pass
+
+    runner, _ = _runner(tmp_path, DeepOutputHarness(tmp_path))
+
+    result = runner.run_step("run", ExecutableStep(step_id="snapshot", kind="observation", action_name="ui_snapshot", params={}))
+
+    recovered = EvidenceRecorder.recover_bundle(tmp_path)
+    recovered_result = next(step for step in recovered.steps if step.step_execution_id == result.step_execution_id)
+    invoke_event = next(event for event in recovered.events if event.step_execution_id == result.step_execution_id and event.event_type == "phase_finish" and event.phase == "invoke")
+    event_report = StepPhaseReport.model_validate(invoke_event.payload["phase_report"])
+    result_report = next(phase for phase in recovered_result.phase_reports if phase.phase == "invoke")
+    assert event_report == result_report
+    assert recovered_result.status == "passed"
 
 
 def test_action_failure_survives_independent_capture_failure(tmp_path):

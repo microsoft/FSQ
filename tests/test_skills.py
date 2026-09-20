@@ -119,7 +119,7 @@ def test_package_macos_skill_preserves_element_only_guidance(tmp_path: Path) -> 
     bundles = SkillLoader(config.dir).load(config.items)
     macos = next(bundle for bundle in bundles if bundle.name == "macos-harness")
     assert macos.files == [expected / "macos-harness.md"]
-    assert "Discover controls with `ui_snapshot` and its `query` object" in macos.instructions
+    assert "use `search_artifact` to find relevant text" in macos.instructions
     assert "Honor explicit element-only requests" in macos.instructions
     assert "Detail-page variant selection does not substitute for result-list filtering" in macos.instructions
     assert "Existing cart contents are initial state, not proof of a new add" in macos.instructions

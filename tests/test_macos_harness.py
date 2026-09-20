@@ -333,6 +333,7 @@ class FakeMacSession:
         self.session_id = session_id
         self.lifecycle_calls: list[tuple[str, str | None]] = []
         self.script_calls: list[tuple[str, dict[str, object]]] = []
+        self.system_input_element: object | None = None
 
     def find_element(self, strategy: str, locator: str) -> FakeMacElement:
         if strategy == "accessibility id" and locator in self.elements:
@@ -350,14 +351,20 @@ class FakeMacSession:
 
     def execute_script(self, script: str, arguments: dict[str, object]) -> None:
         self.script_calls.append((script, arguments))
+        if script == "macos: keys" and "elementId" not in arguments and isinstance(self.system_input_element, FakeTypingElement):
+            keys = arguments.get("keys")
+            if isinstance(keys, list):
+                self.system_input_element.value += "".join(key for key in keys if isinstance(key, str) and len(key) == 1)
 
     def quit(self) -> None:
         self.lifecycle_calls.append(("quit", None))
 
 
 class FakeTypingElement(FakeMacElement):
-    def __init__(self) -> None:
+    def __init__(self, *, value: str = "", accepts_element_input: bool = True) -> None:
         super().__init__(x=0, y=0)
+        self.value = value
+        self.accepts_element_input = accepts_element_input
         self.typed: list[str] = []
         self.clicks = 0
         self.clears = 0
@@ -367,9 +374,15 @@ class FakeTypingElement(FakeMacElement):
 
     def clear(self) -> None:
         self.clears += 1
+        self.value = ""
 
     def send_keys(self, text: str) -> None:
         self.typed.append(text)
+        if self.accepts_element_input:
+            self.value += text
+
+    def get_attribute(self, name: str) -> str | None:
+        return self.value if name == "value" else None
 
 
 class FakeSwitchTo:
@@ -542,26 +555,63 @@ def test_appium_mac2_driver_kill_closes_session_without_unsupported_termination(
     assert driver.context()["session_id"] is None
 
 
-def test_appium_mac2_driver_type_text_uses_unmodified_keys_and_clears() -> None:
-    element = FakeTypingElement()
+def test_appium_mac2_driver_type_text_uses_element_input_and_verifies_value() -> None:
+    element = FakeTypingElement(value="old")
     session = FakeMacSession({"Search": element})
     driver = AppiumMac2Driver(session=session)
 
-    result = driver.type_text(MacOSTypeTextParams(text="www.bing.com\n", target="Search", clear=True))
+    result = driver.type_text(MacOSTypeTextParams(text="www.bing.com", target="Search", clear=True))
 
     assert result["status"] == "passed"
-    assert session.script_calls == [
-        (
-            "macos: keys",
-            {
-                "keys": ["w", "w", "w", ".", "b", "i", "n", "g", ".", "c", "o", "m", "XCUIKeyboardKeyReturn"],
-                "elementId": "element-0-0",
-            },
-        )
-    ]
-    assert element.typed == []
-    assert element.clicks == 0
+    assert session.script_calls == []
+    assert element.typed == ["www.bing.com"]
+    assert element.value == "www.bing.com"
+    assert element.clicks == 1
     assert element.clears == 1
+
+
+def test_appium_mac2_driver_type_text_falls_back_to_system_keys_and_rechecks_value() -> None:
+    element = FakeTypingElement(accepts_element_input=False)
+    session = FakeMacSession({"Search": element})
+    session.system_input_element = element
+    driver = AppiumMac2Driver(session=session)
+
+    result = driver.type_text(MacOSTypeTextParams(text="https://www.bing.com", target="Search", clear=True))
+
+    assert result["status"] == "passed"
+    assert element.typed == ["https://www.bing.com"]
+    assert element.clicks == 1
+    assert element.clears == 2
+    assert session.script_calls == [("macos: keys", {"keys": list("https://www.bing.com")})]
+    assert element.value == "https://www.bing.com"
+
+
+def test_appium_mac2_driver_type_text_fails_when_fallback_does_not_update_value() -> None:
+    element = FakeTypingElement(accepts_element_input=False)
+    session = FakeMacSession({"Search": element})
+    driver = AppiumMac2Driver(session=session)
+
+    result = driver.type_text(MacOSTypeTextParams(text="https://www.bing.com", target="Search", clear=True))
+
+    assert result["status"] == "failed"
+    assert result["failure_category"] == "action_error"
+    assert element.typed == ["https://www.bing.com"]
+    assert element.clicks == 1
+    assert element.clears == 2
+    assert session.script_calls == [("macos: keys", {"keys": list("https://www.bing.com")})]
+
+
+def test_appium_mac2_driver_type_text_does_not_accept_preexisting_text_as_new_input() -> None:
+    element = FakeTypingElement(value="Microsoft Bing", accepts_element_input=False)
+    session = FakeMacSession({"Search": element})
+    driver = AppiumMac2Driver(session=session)
+
+    result = driver.type_text(MacOSTypeTextParams(text="Bing", target="Search"))
+
+    assert result["status"] == "failed"
+    assert result["failure_category"] == "action_error"
+    assert element.typed == ["Bing"]
+    assert session.script_calls == [("macos: keys", {"keys": list("Bing")})]
 
 
 def test_appium_mac2_driver_type_text_uses_active_element_without_target() -> None:
@@ -573,8 +623,8 @@ def test_appium_mac2_driver_type_text_uses_active_element_without_target() -> No
     result = driver.type_text(MacOSTypeTextParams(text="focused text"))
 
     assert result["status"] == "passed"
-    assert active_element.typed == []
-    assert session.script_calls == [("macos: keys", {"keys": list("focused text")})]
+    assert active_element.typed == ["focused text"]
+    assert session.script_calls == []
 
 
 def test_appium_mac2_driver_type_text_preserves_authored_characters() -> None:
@@ -586,8 +636,8 @@ def test_appium_mac2_driver_type_text_preserves_authored_characters() -> None:
     result = driver.type_text(MacOSTypeTextParams(text="Microsoft"))
 
     assert result["status"] == "passed"
-    assert active_element.typed == []
-    assert session.script_calls == [("macos: keys", {"keys": list("Microsoft")})]
+    assert active_element.typed == ["Microsoft"]
+    assert session.script_calls == []
 
 
 def test_appium_mac2_driver_type_text_clicks_point_then_uses_active_element(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -606,8 +656,8 @@ def test_appium_mac2_driver_type_text_clicks_point_then_uses_active_element(monk
 
     assert result["status"] == "passed"
     assert clicked == [MacOSPoint(x=12, y=34)]
-    assert active_element.typed == []
-    assert session.script_calls == [("macos: keys", {"keys": list("point text")})]
+    assert active_element.typed == ["point text"]
+    assert session.script_calls == []
 
 
 def test_appium_mac2_driver_type_text_does_not_fall_back_when_target_is_missing() -> None:
