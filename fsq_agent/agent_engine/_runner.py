@@ -147,6 +147,13 @@ async def run_agent(backend: BackendConversation, request: AgentRequest, on_even
                     if response_span is not None and measured is not None:
                         response_span["span_data"]["usage"] = {"input_tokens": measured.input_tokens, "output_tokens": measured.output_tokens}
                 calls = response.calls
+                if response.finalization:
+                    if calls or request.output is None:
+                        raise EngineError("invalid_output", "Structured finalization returned an unexpected function call or output contract.")
+                    final_output = parse_output(response.text, request.output)
+                    for event in response.events:
+                        await emit(event)
+                    return AgentResult(final_output=final_output, usage=usage)
                 for item in calls:
                     if item.get("name") not in bindings or not isinstance(item.get("call_id"), str) or not item["call_id"]:
                         raise EngineError("invalid_output", "Model provider returned an invalid function call.")
@@ -164,6 +171,8 @@ async def run_agent(backend: BackendConversation, request: AgentRequest, on_even
                     for item, output in zip(calls, outputs, strict=True):
                         backend.add_tool_output(item, output)
                         await emit(AgentEvent(kind="tool_output", tool_name=item["name"], call_id=item["call_id"], output=output))
+                    continue
+                if response.requires_continuation:
                     continue
                 text = response.text
                 if request.output is None:

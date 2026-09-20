@@ -183,6 +183,11 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
         assert payloads[0]["stream"] is True
         if provider == "google_gemini":
             assert payloads[0]["response_format"]["mime_type"] == "application/json"
+        elif provider == "kimi" and payloads[0].get("tools"):
+            assert "format" not in payloads[0].get("text", {})
+            if failure_kind is None:
+                assert payloads[-1]["text"]["format"]["strict"] is True
+                assert not payloads[-1].get("tools")
         else:
             assert payloads[0]["text"]["format"]["strict"] is True
     elif path == "assertion":
@@ -209,7 +214,8 @@ async def test_six_inference_paths_use_real_engine_without_sdk_import(monkeypatc
             result = analyzer.analyze(parsed_case={"platform": "web"}, execution_report={"status": "success"})
             assert result.summary == "No change needed."
             assert result.candidate_case_yaml is None
-    assert len(payloads) == 1
+    split_finalization = provider == "kimi" and path == "pre_plan" and failure_kind is None
+    assert len(payloads) == (2 if split_finalization else 1)
     assert payloads[0]["model"] == model_name
     effective_effort = "low" if path == "connection" else effort
     minimum = "minimal" if provider == "google_gemini" else "low" if provider in {"azure_openai", "deepseek", "kimi"} else "medium"

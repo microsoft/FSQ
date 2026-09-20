@@ -41,6 +41,21 @@ _logger = logging.getLogger(__name__)
 _logger.addFilter(_SafeModelLogFilter())
 logging.getLogger("openai._base_client").addFilter(_SafeModelLogFilter())
 
+_EXECUTION_PHASE = (
+    "Protocol phase: tool execution. Use available tools when the task requires actions or evidence not supplied in context. "
+    "Preserve all task constraints, including restrictions on tool use. When supplied context is sufficient, "
+    "a no-action handoff is valid; do not invoke unnecessary tools. Do not substitute a plan or a final JSON report for required tool calls. "
+    "Final structured formatting happens in a separate phase. When execution is complete or blocked, "
+    "provide a brief factual handoff, preserving failures, uncertainty, and any work not performed."
+)
+_FINALIZATION_PHASE = (
+    "Protocol phase: structured finalization only. No tools are available and execution cannot resume. "
+    "Return the required structured output using the task and retained conversation. "
+    "Treat the execution handoff as unverified claims; use actual tool results as evidence of actions. "
+    "Do not describe planned or unperformed actions as completed. Preserve failures and uncertainty, "
+    "and do not invent evidence or turn missing execution evidence into success."
+)
+
 
 class OpenAIModelProvider:
     def __init__(
@@ -218,6 +233,17 @@ class OpenAIConversation:
             model_name_is_deployment=model_name_is_deployment,
             responses_profile=responses_profile,
         )
+        self._finalization_parameters = None
+        self._finalizing = False
+        if responses_profile == "kimi" and request.tools and request.output is not None:
+            # Build and validate the schema before any inference, but advertise it only after tool execution.
+            self._finalization_parameters = {
+                **self.parameters,
+                "instructions": f"{request.instructions}\n\n{_FINALIZATION_PHASE}",
+            }
+            self._finalization_parameters.pop("tools", None)
+            self.parameters = {**self.parameters, "instructions": f"{request.instructions}\n\n{_EXECUTION_PHASE}"}
+            self.parameters.pop("text", None)
 
     def tool_outputs(self) -> tuple[ToolOutputEntry, ...]:
         names = {item["call_id"]: item.get("name") for item in self.history if item.get("type") == "function_call"}
@@ -231,16 +257,25 @@ class OpenAIConversation:
         return [{**item, "output": replacements[index]} if index in replacements else item for index, item in enumerate(self.history)]
 
     async def request(self, replacements: Mapping[int, str]) -> BackendTurn:
-        parameters = {**self.parameters, "input": self.filtered_input(replacements)}
+        finalization = self._finalizing
+        phase_parameters = self._finalization_parameters if finalization else self.parameters
+        parameters = {**phase_parameters, "input": self.filtered_input(replacements)}
         response = await _read_response(self.client, parameters, stream=self.stream)
         items = response_items(response)
         self.history.extend(items)
         messages = [item for item in items if item["type"] == "message"]
+        text = _item_text(messages[-1]) if messages else ""
+        calls = tuple(item for item in items if item["type"] == "function_call")
+        execution_phase = self._finalization_parameters is not None and not finalization
+        if execution_phase and not calls and text:
+            self._finalizing = True
         return BackendTurn(
-            text=_item_text(messages[-1]) if messages else "",
-            calls=tuple(item for item in items if item["type"] == "function_call"),
-            events=tuple(event for item in items if (event := semantic_event(item)) is not None),
+            text=text,
+            calls=calls,
+            events=tuple(event for item in items if not (execution_phase and item["type"] == "message") and (event := semantic_event(item)) is not None),
             usage=token_usage(response.usage),
+            requires_continuation=execution_phase,
+            finalization=finalization,
         )
 
     def add_tool_output(self, call: dict, output: str) -> None:
