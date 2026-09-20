@@ -71,6 +71,7 @@ DEFAULT_MACOS_SNAPSHOT_ATTRIBUTE_KEYS = frozenset(
         "name",
         "label",
         "value",
+        "title",
         "type",
         "role",
         "enabled",
@@ -82,7 +83,7 @@ DEFAULT_MACOS_SNAPSHOT_ATTRIBUTE_KEYS = frozenset(
         "height",
     }
 )
-MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS = frozenset({"name", "label", "value"})
+MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS = frozenset({"name", "label", "value", "title"})
 MACOS_SNAPSHOT_IDENTITY_ATTRIBUTE_KEYS = frozenset({"identifier", *MACOS_SNAPSHOT_TEXT_ATTRIBUTE_KEYS})
 MACOS_SNAPSHOT_SEMANTIC_ATTRIBUTE_KEYS = frozenset({*MACOS_SNAPSHOT_IDENTITY_ATTRIBUTE_KEYS, "type", "role"})
 MACOS_SNAPSHOT_STATE_DEFAULTS = {"enabled": "true", "visible": "true", "selected": "false"}
@@ -492,13 +493,13 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
 
     def _locator_constraints(self, locator: MacOSLocator) -> list[str]:
         constraints = []
-        for field, attribute in (("accessibilityId", "identifier"), ("label", "label"), ("value", "value"), ("role", "role")):
+        for field, attribute in (("accessibilityId", "identifier"), ("label", "label"), ("value", "value"), ("title", "title"), ("role", "role")):
             value = getattr(locator, field)
             if value:
                 constraints.append(f"@{attribute}={self._xpath_literal(value)}")
         if locator.name:
             literal = self._xpath_literal(locator.name)
-            constraints.append("(" + " or ".join(f"@{key}={literal}" for key in ("identifier", "name", "label", "value")) + ")")
+            constraints.append("(" + " or ".join(f"@{key}={literal}" for key in ("identifier", "name", "label", "value", "title")) + ")")
         for value in (locator.controlType, locator.className):
             if value:
                 literal = self._xpath_literal(value)
@@ -515,7 +516,7 @@ class AppiumMac2Driver(AIAssertionBackendToolMixin):
         getter = getattr(element, "get_attribute", None)
         attrs = {}
         if callable(getter):
-            for key in ("identifier", "label", "value", "type", "enabled", "visible", "selected"):
+            for key in ("identifier", "name", "label", "value", "title", "type", "enabled", "visible", "selected"):
                 try:
                     value = getter(key)
                 except Exception:  # noqa: BLE001 -- optional diagnostic attributes must not expose backend errors.

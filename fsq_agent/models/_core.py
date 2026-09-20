@@ -810,9 +810,10 @@ class MacOSLocator(BaseModel):
 
     # Names mirror the authored macOS locator payload contract.
     accessibilityId: str | None = Field(default=None, description="macOS accessibility id to match.")  # noqa: N815
-    name: str | None = Field(default=None, description="Exact semantic name matching identity/name/label/value for compatibility. All additional fields still constrain the same element.")
+    name: str | None = Field(default=None, description="Exact semantic name matching identity/name/label/value/title for compatibility. All additional fields still constrain the same element.")
     label: str | None = Field(default=None, description="macOS accessibility label to match.")
     value: str | None = Field(default=None, description="macOS accessibility value to match.")
+    title: str | None = Field(default=None, description="macOS accessibility title to match.")
     role: str | None = Field(default=None, description="macOS accessibility role to match.")
     controlType: str | None = Field(default=None, description="macOS control type to match.")  # noqa: N815
     className: str | None = Field(default=None, description="macOS class name to match.")  # noqa: N815
@@ -830,6 +831,7 @@ class MacOSLocator(BaseModel):
                 self.name,
                 self.label,
                 self.value,
+                self.title,
                 self.role,
                 self.controlType,
                 self.className,

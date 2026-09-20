@@ -13,7 +13,7 @@ DEPTH_LIMIT = 128
 TEXT_LIMIT = 50
 LOCATOR_LIMIT = 1024
 RESPONSE_LIMIT = 32000
-TEXT_FIELDS = ("identifier", "name", "label", "value")
+TEXT_FIELDS = ("identifier", "name", "label", "value", "title")
 
 
 def parse_source(source: str) -> ElementTree.Element:

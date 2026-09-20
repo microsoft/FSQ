@@ -8,11 +8,15 @@ from fsq_agent.models import ConfigurationError, MacOSAssertVisibleParams, MacOS
 
 
 class Element:
-    def __init__(self, identifier):
+    def __init__(self, identifier, **attributes):
         self.id = identifier
+        self.attributes = attributes
 
     def is_displayed(self):
         return True
+
+    def get_attribute(self, name):
+        return self.attributes.get(name)
 
 
 class Session:
@@ -46,6 +50,33 @@ def test_locator_literal_apostrophe_and_quotes_are_encoded():
     driver.assert_visible(MacOSAssertVisibleParams(target='Men\'s "Evo" \\ shoes'))
     assert session.calls[0][0] == "xpath"
     assert "concat(" in session.calls[0][1]
+
+
+def test_title_is_preserved_searched_and_supported_by_locators():
+    title = "Save Link As" + "x" * 50
+    driver = AppiumMac2Driver(session=Session(source=f'<Application><MenuItem title="{title}"/></Application>'))
+    assert "title" in MacOSLocator.model_json_schema()["properties"]
+
+    tree = driver.ui_snapshot(MacOSUiSnapshotParams())
+    assert tree["page_source"]["root"]["children"][0]["attributes"]["title"] == title[:50]
+    assert tree["page_source"]["root"]["children"][0]["truncated_attributes"] == ["title"]
+
+    query = driver.ui_snapshot(MacOSUiSnapshotParams(query=MacOSElementQuery(text="Save Link As")))
+    assert query["match_count"] == 1
+    assert query["candidates"][0]["locator"]["title"] == title
+    assert query["candidates"][0]["display"]["title"] == title[:50]
+
+    locator_session = Session([Element("one")])
+    AppiumMac2Driver(session=locator_session).assert_visible(MacOSAssertVisibleParams(locator=MacOSLocator(title=title)))
+    assert f"@title='{title}'" in locator_session.calls[0][1]
+
+    target_session = Session([Element("one")])
+    AppiumMac2Driver(session=target_session).assert_visible(MacOSAssertVisibleParams(target=title))
+    assert f"@title='{title}'" in target_session.calls[0][1]
+
+    with pytest.raises(ConfigurationError) as error:
+        AppiumMac2Driver(session=Session([Element("a", title=title), Element("b", title=title)])).assert_visible(MacOSAssertVisibleParams(target=title))
+    assert error.value.context["candidates"][0]["display"]["title"] == title[:50]
 
 
 def test_ambiguous_locator_never_claims_visible():
