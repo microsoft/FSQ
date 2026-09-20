@@ -236,6 +236,209 @@ def _http_response(payload: dict, *, stream: bool) -> httpx.Response:
     return _sse_response(events)
 
 
+@pytest.mark.parametrize("stream", [False, True])
+async def test_kimi_executes_tools_before_tool_free_structured_finalization(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    payloads, calls, parsed, events = [], [], [], []
+    schema = {"type": "object", "properties": {"token": {"type": "string"}}, "required": ["token"], "additionalProperties": False}
+
+    def respond(request):
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        if len(payloads) == 1:
+            response = _response("I will read the token.")
+            response["output"].append({"id": "fc_probe", "type": "function_call", "name": "probe", "call_id": "call_probe", "arguments": "{}", "status": "completed"})
+        elif len(payloads) == 2:
+            response = _response("The tool returned a token; execution is complete.")
+        else:
+            response = _response('{"token":"filtered-token"}')
+        return _http_response(response, stream=stream)
+
+    async def invoke(call):
+        calls.append(call.name)
+        return "raw-token"
+
+    def parse(text):
+        parsed.append(text)
+        return json.loads(text)
+
+    async def observe(event):
+        events.append(event)
+
+    def filter_outputs(entries):
+        return {entry.entry_id: "filtered-token" for entry in entries}
+
+    provider, client = _provider(monkeypatch, respond, responses_profile="kimi")
+    request = AgentRequest(
+        name="probe",
+        instructions="Read a token; preserve uncertainty.",
+        input="Read the token.",
+        tools=(ToolBinding(name="probe", description="Read a token", parameters_schema={"type": "object", "properties": {}, "additionalProperties": False}, invoke=invoke),),
+        output=OutputContract(name="Final", schema=schema, parse=parse),
+        max_turns=3,
+        stream=stream,
+        tool_output_filter=filter_outputs,
+    )
+    try:
+        result = await create_agent_engine().run(provider.get_model("kimi-k3"), request, on_event=observe)
+        assert result.final_output == {"token": "filtered-token"}
+        assert calls == ["probe"]
+        assert parsed == ['{"token":"filtered-token"}']
+        assert len(payloads) == 3
+        for payload in payloads[:2]:
+            assert payload["tools"][0]["name"] == "probe"
+            assert "format" not in payload.get("text", {})
+        final = payloads[-1]
+        assert not final.get("tools")
+        assert final["text"]["format"]["schema"] == schema
+        assert any(item.get("output") == "filtered-token" for item in final["input"])
+        assert "raw-token" not in json.dumps(final["input"])
+        assert any("execution is complete" in json.dumps(item) for item in final["input"])
+        assert all(payload["reasoning"] == {"effort": "high"} for payload in payloads)
+        assert all("tool_choice" not in payload for payload in payloads)
+        assert result.usage.requests == 3
+        assert result.usage.total_tokens == 15
+        assert schema == request.output.schema
+        assert [e.text for e in events if e.kind == "message"] == ([parsed[0]] if stream else [])
+    finally:
+        await provider.aclose()
+    assert client.is_closed
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("outcome", ["empty", "whitespace", "malformed", "schema", "tool", "refusal", "incomplete", "budget", "cancel"])
+async def test_kimi_finalization_failure_never_dispatches_or_retries(monkeypatch: pytest.MonkeyPatch, stream: bool, outcome: str) -> None:
+    payloads, calls, parsed, events = [], [], [], []
+
+    def parse(text):
+        parsed.append(text)
+        value = json.loads(text)
+        if not isinstance(value.get("value"), int):
+            raise TypeError("Wrong value type")
+        return value
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        if len(payloads) == 1:
+            response = _response("Supplied context is insufficient; no actions performed.")
+        elif outcome == "cancel":
+            raise asyncio.CancelledError
+        else:
+            response = _response({"empty": "", "whitespace": "   ", "malformed": "not JSON", "schema": '{"value":"wrong"}'}.get(outcome, "done"))
+            if outcome == "tool":
+                response["output"] = [{"id": "fc_probe", "type": "function_call", "name": "probe", "call_id": "call_probe", "arguments": "{}", "status": "completed"}]
+            elif outcome == "incomplete":
+                response["status"] = "incomplete"
+                response["incomplete_details"] = {"reason": "max_output_tokens"}
+            elif outcome == "refusal":
+                response["output"][0]["content"] = [{"type": "refusal", "refusal": "Cannot comply"}]
+        return _http_response(response, stream=stream)
+
+    async def invoke(call):
+        calls.append(call.name)
+        return "unexpected"
+
+    async def observe(event):
+        events.append(event)
+
+    provider, client = _provider(monkeypatch, respond, responses_profile="kimi")
+    request = AgentRequest(
+        name="probe",
+        instructions="Only read the token.",
+        input="Read.",
+        tools=(ToolBinding(name="probe", description="Read", parameters_schema={"type": "object", "properties": {}, "additionalProperties": False}, invoke=invoke),),
+        output=OutputContract(name="Final", schema={"type": "object", "properties": {"value": {"type": "integer"}}, "required": ["value"], "additionalProperties": False}, parse=parse),
+        max_turns=1 if outcome == "budget" else 4,
+        stream=stream,
+    )
+    try:
+        with pytest.raises(asyncio.CancelledError if outcome == "cancel" else EngineError) as error:
+            await create_agent_engine().run(provider.get_model("kimi-k3"), request, on_event=observe)
+        if outcome != "cancel":
+            assert error.value.category == {"budget": "max_turns", "refusal": "refusal", "incomplete": "incomplete"}.get(outcome, "invalid_output")
+        assert len(payloads) == (1 if outcome == "budget" else 2)
+        assert calls == []
+        assert len(parsed) == (1 if outcome in {"malformed", "schema"} else 0)
+        assert not any(e.kind in {"message", "tool_called"} for e in events)
+    finally:
+        await provider.aclose()
+    assert client.is_closed
+
+
+@pytest.mark.parametrize("mode", ["direct", "no_tools", "no_contract", "openai"])
+async def test_kimi_phase_policy_leaves_other_request_paths_unchanged(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        return _http_response(_response('{"value":1}'), stream=True)
+
+    async def invoke(_call):
+        raise AssertionError("No tool requested")
+
+    provider, _client = _provider(monkeypatch, respond, responses_profile="openai" if mode == "openai" else "kimi")
+    contract = OutputContract(name="Final", schema={"type": "object", "properties": {"value": {"type": "integer"}}, "required": ["value"], "additionalProperties": False}, parse=json.loads)
+    tool = ToolBinding(name="probe", description="Read", parameters_schema={"type": "object", "properties": {}, "additionalProperties": False}, invoke=invoke)
+    try:
+        if mode == "direct":
+            # Direct requests are nonstreaming.
+            def direct(request):
+                payloads.append(json.loads(request.content))
+                return _http_response(_response('{"value":1}'), stream=False)
+
+            await provider.aclose()
+            provider, _client = _provider(monkeypatch, direct, responses_profile="kimi")
+            result = await provider.get_model("kimi-k3").complete(ModelRequest(input="Read", output=contract))
+            assert result.parsed_output == {"value": 1}
+        else:
+            result = await create_agent_engine().run(
+                provider.get_model("test-model"),
+                AgentRequest(name="probe", instructions="test", input="test", tools=() if mode == "no_tools" else (tool,), output=None if mode == "no_contract" else contract, stream=True),
+            )
+            assert result.final_output == ('{"value":1}' if mode == "no_contract" else {"value": 1})
+        assert len(payloads) == 1
+        assert ("format" in payloads[0].get("text", {})) == (mode != "no_contract")
+        assert bool(payloads[0].get("tools")) == (mode in {"no_contract", "openai"})
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_kimi_empty_execution_turn_continues_before_finalizing(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    payloads = []
+
+    def respond(request):
+        payloads.append(json.loads(request.content))
+        return _http_response(_response(["", "No action was needed.", '{"value":1}'][len(payloads) - 1]), stream=stream)
+
+    async def invoke(_call):
+        raise AssertionError("No tool requested")
+
+    provider, _client = _provider(monkeypatch, respond, responses_profile="kimi")
+    try:
+        result = await create_agent_engine().run(
+            provider.get_model("kimi-k3"),
+            AgentRequest(
+                name="probe",
+                instructions="Answer from supplied context when sufficient.",
+                input="test",
+                tools=(ToolBinding(name="probe", description="Read", parameters_schema={"type": "object", "properties": {}, "additionalProperties": False}, invoke=invoke),),
+                output=OutputContract(name="Final", schema={"type": "object", "properties": {"value": {"type": "integer"}}, "required": ["value"], "additionalProperties": False}, parse=json.loads),
+                stream=stream,
+                max_turns=3,
+            ),
+        )
+        assert result.final_output == {"value": 1}
+        assert len(payloads) == 3
+        assert all("format" not in p.get("text", {}) for p in payloads[:2])
+        assert payloads[0]["instructions"].startswith("Answer from supplied context when sufficient.")
+        assert "Use available tools when the task requires actions or evidence not supplied in context." in payloads[0]["instructions"]
+        assert "including restrictions on tool use" in payloads[0]["instructions"]
+        assert "a no-action handoff is valid; do not invoke unnecessary tools" in payloads[0]["instructions"]
+        assert not payloads[-1].get("tools")
+    finally:
+        await provider.aclose()
+
+
 @pytest.mark.parametrize("mode", ["single", "agent", "stream"])
 @pytest.mark.parametrize("effort", ["low", "mid", "high"])
 @pytest.mark.parametrize(

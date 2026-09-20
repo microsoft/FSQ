@@ -26,6 +26,8 @@ class BackendTurn:
     calls: tuple[dict, ...]
     events: tuple[AgentEvent, ...]
     usage: TokenUsage | None
+    requires_continuation: bool = False
+    finalization: bool = False
 
 
 class BackendConversation(Protocol):
