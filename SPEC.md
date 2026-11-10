@@ -222,6 +222,14 @@ Loader diagnostics such as missing optional skills or missing optional knowledge
 | cli | fsq_agent/cli/SPEC.md | Adapts public commands, persisted Run queries, and offline exports to Application with human/JSON/JSONL output and stable exit categories. |
 | frontend | frontend/SPEC.md | Owns the repository npm/Vite workspace, browser dependency and build policy, generated-asset boundary, and navigation to independently owned frontend application modules. |
 
+## Windows Evaluation Resources
+
+- Root `SPEC.md` owns `eval/windows`, a standalone repository resource directory containing the WindowsAgentArena `evaluation_examples_windows` corpus. It is not a Python package or an FSQ runtime module.
+- `examples/` and `examples_noctxt/` retain their source-relative directory structure and JSON bytes. The corpus also includes the source `test_all.json`, `test_custom.json`, and `test_small.json` manifests without conversion to FSQ Case YAML.
+- `create_json.py` is the upstream standalone manifest-generation utility. Its source body is preserved with the repository-required Microsoft MIT copyright header prepended. It uses only Python standard-library dependencies and is not imported or executed by FSQ.
+- These resources have no runtime dependency edges, automatic discovery, CLI integration, or installed-package inclusion. Their presence does not establish support for executing WindowsAgentArena cases through FSQ.
+- Import verification compares the complete source-relative file inventory and JSON SHA-256 hashes, and checks that the imported script differs only by its required copyright header. Verification does not execute case setup, evaluator commands, or the generation script.
+
 ## Frontend Build Boundary
 
 - The repository root npm project owns browser-source dependency resolution and Vite compilation for repository web pages. It uses one lock file and a multi-page Vite configuration for the Control Plane entry.
