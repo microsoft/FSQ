@@ -1,0 +1,48 @@
+{
+  "name": "FSQ WAA Edge Eval",
+  "version": "1.0.0",
+  "description": "Run three original WAA Edge settings tasks through FSQ Windows UI in fresh private Profiles, then score independently and retain screenshot evidence.",
+  "kind": "user",
+  "platform": "win32",
+  "timeout_minutes": 50,
+  "max_concurrent_tasks": 1,
+  "allow_user_input": false,
+  "notify_on": "never",
+  "use_worktrees": false,
+  "required_plugins": [],
+  "variables": [
+    {"name": "git-url", "default": "https://github.com/microsoft/FSQ.git", "description": "Remote GitHub source repository. Cloned once into a dedicated cache; fetched before every new Task."},
+    {"name": "git-branch", "default": "user/ty/win-eval-dragon", "description": "Remote branch whose latest commit is fetched and recorded. Does not install that source into fsq-python."},
+    {"name": "fsq-python", "required": true, "description": "Absolute python.exe path of the installed FSQ environment."},
+    {"name": "dataset-dir", "required": true, "description": "Absolute path to the original WAA examples\\msedge directory on the executing Machine."},
+    {"name": "edge-exe", "default": "", "description": "Optional Edge executable path. Omit to discover the standard Windows installation."},
+    {"name": "case-ids", "default": "", "description": "Optional comma-separated task IDs. Omit for profile name, font size, and download folder. Other tasks are not yet adapted."}
+  ],
+  "outputs": [
+    {"name": "waa-report", "type": "file", "label": "WAA evaluation and screenshots"},
+    {"name": "waa-results", "type": "file", "label": "WAA results JSON"},
+    {"name": "waa-evidence", "type": "file", "label": "WAA evidence bundle"}
+  ],
+  "stages": [
+    {
+      "name": "Check dataset and Machine", "type": "powershell-script", "script": "prepare.ps1",
+      "timeout_minutes": 3, "needs_worktree": false,
+      "marker_policy": {"output": ["waa-report", "waa-results", "waa-evidence"]}
+    },
+    {
+      "name": "Sync Git source", "type": "powershell-script", "script": "sync-source.ps1",
+      "timeout_minutes": 8, "needs_worktree": false,
+      "marker_policy": {"output": ["waa-report", "waa-results", "waa-evidence"]}
+    },
+    {
+      "name": "Execute and evaluate", "type": "powershell-script", "script": "run.ps1",
+      "timeout_minutes": 33, "needs_worktree": false,
+      "marker_policy": {"output": ["waa-report", "waa-results", "waa-evidence"]}
+    },
+    {
+      "name": "Publish evidence", "type": "powershell-script", "script": "publish.ps1",
+      "timeout_minutes": 3, "needs_worktree": false,
+      "marker_policy": {"output": ["waa-report", "waa-results", "waa-evidence"]}
+    }
+  ]
+}

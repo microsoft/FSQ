@@ -17,6 +17,8 @@ Load this skill only when an explicitly invoked repository prompt directs the ag
 
 This skill audits only project-code or project-logic changes. Agent write authorization, SDD phase transitions, prompt routing, and workflow skills are not project SPEC items.
 
+Independent `eval/windows/**` maintenance is outside this mandatory FSQ audit, as defined in root `AGENTS.md`. Do not add its code or local reference SPEC to the applicable-item inventory merely because it appears in the worktree diff. For mixed changes, audit the applicable FSQ production/interface/dependency/shared-configuration changes only; evaluation work retains focused validation without this audit lifecycle.
+
 The audit covers both project paths: implementation after a confirmed SPEC update and implementation under a recorded no-SPEC-delta decision. In the latter path, the reviewer independently verifies that current SPEC remains the complete grounding truth for the changed behavior.
 
 Completion cannot be claimed until implementation is audited against:

@@ -12,6 +12,8 @@ user-invocable: false
 
 ## 工作流程
 
+独立 `eval/windows/**` 维护不属于强制 FSQ 审计范围；遵循根 `AGENTS.md` 的例外，不因其出现在 diff 中而启动或扩大本流程。以下步骤用于需要 SDD 的 FSQ 修改。
+
 1. 验证 TaskID、审计模式、SPEC 版本、diff artifact 身份、变更路径清单和授权边界。
 2. 在活跃 `/spec-driven` 工作流明确指示时，读取并严格执行 `.github/skills/spec-implementation-audit/SKILL.md`。
 3. 独立阅读根与相关模块 SPEC、完整实际 diff、必要调用链和测试。

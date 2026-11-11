@@ -16,6 +16,8 @@ Run this skill only when the user explicitly invokes `/spec-driven` with either 
 
 This skill does not handle workflow-control-only maintenance. If the supplied input changes only `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.github/agents/**`, `.github/prompts/**`, or `.github/skills/**`, stop and explain that a clear ordinary edit request is sufficient.
 
+This skill also does not handle independent evaluation-only maintenance under `eval/windows/**`. Follow the exception in root `AGENTS.md`: an ordinary explicit request is sufficient, without mandatory SPEC confirmation, team orchestration, or project implementation audit. Validate the evaluation changes with focused tests and build checks instead. For a mixed request, apply this workflow only to changes affecting FSQ production behavior, public interfaces, dependencies, or shared runtime/build/test configuration; do not pull the independent evaluation tree into the audit automatically.
+
 ## Core Rule
 
 `SPEC.md` files are the source of truth for project implementation and must describe current project or module facts.

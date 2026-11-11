@@ -13,7 +13,8 @@ user-invocable: true
 ## 授权门槛
 
 - 普通讨论、解释、审查和规划保持只读。
-- 用户提出项目修改但未显式调用 `/spec-driven` 时，停止项目写入，并明确要求 `/spec-driven <confirmed-design-document-path | direct-project-change-request>`。
+- 先应用根 `AGENTS.md` 的独立评测例外：仅修改 `eval/windows/**` 且不影响 FSQ 生产边界时，按明确普通请求直接维护，只做相关测试和打包验证，不强制团队编排、SPEC 确认或独立审计。以下 SDD 职责与流程仅适用于 FSQ 项目开发。
+- 用户提出不属于上述例外的项目修改但未显式调用 `/spec-driven` 时，停止项目写入，并明确要求 `/spec-driven <confirmed-design-document-path | direct-project-change-request>`。
 - 用户显式调用 `/spec-driven` 后，严格执行该 skill 的 SPEC delta、确认、实施、验证和独立审计流程。
 - 明确的 workflow-control-only 维护可按根 `AGENTS.md` 直接执行；若同时改变项目行为，仍使用 `/spec-driven`。
 

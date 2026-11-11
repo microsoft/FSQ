@@ -1,0 +1,37 @@
+{
+  "name": "FSQ Dev Box Setup",
+  "version": "1.0.0",
+  "description": "Prepare and verify FSQ on an already-connected Windows Dev Box. Deploy the complete package, install the configured source commit, authorize the remote account if needed, and verify native desktop readiness without scoring Cases by default.",
+  "kind": "user",
+  "platform": "win32",
+  "timeout_minutes": 75,
+  "max_concurrent_tasks": 1,
+  "notify_on": "never",
+  "use_worktrees": false,
+  "required_plugins": [],
+  "variables": [
+    {"name": "git-url", "default": "https://github.com/microsoft/FSQ.git", "description": "FSQ source repository prepared on the selected remote Machine."},
+    {"name": "git-branch", "default": "user/ty/win-eval-dragon", "description": "Remote branch fetched and installed into an exact-commit private venv."},
+    {"name": "bootstrap-python", "default": "", "description": "Optional remote Python 3.11+ path; otherwise prepare private Python 3.12.12."},
+    {"name": "edge-exe", "default": "", "description": "Optional remote Edge executable path; standard installations are discovered."},
+    {"name": "expected-host", "default": "", "description": "Optional Windows hostname guard. Select a remote Machine, not the Hub."},
+    {"name": "authorize-provider", "default": "true", "type": "boolean", "description": "If no Provider or GitHub authentication is invalid, start official remote device authorization. Existing other Providers are not replaced."},
+    {"name": "setup-model", "default": "gpt-5.6-sol-fast", "description": "Model used only when new GitHub Copilot authorization is needed; an existing working Provider/model is preserved."},
+    {"name": "setup-smoke", "default": "false", "type": "boolean", "description": "Optionally run one original profile-name Case after environment readiness. Default is environment checks only, including one minimal model connection request."}
+  ],
+  "outputs": [
+    {"name": "waa-report", "type": "file", "label": "Dev Box setup report"},
+    {"name": "waa-results", "type": "file", "label": "Preparation and readiness record"},
+    {"name": "waa-evidence", "type": "file", "label": "Setup logs and acceptance evidence"}
+  ],
+  "stages": [
+    {
+      "name": "Prepare and verify remote Dev Box",
+      "type": "powershell-script",
+      "script": "deploy.ps1",
+      "needs_worktree": false,
+      "timeout_minutes": 70,
+      "marker_policy": {"output": ["waa-report", "waa-results", "waa-evidence"]}
+    }
+  ]
+}

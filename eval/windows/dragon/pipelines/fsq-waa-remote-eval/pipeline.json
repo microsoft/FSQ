@@ -1,0 +1,27 @@
+{
+  "name": "FSQ WAA Remote Eval",
+  "version": "1.0.0",
+  "description": "Transport the complete WAA evaluator and fixed Dataset to a Windows Dev Box, install the exact configured FSQ source commit in a private venv, and publish native UI evaluation evidence.",
+  "platform": "win32",
+  "timeout_minutes": 85,
+  "max_concurrent_tasks": 1,
+  "notify_on": "never",
+  "required_plugins": [],
+  "use_worktrees": false,
+  "variables": [
+    {"name": "git-url", "default": "https://github.com/microsoft/FSQ.git", "description": "FSQ source installed and executed on the remote Machine."},
+    {"name": "git-branch", "default": "user/ty/win-eval-dragon", "description": "Remote branch fetched before preparing an exact-commit venv."},
+    {"name": "bootstrap-python", "default": "", "description": "Optional remote Python 3.11+ executable path. Otherwise discover Python on that Machine."},
+    {"name": "edge-exe", "default": "", "description": "Optional remote msedge.exe path; standard installations are discovered."},
+    {"name": "case-ids", "default": "", "description": "Original Case IDs, comma-separated. Empty selects the three supported settings tasks."},
+    {"name": "expected-host", "default": "", "description": "Optional remote Windows hostname guard. Do not select local as the execution Machine."}
+  ],
+  "outputs": [
+    {"name": "waa-report", "type": "file", "label": "Remote evaluation and screenshots"},
+    {"name": "waa-results", "type": "file", "label": "Remote source and results"},
+    {"name": "waa-evidence", "type": "file", "label": "Remote deployment and execution evidence"}
+  ],
+  "stages": [
+    {"name": "Deploy and evaluate on remote Windows", "type": "powershell-script", "script": "deploy.ps1", "timeout_minutes": 80, "needs_worktree": false}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "FSQ Remote Authorization",
+  "kind": "helper",
+  "version": "1.0.0",
+  "platform": "win32",
+  "notify_on": "never",
+  "required_plugins": [],
+  "timeout_minutes": 20,
+  "variables": [
+    {"name": "runtime-python", "required": true, "description": "Exact remote interpreter prepared by the deployment Task."}
+  ],
+  "stages": [
+    {"name": "Authorize remote FSQ account", "type": "powershell-script", "script": "authorize.ps1", "needs_worktree": false, "timeout_minutes": 18}
+  ]
+}

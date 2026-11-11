@@ -1,0 +1,15 @@
+{
+  "name": "FSQ Remote Readiness",
+  "kind": "helper",
+  "version": "1.0.0",
+  "platform": "win32",
+  "notify_on": "never",
+  "required_plugins": [],
+  "timeout_minutes": 5,
+  "variables": [
+    {"name": "target-task", "default": "", "description": "Optional owned remote deployment Task ID to inspect read-only."}
+  ],
+  "stages": [
+    {"name": "Inspect remote prerequisites", "type": "powershell-script", "script": "inspect.ps1", "needs_worktree": false, "timeout_minutes": 4}
+  ]
+}
