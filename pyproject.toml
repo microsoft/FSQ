@@ -38,7 +38,7 @@ dependencies = [
     "uiautomator2==3.5.2",
     "playwright==1.60.0",
     "pywinauto==0.6.9",
-    "pillow==12.3.0",
+    "pillow==13.0.0",
     "Appium-Python-Client==5.3.1",
 ]
 
